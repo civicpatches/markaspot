@@ -22,6 +22,7 @@ use Drupal\group\Entity\GroupMembership;
 use Drupal\Component\Utility\EmailValidator;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
+use Drupal\markaspot_nuxt\Image\BrandingImageDimensions;
 use Drupal\markaspot_nuxt\Service\BoundaryGeoJsonValidator;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -1180,83 +1181,15 @@ final class TenantSettingsController extends ControllerBase {
    * Resolves an app icon aspect ratio when the dimensions are authoritative.
    */
   protected function getAppIconAspectRatio(string $fileData, string $extension): ?float {
-    if ($extension === 'png') {
-      $imageInfo = @getimagesizefromstring($fileData);
-      if (
-        !is_array($imageInfo)
-        || ($imageInfo[2] ?? NULL) !== IMAGETYPE_PNG
-        || empty($imageInfo[0])
-        || empty($imageInfo[1])
-      ) {
-        return NULL;
-      }
-      return (float) $imageInfo[0] / (float) $imageInfo[1];
-    }
-
-    $document = $this->loadSvgDocument($fileData);
-    if ($document === NULL) {
-      return NULL;
-    }
-    $svg = $document->documentElement;
-    if (!$svg instanceof \DOMElement) {
-      return NULL;
-    }
-    $width = $this->parseSvgDimension($svg->getAttribute('width'));
-    $height = $this->parseSvgDimension($svg->getAttribute('height'));
-    if ($width !== NULL && $height !== NULL) {
-      return $width / $height;
-    }
-
-    $viewBox = trim(
-      $svg->getAttribute('viewBox') ?: $svg->getAttribute('viewbox'),
-    );
-    if ($viewBox === '') {
-      return NULL;
-    }
-    $parts = preg_split('/[\s,]+/', $viewBox);
-    if (
-      !is_array($parts)
-      || count($parts) !== 4
-      || !is_numeric($parts[2])
-      || !is_numeric($parts[3])
-    ) {
-      return NULL;
-    }
-    $viewBoxWidth = (float) $parts[2];
-    $viewBoxHeight = (float) $parts[3];
-    if ($viewBoxWidth <= 0 || $viewBoxHeight <= 0) {
-      return NULL;
-    }
-
-    return $viewBoxWidth / $viewBoxHeight;
+    $dimensions = BrandingImageDimensions::fromData($fileData, $extension === 'png' ? 'png' : 'svg');
+    return $dimensions === NULL ? NULL : $dimensions['width'] / $dimensions['height'];
   }
 
   /**
    * Loads a sanitized SVG document and requires an SVG root element.
    */
   protected function loadSvgDocument(string $fileData): ?\DOMDocument {
-    $document = new \DOMDocument();
-    $previous = libxml_use_internal_errors(TRUE);
-    try {
-      $loaded = $document->loadXML($fileData, LIBXML_NONET);
-    }
-    catch (\Throwable) {
-      $loaded = FALSE;
-    }
-    finally {
-      libxml_clear_errors();
-      libxml_use_internal_errors($previous);
-    }
-    if (
-      !$loaded
-      || $document->documentElement === NULL
-      || strtolower($document->documentElement->localName) !== 'svg'
-      || $document->documentElement->namespaceURI !== 'http://www.w3.org/2000/svg'
-    ) {
-      return NULL;
-    }
-
-    return $document;
+    return BrandingImageDimensions::loadSvgDocument($fileData);
   }
 
   /**
@@ -1336,23 +1269,6 @@ final class TenantSettingsController extends ControllerBase {
     }
 
     return FALSE;
-  }
-
-  /**
-   * Parses an absolute SVG dimension without guessing percentage sizing.
-   */
-  protected function parseSvgDimension(string $value): ?float {
-    if (
-      preg_match(
-        '/^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/i',
-        $value,
-        $matches,
-      ) !== 1
-    ) {
-      return NULL;
-    }
-    $dimension = (float) $matches[1];
-    return $dimension > 0 ? $dimension : NULL;
   }
 
   /**

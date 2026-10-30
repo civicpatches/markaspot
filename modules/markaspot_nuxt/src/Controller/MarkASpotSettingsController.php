@@ -15,6 +15,7 @@ use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Service\OrganisationMetadataBuilder;
 use Drupal\markaspot_group\Service\StatusTermScope;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
+use Drupal\markaspot_nuxt\Image\LogoDimensionResolver;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\EnterpriseFeatureGate;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -92,6 +93,13 @@ class MarkASpotSettingsController extends ControllerBase {
   protected LanguageManagerInterface $entityVocabularyLanguageManager;
 
   /**
+   * The logo dimension resolver.
+   *
+   * @var \Drupal\markaspot_nuxt\Image\LogoDimensionResolver
+   */
+  protected LogoDimensionResolver $logoDimensionResolver;
+
+  /**
    * Constructs a MarkASpotSettingsController object.
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
@@ -112,6 +120,8 @@ class MarkASpotSettingsController extends ControllerBase {
    *   The effective service status resolver.
    * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
    *   The language manager.
+   * @param \Drupal\markaspot_nuxt\Image\LogoDimensionResolver $logo_dimension_resolver
+   *   The logo dimension resolver.
    */
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
@@ -123,6 +133,7 @@ class MarkASpotSettingsController extends ControllerBase {
     FeatureScopeResolver $feature_scope_resolver,
     StatusTermScope $status_term_scope,
     LanguageManagerInterface $language_manager,
+    LogoDimensionResolver $logo_dimension_resolver,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->configFactory = $config_factory;
@@ -133,6 +144,7 @@ class MarkASpotSettingsController extends ControllerBase {
     $this->featureScopeResolver = $feature_scope_resolver;
     $this->statusTermScope = $status_term_scope;
     $this->entityVocabularyLanguageManager = $language_manager;
+    $this->logoDimensionResolver = $logo_dimension_resolver;
   }
 
   /**
@@ -149,6 +161,7 @@ class MarkASpotSettingsController extends ControllerBase {
       $container->get('markaspot_nuxt.feature_scope_resolver'),
       $container->get('markaspot_group.status_term_scope'),
       $container->get('language_manager'),
+      $container->get('markaspot_nuxt.logo_dimension_resolver'),
     );
   }
 
@@ -652,11 +665,19 @@ class MarkASpotSettingsController extends ControllerBase {
       };
 
       $logos = [];
+      // Intrinsic sizes let the frontend reserve the logo's space before the
+      // file loads. A sibling key, because consumers read theme.logos as a
+      // map of URLs.
+      $logoSizes = [];
 
       if ($group->hasField('field_logo_light') && !$group->get('field_logo_light')->isEmpty()) {
         $file = $group->get('field_logo_light')->entity;
         if ($file) {
           $logos['light'] = $getRelativePath($file);
+          $size = $this->logoDimensionResolver->forFile($file);
+          if ($size !== NULL) {
+            $logoSizes['light'] = $size;
+          }
           // Add cache dependency on file entity.
           $cache_metadata->addCacheableDependency($file);
         }
@@ -666,6 +687,10 @@ class MarkASpotSettingsController extends ControllerBase {
         $file = $group->get('field_logo_dark')->entity;
         if ($file) {
           $logos['dark'] = $getRelativePath($file);
+          $size = $this->logoDimensionResolver->forFile($file);
+          if ($size !== NULL) {
+            $logoSizes['dark'] = $size;
+          }
           // Add cache dependency on file entity.
           $cache_metadata->addCacheableDependency($file);
         }
@@ -677,6 +702,15 @@ class MarkASpotSettingsController extends ControllerBase {
           $settings['theme'] = [];
         }
         $settings['theme']['logos'] = $logos;
+      }
+      // Sizes only ever come from the stored files; a value left in the
+      // jurisdiction JSON would describe a logo that may have been replaced.
+      // Malformed JSON can leave theme a string, where unset would throw.
+      if (is_array($settings['theme'] ?? NULL)) {
+        unset($settings['theme']['logoSizes']);
+      }
+      if (!empty($logoSizes)) {
+        $settings['theme']['logoSizes'] = $logoSizes;
       }
 
       if ($group->hasField('field_favicon') && !$group->get('field_favicon')->isEmpty()) {

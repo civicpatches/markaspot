@@ -29,6 +29,7 @@ use Drupal\markaspot_group\Service\OrganisationMetadataBuilder;
 use Drupal\markaspot_group\Service\StatusTermScope;
 use Drupal\markaspot_nuxt\Controller\MarkASpotSettingsController;
 use Drupal\markaspot_nuxt\Controller\TenantSettingsController;
+use Drupal\markaspot_nuxt\Image\LogoDimensionResolver;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\EnterpriseFeatureGate;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -269,6 +270,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->featureScopeResolver,
       $this->statusTermScope,
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
   }
 
@@ -390,6 +392,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->statusTermScope,
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
   }
 
@@ -473,6 +476,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
 
     $data = json_decode($controller->getJurisdictions()->getContent(), TRUE);
@@ -548,6 +552,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings', 'GET');
@@ -617,6 +622,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
@@ -640,7 +646,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     // payloads are delivered exclusively by markaspot_facility via the
     // settings alter hook (covered by FacilityManagerTest).
     $nuxtJson = json_encode([
-      'client' => ['name' => 'Stadt Bonn', 'shortName' => 'Bonn'],
+      'client' => ['name' => 'Riverton', 'shortName' => 'Riverton'],
       'branding' => ['hidePoweredBy' => TRUE],
       'theme' => ['primary' => 'cyan', 'secondary' => 'teal'],
       'features' => ['voting' => TRUE],
@@ -663,7 +669,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
 
     $group = $this->createMockGroup([
       'field_nuxt_config' => $nuxtJson,
-      'field_slug' => 'bonn',
+      'field_slug' => 'riverton',
       'field_visibility' => 'authenticated',
     ]);
     $this->groupStorage->method('load')->with(14)->willReturn($group);
@@ -677,11 +683,11 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     // Jurisdiction info.
     $this->assertEquals(14, $data['jurisdiction']['id']);
     $this->assertEquals('Test Jurisdiction', $data['jurisdiction']['name']);
-    $this->assertEquals('bonn', $data['jurisdiction']['slug']);
+    $this->assertEquals('riverton', $data['jurisdiction']['slug']);
     $this->assertEquals('authenticated', $data['jurisdiction']['visibility']);
 
     // Merged config keys.
-    $this->assertEquals('Stadt Bonn', $data['client']['name']);
+    $this->assertEquals('Riverton', $data['client']['name']);
     $this->assertTrue($data['branding']['hidePoweredBy']);
     $this->assertEquals('cyan', $data['theme']['primary']);
     $this->assertTrue($data['features']['voting']);
@@ -772,6 +778,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->statusTermScope,
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
@@ -1336,6 +1343,94 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Tests logo sizes are delivered as a sibling of the logo URLs.
+   *
+   * @covers ::getMarkASpotSettings
+   */
+  public function testGetSettingsAddsLogoSizesNextToLogoUrls(): void {
+    $light = $this->createMockLogoFile(31, 'public://jurisdictions/14/logos/light.svg');
+    $dark = $this->createMockLogoFile(32, 'public://jurisdictions/14/logos/dark.png');
+    $group = $this->createMockGroup([
+      'field_logo_light' => $light,
+      'field_logo_dark' => $dark,
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    // The dark logo has no authoritative size, so only the light one appears.
+    $resolver = $this->createMock(LogoDimensionResolver::class);
+    $resolver->method('forFile')->willReturnCallback(
+      fn(FileInterface $file) => $file === $light ? ['width' => 240.5, 'height' => 120.0] : NULL,
+    );
+    $controller = new MarkASpotSettingsController(
+      $this->entityTypeManager,
+      $this->configFactory,
+      $this->streamWrapperManager,
+      $this->hierarchyResolver,
+      new EnterpriseFeatureGate($this->featureScopeResolver),
+      $this->organisationMetadataBuilder,
+      $this->featureScopeResolver,
+      $this->statusTermScope,
+      $this->languageManager,
+      $resolver,
+    );
+
+    $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
+    $data = json_decode($controller->getMarkASpotSettings($request)->getContent(), TRUE);
+
+    $this->assertSame([
+      'light' => '/sites/default/files/jurisdictions/14/logos/light.svg',
+      'dark' => '/sites/default/files/jurisdictions/14/logos/dark.png',
+    ], $data['theme']['logos']);
+    // JSON drops the zero fraction, so 120.0 arrives as 120.
+    $this->assertSame([
+      'light' => ['width' => 240.5, 'height' => 120],
+    ], $data['theme']['logoSizes']);
+  }
+
+  /**
+   * Tests no logo size key is sent when no size is known.
+   *
+   * @covers ::getMarkASpotSettings
+   */
+  public function testGetSettingsOmitsLogoSizesWhenUnknown(): void {
+    // A stale size in the jurisdiction JSON must not survive either.
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode([
+        'theme' => ['logoSizes' => ['light' => ['width' => 10, 'height' => 10]]],
+      ]),
+      'field_logo_light' => $this->createMockLogoFile(31, 'public://jurisdictions/14/logos/light.svg'),
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
+    $data = json_decode($this->controller->getMarkASpotSettings($request)->getContent(), TRUE);
+
+    $this->assertSame('/sites/default/files/jurisdictions/14/logos/light.svg', $data['theme']['logos']['light']);
+    $this->assertArrayNotHasKey('logoSizes', $data['theme']);
+  }
+
+  /**
+   * Creates a logo file entity stub.
+   *
+   * @param int $id
+   *   The file ID.
+   * @param string $uri
+   *   The file URI.
+   *
+   * @return \Drupal\file\FileInterface|\PHPUnit\Framework\MockObject\MockObject
+   *   The mocked file entity.
+   */
+  protected function createMockLogoFile(int $id, string $uri): FileInterface {
+    $file = $this->createMock(FileInterface::class);
+    $file->method('id')->willReturn((string) $id);
+    $file->method('getFileUri')->willReturn($uri);
+    $file->method('getCacheTags')->willReturn(['file:' . $id]);
+    $file->method('getCacheContexts')->willReturn([]);
+    $file->method('getCacheMaxAge')->willReturn(-1);
+    return $file;
+  }
+
+  /**
    * Tests an empty PWA app icon field does not add theme keys.
    *
    * @covers ::getMarkASpotSettings
@@ -1461,7 +1556,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
 
     $group = $this->createMockGroup([
       'field_nuxt_config' => $nuxtJson,
-      'field_slug' => 'bonn',
+      'field_slug' => 'riverton',
     ]);
     $this->groupStorage->method('load')->with(14)->willReturn($group);
 
@@ -1496,7 +1591,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
 
     $group = $this->createMockGroup([
       'field_nuxt_config' => $nuxtJson,
-      'field_slug' => 'bonn',
+      'field_slug' => 'riverton',
     ]);
     $this->groupStorage->method('load')->with(14)->willReturn($group);
 
@@ -1529,7 +1624,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
             [
               'title' => 'NKF Objekte',
               'layerName' => 'v_od_staedtische_liegenschaften_p_27315',
-              'url' => 'https://gdi.bonn.de/geoserver/nkf_objektverwaltung/wms',
+              'url' => 'https://gdi.riverton.example/geoserver/nkf_objektverwaltung/wms',
             ],
           ],
         ],
@@ -1566,7 +1661,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
             [
               'title' => 'NKF Objekte',
               'layerName' => 'v_od_staedtische_liegenschaften_p_27315',
-              'url' => 'https://gdi.bonn.de/geoserver/nkf_objektverwaltung/wms',
+              'url' => 'https://gdi.riverton.example/geoserver/nkf_objektverwaltung/wms',
             ],
           ],
         ],
@@ -1961,6 +2056,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');

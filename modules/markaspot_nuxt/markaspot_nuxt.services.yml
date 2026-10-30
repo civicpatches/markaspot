@@ -13,6 +13,9 @@ services:
 
   markaspot_nuxt.public_url_validator:
     class: Drupal\markaspot_nuxt\Service\PublicUrlValidator
+  markaspot_nuxt.logo_dimension_resolver:
+    class: Drupal\markaspot_nuxt\Image\LogoDimensionResolver
+    arguments: ['@cache.default', '@logger.factory', '@datetime.time']
 
   markaspot_nuxt.voting_api_controller:
     class: Drupal\markaspot_nuxt\Controller\VotingApiController

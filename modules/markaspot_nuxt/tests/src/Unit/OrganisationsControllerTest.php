@@ -24,6 +24,7 @@ use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Service\OrganisationMetadataBuilder;
 use Drupal\markaspot_group\Service\StatusTermScope;
 use Drupal\markaspot_nuxt\Controller\MarkASpotSettingsController;
+use Drupal\markaspot_nuxt\Image\LogoDimensionResolver;
 use Drupal\markaspot_nuxt\Service\EnterpriseFeatureGate;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\Tests\UnitTestCase;
@@ -238,6 +239,7 @@ class OrganisationsControllerTest extends UnitTestCase {
       $featureScopeResolver,
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
+      $this->createMock(LogoDimensionResolver::class),
     );
   }
 
