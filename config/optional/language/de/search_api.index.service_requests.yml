@@ -1,0 +1,56 @@
+langcode: de
+field_settings:
+  additional_name:
+    label: 'Anschrift » Namenszusatz'
+  address_line1:
+    label: 'Anschrift » Erste Adresszeile'
+  address_line2:
+    label: 'Anschrift » Zweite Adresszeile'
+  administrative_area:
+    label: 'Anschrift » Bundesland'
+  body:
+    label: Beschreibung
+  changed:
+    label: Geändert
+  country_code:
+    label: 'Anschrift » Ländercode'
+  created:
+    label: Erstellt
+  dependent_locality:
+    label: 'Anschrift » Ortsteil'
+  family_name:
+    label: 'Anschrift » Nachname'
+  field_category:
+    label: Kategorie
+  field_jurisdiction:
+    label: Zuständigkeitsbereich
+  field_organisation:
+    label: 'Organisation / Fachbereich'
+  given_name:
+    label: 'Anschrift » Vorname'
+  langcode:
+    label: 'Anschrift » Sprachcode'
+  lat:
+    label: 'Standort » Breitengrad'
+  lng:
+    label: 'Standort » Längengrad'
+  locality:
+    label: 'Anschrift » Ort'
+  node_grants:
+    label: Zugriffsinformationen
+  organization:
+    label: 'Anschrift » Organisation'
+  postal_code:
+    label: 'Anschrift » Postleitzahl'
+  request_id:
+    label: Meldungsnummer
+  sorting_code:
+    label: 'Anschrift » Sortiercode'
+  status:
+    label: Veröffentlichungsstatus
+  title:
+    label: Titel
+  type:
+    label: Inhaltstyp
+  uid:
+    label: Erstellt von

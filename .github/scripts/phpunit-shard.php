@@ -25,7 +25,12 @@ $count = (int) $count;
 $profile = rtrim($profile, '/');
 
 $files = [];
-$iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($profile . '/modules', FilesystemIterator::SKIP_DOTS));
+$iterator = new AppendIterator();
+foreach (['modules', 'tests/src/Kernel'] as $directory) {
+  if (is_dir($profile . '/' . $directory)) {
+    $iterator->append(new RecursiveIteratorIterator(new RecursiveDirectoryIterator($profile . '/' . $directory, FilesystemIterator::SKIP_DOTS)));
+  }
+}
 foreach ($iterator as $file) {
   $path = $file->getPathname();
   if (str_ends_with($path, 'Test.php') && str_contains($path, '/tests/src/Kernel/')) {
