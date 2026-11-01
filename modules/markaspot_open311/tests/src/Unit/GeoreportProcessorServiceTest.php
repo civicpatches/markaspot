@@ -2431,6 +2431,39 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
   }
 
   /**
+   * Slugs and numeric IDs normalize identically without resolving a root.
+   */
+  public function testResolveJurisdictionIdWorkspaceRepresentations(): void {
+    $group = $this->createJurisdictionGroup(42);
+    $this->groupStorage->expects($this->exactly(6))->method('load')
+      ->with(42)->willReturn($group);
+    $this->groupStorage->method('loadByProperties')
+      ->with(['type' => 'jur', 'field_slug' => 'workspace-a', 'status' => 1])
+      ->willReturn([42 => $group]);
+
+    foreach (['jurisdiction_id', 'jurisdiction', 'gid'] as $parameter) {
+      foreach (['workspace-a', '42', 42] as $value) {
+        $this->assertSame(42, $this->processor->resolveJurisdictionId([$parameter => $value]));
+      }
+    }
+  }
+
+  /**
+   * An unknown canonical slug cannot fall back to a valid legacy ID.
+   */
+  public function testResolveJurisdictionIdUnknownSlugDoesNotFallBack(): void {
+    $this->groupStorage->expects($this->never())->method('load');
+    $this->groupStorage->expects($this->once())->method('loadByProperties')
+      ->with(['type' => 'jur', 'field_slug' => 'unknown-workspace', 'status' => 1])
+      ->willReturn([]);
+
+    $this->assertNull($this->processor->resolveJurisdictionId([
+      'jurisdiction_id' => 'unknown-workspace',
+      'gid' => '42',
+    ]));
+  }
+
+  /**
    * Tests that deprecated 'jurisdiction' parameter still resolves.
    */
   public function testResolveJurisdictionIdDeprecatedJurisdiction(): void {

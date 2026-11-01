@@ -525,25 +525,42 @@ class GeoreportRequestResource extends ResourceBase {
     $query->condition('type', $bundle);
     $query->condition('request_id', $requestId);
 
-    $nids = $query->execute();
-    if (empty($nids)) {
-      return NULL;
+    $candidateQueries = [];
+    if (!$enforceMembership && $this->hasJurisdictionClaim($parameters)) {
+      // Prefer the claimed workspace using the list's slug/ID normalization.
+      // The clone plus an AND condition is a subset of the secure query,
+      // including for API keys. resolveReadScope/canAnonymousView still apply,
+      // as does the same requestNodeMatchesScope check with apiKeyRead below.
+      $jurisdictionId = $this->georeportProcessor->resolveJurisdictionId($parameters);
+      if ($jurisdictionId !== NULL) {
+        $exactQuery = clone $query;
+        $exactQuery->condition('field_jurisdiction', $jurisdictionId);
+        $candidateQueries[] = $exactQuery;
+      }
     }
+    $candidateQueries[] = $query;
 
     $matches = [];
-    $nodes = $this->entityTypeManager->getStorage('node')->loadMultiple($nids);
-    foreach ($nodes as $node) {
-      if (!$node instanceof ContentEntityInterface) {
-        continue;
+    foreach ($candidateQueries as $candidateQuery) {
+      $nids = $candidateQuery->execute();
+      $nodes = $this->entityTypeManager->getStorage('node')->loadMultiple($nids);
+      foreach ($nodes as $node) {
+        if (!$node instanceof ContentEntityInterface) {
+          continue;
+        }
+        if (!$this->requestNodeMatchesScope(
+          $node,
+          $scopeJurisdictionIds,
+          !$enforceMembership && $this->currentRequestUsesApiKey(),
+        )) {
+          continue;
+        }
+        $matches[(int) $node->id()] = $node;
       }
-      if (!$this->requestNodeMatchesScope(
-        $node,
-        $scopeJurisdictionIds,
-        !$enforceMembership && $this->currentRequestUsesApiKey(),
-      )) {
-        continue;
+      // Only scope-approved candidates can suppress the hierarchical fallback.
+      if ($matches !== []) {
+        break;
       }
-      $matches[(int) $node->id()] = $node;
     }
 
     if (count($matches) > 1) {
