@@ -1,0 +1,5 @@
+name: Request ID repair test
+type: module
+description: Notification probes for request ID repair kernel tests.
+package: Testing
+core_version_requirement: ^10 || ^11

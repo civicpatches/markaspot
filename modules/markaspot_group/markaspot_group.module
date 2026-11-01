@@ -114,6 +114,11 @@ function markaspot_group_mail(string $key, array &$message, array $params): void
  * - group (org bundle): Normalizes the jurisdiction reference.
  */
 function markaspot_group_entity_presave(EntityInterface $entity): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($entity->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   _markaspot_group_enforce_workspace_visibility_presave($entity);
   _markaspot_group_presave_obsolete_eca($entity);
 
@@ -3642,6 +3647,11 @@ function _markaspot_group_root_admin_group_types(): array {
  * ensuring the status is corrected before the status note paragraph is created.
  */
 function markaspot_group_node_presave(NodeInterface $node): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   // Only process service_request nodes.
   if ($node->bundle() !== 'service_request') {
     return;
@@ -4587,6 +4597,11 @@ function markaspot_group_node_insert(NodeInterface $node): void {
  * changes on a service_request node.
  */
 function markaspot_group_node_update(NodeInterface $node): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   // Only process service_request nodes.
   if ($node->bundle() !== 'service_request') {
     return;

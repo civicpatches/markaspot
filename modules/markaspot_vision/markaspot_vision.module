@@ -78,6 +78,11 @@ function markaspot_vision_node_insert(NodeInterface $node): void {
  * Publishes safe media on node update.
  */
 function markaspot_vision_node_update(NodeInterface $node): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   _markaspot_vision_publish_safe_media($node);
   \Drupal::service('markaspot_vision.original_image_store')->bind($node);
 }

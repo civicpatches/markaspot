@@ -79,8 +79,16 @@ function markaspot_request_id_node_presave(EntityInterface $node) {
       try {
         /** @var \Drupal\markaspot_request_id\Service\RequestIdGeneratorInterface $generator */
         $generator = \Drupal::service('markaspot_request_id.generator');
-        $sourceJurisdictionId = $generator->resolveSourceJurisdictionFromNode($node);
-        $jurisdictionId = $generator->resolveJurisdictionFromNode($node);
+        if (!empty($node->_markaspot_request_id_renumbering)) {
+          // Repairs use the stored jurisdiction, even if a legacy category has
+          // since moved. The finder supplies the authoritative root scope.
+          $sourceJurisdictionId = (int) $node->get('field_jurisdiction')->target_id;
+          $jurisdictionId = (int) $node->_markaspot_request_id_renumbering;
+        }
+        else {
+          $sourceJurisdictionId = $generator->resolveSourceJurisdictionFromNode($node);
+          $jurisdictionId = $generator->resolveJurisdictionFromNode($node);
+        }
         $node->request_id->value = $generator->generateRequestId($jurisdictionId, $sourceJurisdictionId);
       }
       catch (\Exception $e) {
@@ -95,7 +103,16 @@ function markaspot_request_id_node_presave(EntityInterface $node) {
         );
       }
     }
-    $node->title = markaspot_request_id_create_title($node, $node->request_id->value);
+    if (!empty($node->_markaspot_request_id_renumbering)) {
+      foreach ($node->getTranslationLanguages() as $langcode => $language) {
+        $translation = $node->getTranslation($langcode);
+        $translation->set('request_id', $node->request_id->value);
+        $translation->setTitle(markaspot_request_id_create_title($translation, $node->request_id->value, $langcode));
+      }
+    }
+    else {
+      $node->title = markaspot_request_id_create_title($node, $node->request_id->value);
+    }
   }
 }
 
@@ -257,6 +274,8 @@ function markaspot_request_id_update_timestamp($connection, $id, $timestamp) {
  *   The service request node.
  * @param string $request_id
  *   The request ID to include in the title.
+ * @param string|null $langcode
+ *   The translation language, or NULL for the current interface language.
  *
  * @return string
  *   The generated title.
@@ -264,8 +283,8 @@ function markaspot_request_id_update_timestamp($connection, $id, $timestamp) {
  * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
  * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
  */
-function markaspot_request_id_create_title($node, $request_id) {
-  $language = \Drupal::languageManager()->getCurrentLanguage()->getId();
+function markaspot_request_id_create_title($node, $request_id, ?string $langcode = NULL) {
+  $language = $langcode ?? \Drupal::languageManager()->getCurrentLanguage()->getId();
   $service_name_text = "";
 
   // Check if category field exists and has a value.

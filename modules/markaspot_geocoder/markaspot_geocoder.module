@@ -15,6 +15,11 @@ use Drupal\taxonomy\Entity\Term;
  * Geocode coordinates to address before saving, then apply district mappings.
  */
 function markaspot_geocoder_node_presave(EntityInterface $node) {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   if ($node->bundle() !== 'service_request') {
     return;
   }
