@@ -1,5 +1,15 @@
 # Changelog
 
+## [11.9.240](https://github.com/markaspot/markaspot/compare/11.9.239...11.9.240) (2026-11-01)
+
+### Features
+
+* **health:** report duplicate request IDs within a jurisdiction ([4910b13](https://github.com/markaspot/markaspot/commit/4910b1351fb1971eed4481b038f31d5ce5dad3cd))
+
+### Bug Fixes
+
+* **config:** keep the management view base in the site language on import ([fcd76db](https://github.com/markaspot/markaspot/commit/fcd76db85ce8e0c2262ab6f30ed2f7c13c43f28c))
+
 ## [11.9.239](https://github.com/markaspot/markaspot/compare/11.9.238...11.9.239) (2026-10-31)
 
 ### Features
