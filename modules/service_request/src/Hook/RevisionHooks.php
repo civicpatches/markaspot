@@ -23,6 +23,10 @@ final class RevisionHooks {
     if (!$entity instanceof NodeInterface || $entity->bundle() !== 'service_request') {
       return;
     }
+    // Keep the repair's explicit audit message unchanged.
+    if (!empty($entity->_markaspot_request_id_renumbering)) {
+      return;
+    }
     $entity->setRevisionLogMessage(RevisionLog::build($entity, RevisionLog::REFERENCE_FIELDS));
   }
 

@@ -291,6 +291,11 @@ function _service_request_email_form_required(NodeInterface $node, bool $configu
  * Implements hook_node_presave().
  */
 function service_request_node_presave(EntityInterface $node) {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   if (!$node instanceof NodeInterface || $node->bundle() !== 'service_request') {
     return;
   }

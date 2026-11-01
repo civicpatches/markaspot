@@ -341,9 +341,14 @@ function markaspot_ai_node_insert(NodeInterface $node): void {
 /**
  * Implements hook_node_update().
  *
- * Re-queues service request nodes for embedding generation when content changes.
+ * Re-queues service requests for embedding generation when content changes.
  */
 function markaspot_ai_node_update(NodeInterface $node): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   // Only process service_request nodes.
   if ($node->bundle() !== 'service_request') {
     return;

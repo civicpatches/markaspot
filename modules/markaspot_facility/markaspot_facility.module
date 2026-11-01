@@ -43,6 +43,11 @@ function markaspot_facility_markaspot_nuxt_settings_alter(
  * Implements hook_ENTITY_TYPE_presave() for node entities.
  */
 function markaspot_facility_node_presave(EntityInterface $node): void {
+  // A request-ID repair must not replay business workflows or alter content.
+  if (!empty($node->_markaspot_request_id_renumbering)) {
+    return;
+  }
+
   if (!$node instanceof NodeInterface || $node->bundle() !== 'service_request') {
     return;
   }
