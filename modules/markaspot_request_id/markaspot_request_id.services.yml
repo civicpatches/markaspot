@@ -9,3 +9,6 @@ services:
       - '@logger.factory'
       - '@?markaspot_group.hierarchy_resolver'
       - '@entity_type.manager'
+  markaspot_request_id.duplicate_finder:
+    class: Drupal\markaspot_request_id\Service\DuplicateRequestIdFinder
+    arguments: ['@database']

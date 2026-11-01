@@ -5,6 +5,8 @@
  * Install, update and uninstall functions for markaspot_request_id module.
  */
 
+use Drupal\eca\EventSubscriber\DynamicSubscriber;
+
 /**
  * Defines the markaspot_request_id table schema.
  *
@@ -238,7 +240,7 @@ function markaspot_request_id_update_11800() {
         $messages[] = "Assigned $updated rows to jurisdiction $jid (single-tenant).";
       }
       elseif ($jurCount > 1) {
-        // Multi-tenant: resolve jurisdiction via category term field_jurisdiction.
+        // Multi-tenant: resolve jurisdiction via the category term.
         // Uses a temporary index on request_id for JOIN performance.
         $hasIndex = FALSE;
         try {
@@ -416,8 +418,8 @@ function markaspot_request_id_update_11900(): string {
 /**
  * Expands the node request_id storage for prefixed request IDs.
  *
- * Existing installs may already have service request data in node tables. Drupal
- * refuses a generic base-field definition update in that state, but increasing a
+ * Existing installs may already have service request data in node tables.
+ * Drupal refuses a generic base-field definition update then, but increasing a
  * varchar length from 32 to 64 is a safe in-place schema change.
  *
  * @param array<int, string> $messages
@@ -556,4 +558,89 @@ function markaspot_request_id_update_11901(): string {
   }
 
   return 'Created missing markaspot_request_id table.';
+}
+
+/**
+ * Renumbers duplicate request IDs within each root jurisdiction without mail.
+ */
+function markaspot_request_id_update_11902(array &$sandbox): string {
+  /** @var \Drupal\markaspot_request_id\Service\DuplicateRequestIdFinder $finder */
+  $finder = \Drupal::service('markaspot_request_id.duplicate_finder');
+  if (!isset($sandbox['groups'])) {
+    // Keep only identifiers in the resumable sandbox, never titles or content.
+    $sandbox['groups'] = array_map(static fn(object $group): array => [
+      'jurisdiction_id' => (int) $group->jurisdiction_id,
+      'request_id' => (string) $group->request_id,
+    ], $finder->findGroups());
+    $sandbox['position'] = 0;
+    $sandbox['renumbered'] = 0;
+    $sandbox['repaired_groups'] = 0;
+    $sandbox['group_started'] = FALSE;
+  }
+
+  $storage = \Drupal::entityTypeManager()->getStorage('node');
+  $remaining = 50;
+  $total = count($sandbox['groups']);
+  while ($remaining > 0 && $sandbox['position'] < $total) {
+    $group = $sandbox['groups'][$sandbox['position']];
+    // Re-read each batch: completed writes disappear from the duplicate group,
+    // so retries cannot renumber the same node again. Never use an SQL OFFSET.
+    $nids = $finder->findNodeIds($group['jurisdiction_id'], $group['request_id'], $remaining + 1);
+    $keeper = array_shift($nids);
+    foreach ($nids as $nid) {
+      /** @var \Drupal\node\NodeInterface|null $node */
+      $node = $storage->loadUnchanged($nid);
+      if ($node === NULL || (string) $node->get('request_id')->value !== $group['request_id']) {
+        continue;
+      }
+      $node = $node->getUntranslated();
+      $node->setNewRevision(TRUE);
+      $node->setRevisionUserId((int) \Drupal::currentUser()->id());
+      $node->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+      $node->setRevisionLogMessage(sprintf(
+        'Renumbered: request ID %s was also used by node %d in the same jurisdiction.',
+        $group['request_id'], $keeper,
+      ));
+      $node->set('request_id', NULL);
+      // Transient, entity-local flag, never persisted or exposed as a field.
+      // Business hooks honor it; core persistence, grants, caches and the
+      // request-index projection still run through the regular save path.
+      $node->_markaspot_request_id_renumbering = $group['jurisdiction_id'];
+      $has_eca = class_exists(DynamicSubscriber::class);
+      $eca_active = $has_eca && DynamicSubscriber::isActive();
+      try {
+        if ($has_eca) {
+          // Includes tenant models with unconditional presave/update actions,
+          // mail, webhooks or queued jobs, not just status-change models.
+          DynamicSubscriber::setActive(FALSE);
+        }
+        $node->save();
+      }
+      finally {
+        unset($node->_markaspot_request_id_renumbering);
+        if ($has_eca) {
+          DynamicSubscriber::setActive($eca_active);
+        }
+        $storage->resetCache([$nid]);
+      }
+      $sandbox['renumbered']++;
+      if (!$sandbox['group_started']) {
+        $sandbox['repaired_groups']++;
+        $sandbox['group_started'] = TRUE;
+      }
+      $remaining--;
+    }
+    // A full batch may leave more members in this group. Revisit it next time.
+    if ($remaining === 0) {
+      break;
+    }
+    $sandbox['position']++;
+    $sandbox['group_started'] = FALSE;
+  }
+
+  $sandbox['#finished'] = $total === 0 ? 1 : $sandbox['position'] / $total;
+  return (string) t('Renumbered @nodes node(s) in @groups duplicate request ID group(s).', [
+    '@nodes' => $sandbox['renumbered'],
+    '@groups' => $sandbox['repaired_groups'],
+  ]);
 }

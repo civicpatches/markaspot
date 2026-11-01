@@ -1,0 +1,14 @@
+<?php
+
+/**
+ * @file
+ * Notification fixture for request ID repair tests.
+ */
+
+/**
+ * Implements hook_mail().
+ */
+function request_id_repair_test_mail($key, &$message, $params): void {
+  $message['subject'] = 'Synthetic update notification';
+  $message['body'][] = 'Synthetic update notification';
+}

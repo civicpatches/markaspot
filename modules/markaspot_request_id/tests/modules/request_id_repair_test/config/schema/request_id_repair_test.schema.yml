@@ -1,0 +1,4 @@
+action.configuration.request_id_repair_test_notify:
+  type: mapping
+  label: 'Synthetic save notification'
+  mapping: {}
