@@ -870,6 +870,9 @@ final class ProfileConfigGuardSubscriber implements EventSubscriberInterface {
    * The profile's shipped definitions therefore win for these two narrowly
    * scoped config objects. Active UUID metadata is retained so the transformed
    * import updates the existing config entities instead of replacing them.
+   * The base language follows system.site, with labels from the profile's
+   * translation of that language. Otherwise a localized active base would be
+   * reset to English on every import, even after an unchanged deploy.
    *
    * @param \Drupal\Core\Config\StorageInterface $importStorage
    *   The mutable import storage.
@@ -887,11 +890,26 @@ final class ProfileConfigGuardSubscriber implements EventSubscriberInterface {
 
     $profilePath = $this->profileExtensionList->getPath($this->installProfile);
     $source = new FileStorage($profilePath . '/config/optional');
+    // Honor a default-language change in this import as well as existing sites.
+    $site = $importStorage->read('system.site') ?: $this->activeStorage->read('system.site');
+    $langcode = $site['default_langcode'] ?? 'en';
+    $translations = new FileStorage($profilePath . '/config/optional/language/' . $langcode);
     foreach (self::MANAGEMENT_PACKAGE_CONFIG as $name) {
       $shippedData = $source->read($name);
       $activeData = $this->activeStorage->read($name);
       if (!is_array($shippedData) || !is_array($activeData)) {
         continue;
+      }
+      if ($langcode !== $shippedData['langcode']) {
+        $translation = $translations->read($name);
+        if (is_array($translation)) {
+          if ($name === 'views.view.management') {
+            $translation = self::pruneOrphanViewOverrideHandlers($translation, $shippedData);
+          }
+          $shippedData = array_replace_recursive($shippedData, $translation);
+        }
+        // Untranslated labels retain the profile's fallback wording.
+        $shippedData['langcode'] = $langcode;
       }
       foreach (['uuid', '_core'] as $preservedKey) {
         if (isset($activeData[$preservedKey]) && !isset($shippedData[$preservedKey])) {

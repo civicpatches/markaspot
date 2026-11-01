@@ -105,6 +105,38 @@ final class ManagementPackageConfigGuardTest extends UnitTestCase {
   }
 
   /**
+   * Tests language changes follow the imported site, not the old active value.
+   */
+  public function testImportedDefaultLanguageWins(): void {
+    $profilePath = dirname(__DIR__, 3);
+    $source = new FileStorage($profilePath . '/config/optional');
+    $active = new MemoryStorage();
+    foreach (['views.view.management', 'search_api.index.service_requests'] as $name) {
+      $active->write($name, $source->read($name));
+    }
+    $profiles = $this->createMock(ProfileExtensionList::class);
+    $profiles->method('getPath')->with('markaspot')->willReturn($profilePath);
+    $subscriber = new ProfileConfigGuardSubscriber(
+      $this->createMock(ModuleExtensionList::class),
+      $active,
+      'markaspot',
+      new NullLogger(),
+      $profiles,
+    );
+    $protect = new \ReflectionMethod($subscriber, 'protectManagementPackageConfig');
+    foreach (['en' => 'de', 'de' => 'en'] as $old => $new) {
+      $active->write('system.site', ['default_langcode' => $old]);
+      $import = new MemoryStorage();
+      $import->write('system.site', ['default_langcode' => $new]);
+      $protect->invoke($subscriber, $import);
+      $this->assertSame($new, $import->read('views.view.management')['langcode']);
+      $this->assertSame($new, $import->read('search_api.index.service_requests')['langcode']);
+      $this->assertSame($new === 'de' ? 'Verwaltung' : 'Management', $import->read('views.view.management')['label']);
+      $this->assertSame($new === 'de' ? 'Meldungsnummer' : 'Request ID', $import->read('search_api.index.service_requests')['field_settings']['request_id']['label']);
+    }
+  }
+
+  /**
    * Tests nested plugin option order follows the active config entity.
    *
    * @covers ::protectManagementPackageConfig
