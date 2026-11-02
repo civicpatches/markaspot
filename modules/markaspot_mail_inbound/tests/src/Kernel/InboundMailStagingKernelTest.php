@@ -516,6 +516,7 @@ class InboundMailStagingKernelTest extends KernelTestBase {
    * Staged attachments are NOT stored in the public media scheme (HIGH 1).
    */
   public function testStagedAttachmentIsNotPubliclyStored(): void {
+    $this->setSetting('file_private_path', $this->siteDirectory . '/private');
     $result = $this->ingest($this->makeRawWithImage('att-001@example.org'));
     $this->assertSame(IngestResult::STAGED, $result->status);
 
@@ -526,10 +527,10 @@ class InboundMailStagingKernelTest extends KernelTestBase {
     $file = $this->container->get('entity_type.manager')->getStorage('file')->load(reset($fileIds));
     $this->assertNotNull($file);
     $uri = (string) $file->getFileUri();
-    // No private filesystem in the kernel test, so it falls back to the denied
-    // public staging subdir; it must NOT be a plain public media file and the
-    // filename must not be a guessable timestamp.
-    $this->assertStringContainsString('mail-inbound-staged/', $uri);
+    // The attachment must stay private until moderation, with a filename
+    // that cannot be guessed from a timestamp.
+    $this->assertStringStartsWith('private://mail-inbound-staged/', $uri);
+    $this->assertFileExists($uri);
     $this->assertMatchesRegularExpression('#/mail-[0-9a-f]{32}\.#', $uri, 'Filename uses a non-predictable random component.');
     // PERMANENT while staged: attachment_files registers no file usage, so a
     // temporary file would be garbage-collected by file_cron after ~6h while
@@ -540,12 +541,8 @@ class InboundMailStagingKernelTest extends KernelTestBase {
   /**
    * Promotion relocates a staged attachment and releases the file reference.
    *
-   * No private filesystem and no media field config exist in this kernel
-   * test, so the resolved media directory is the public ROOT — the exact
-   * production constellation in which the earlier str_starts_with() prefix
-   * check treated public://mail-inbound-staged/ as already inside the target
-   * and left the promoted file in the denied subdir (403 on Apache once the
-   * report is published).
+   * With private storage configured, promotion moves the file from private
+   * staging to the private import directory before queuing image screening.
    */
   public function testPromotionRelocatesAttachmentAndReleasesReference(): void {
     $this->setSetting('file_private_path', $this->siteDirectory . '/private');
