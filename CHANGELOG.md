@@ -1,5 +1,16 @@
 # Changelog
 
+## [11.9.241](https://github.com/markaspot/markaspot/compare/11.9.240...11.9.241) (2026-11-02)
+
+### Features
+
+* **history:** record category, description, photo and publishing changes in the revision log ([fd0a7b3](https://github.com/markaspot/markaspot/commit/fd0a7b3a44be8dbc62fb16ac48ae4c40bdedf59d))
+* **nuxt:** deliver tenant logo sizes in the settings response ([ddc08d7](https://github.com/markaspot/markaspot/commit/ddc08d734537c44c8dbcf4314fad085c475d25ed))
+
+### Bug Fixes
+
+* **request_id:** renumber duplicate request IDs within a jurisdiction ([e10df98](https://github.com/markaspot/markaspot/commit/e10df98b8ee8bb4b59fc2ade86bd92fca2cda487))
+
 ## [11.9.240](https://github.com/markaspot/markaspot/compare/11.9.239...11.9.240) (2026-11-01)
 
 ### Features
