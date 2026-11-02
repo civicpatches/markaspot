@@ -23,6 +23,7 @@ use Drupal\markaspot_ai\Utility\BlurAdvisory;
 use Drupal\Core\State\StateInterface;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\markaspot_ai\Utility\ProviderError;
+use Drupal\markaspot_ai\Service\AiClientService;
 
 // These standalone utilities are shared within the profile, including when
 // markaspot_ai is disabled and Drupal has not registered its namespace.
@@ -43,6 +44,77 @@ require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/ProviderError.php'
 class ImageProcessingService {
 
   use JurisdictionIdResolverTrait;
+
+  /**
+   * Already screened source URIs, scoped to processScreenedImages().
+   *
+   * @var array<string, array>
+   */
+  private array $screenedUris = [];
+
+  /**
+   * Usage attribution scoped to an imported image analysis.
+   *
+   * @var array
+   */
+  private array $accountingOptions = [];
+
+  /**
+   * Persists a blur result through the same path for uploads and imports.
+   */
+  public function persistBlurResult(MediaInterface $media, array $result, string $uri, ?OriginalImageStore $originals = NULL): void {
+    if (!empty($result['blurred']) && empty($result['persisted'])) {
+      $this->assertOverwritable($media, $uri);
+      $originals?->retain($media, $uri);
+      $this->saveBlurredImage($media, $result['contents'], $uri);
+    }
+  }
+
+  /**
+   * Completes an overwrite, including recovery after a stopped worker.
+   */
+  public function finalizeBlurOverwrite(MediaInterface $media, string $uri): void {
+    $this->assertOverwritable($media, $uri);
+    // Same non-deprecated style API as ImageDerivativeUtilities::pathFlush().
+    foreach ($this->entityTypeManager->getStorage('image_style')->loadMultiple() as $style) {
+      /** @var \Drupal\image\ImageStyleInterface $style */
+      $style->flush($uri);
+    }
+  }
+
+  /**
+   * Analyses trusted, already screened files without blurring them again.
+   *
+   * @param array<string, array> $screenedUris
+   *   Source URIs mapped to verifiable blur checkpoints.
+   * @param string|null $langcode
+   *   The report language.
+   * @param int|null $jurisdictionId
+   *   The trusted tenant ID.
+   * @param array|null $fileUris
+   *   All source URIs in a mixed batch, or NULL for only screened files.
+   * @param int|null $mediaId
+   *   Imported media whose analysis is centrally accounted for, if any.
+   *
+   * @return array|null
+   *   The normal vision result.
+   */
+  public function processScreenedImages(array $screenedUris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?array $fileUris = NULL, ?int $mediaId = NULL): ?array {
+    if ($mediaId !== NULL && $this->aiClient === NULL) {
+      throw new \RuntimeException('Central token accounting is required for imported image analysis.');
+    }
+    $this->screenedUris = $screenedUris;
+    $this->accountingOptions = $mediaId !== NULL ? [
+      'operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId,
+    ] : [];
+    try {
+      return $this->processImages($fileUris ?? array_keys($screenedUris), $langcode, $jurisdictionId);
+    }
+    finally {
+      $this->screenedUris = [];
+      $this->accountingOptions = [];
+    }
+  }
 
   /**
    * Max bytes for the unscaled original-image fallback sent to the AI.
@@ -171,6 +243,8 @@ class ImageProcessingService {
    * @param \Drupal\Core\Extension\ModuleHandlerInterface|null $moduleHandler
    *   Invokes hook_markaspot_vision_prompt_alter(); without it the prompt
    *   keeps its defaults.
+   * @param \Drupal\markaspot_ai\Service\AiClientService|null $aiClient
+   *   Central token accounting, when the AI module is installed.
    */
   public function __construct(
     ClientInterface $http_client,
@@ -183,6 +257,7 @@ class ImageProcessingService {
     protected ?FileUsageInterface $fileUsage = NULL,
     protected ?CitizenWordingResolver $wordingResolver = NULL,
     protected ?ModuleHandlerInterface $moduleHandler = NULL,
+    protected ?AiClientService $aiClient = NULL,
   ) {
     $this->httpClient = $http_client;
     $this->configFactory = $config_factory;
@@ -409,7 +484,7 @@ class ImageProcessingService {
 
       // Flush image style derivatives so they regenerate from the blurred
       // source.
-      image_path_flush($originalUri);
+      $this->finalizeBlurOverwrite($media, $originalUri);
 
       $this->logger->notice(
         'Original image replaced with blurred version for media @id.',
@@ -574,7 +649,15 @@ class ImageProcessingService {
         $mime = $finfo->buffer($contents) ?: 'image/jpeg';
 
         // Blur sensitive areas (faces, license plates) before AI analysis.
-        $blur_result = $this->blurSensitiveAreas($contents, $mime);
+        $marker = $this->screenedUris[$file_uri] ?? [];
+        $blur_result = ScreeningMarker::accepts($marker, @hash_file('sha256', $file_uri), BlurPolicy::isRequired($this->logger))
+          ? [
+            'contents' => $contents,
+            'processed' => TRUE,
+            'persisted' => TRUE,
+            'blurred' => !empty($marker['blurred']),
+          ]
+          : $this->blurSensitiveAreas($contents, $mime);
         // Carry the MIME so the controller can build a data URL preview.
         $blur_result['mime'] = $mime;
         // In-memory only: an escalated blur must start from the unblurred
@@ -716,6 +799,8 @@ class ImageProcessingService {
         'ai_result' => $ai_result_content,
         'blur_results' => $blur_results,
         'skipped_uris' => $skipped_uris,
+        'usage' => $ai_data['usage'] ?? [],
+        'model' => $api_config['model'],
       ];
 
     }
@@ -837,7 +922,7 @@ class ImageProcessingService {
 
     if ($blur_applied) {
       // Faces/plates were already blurred by preprocessing. The AI must still
-      // flag any personal data that remains visible, readable, or insufficiently
+      // flag personal data that remains visible, readable, or insufficiently
       // anonymised; the blur fact alone is not a moderation hold.
       $instruction .= "Some faces or license plates in these images have already "
         . "been blurred by preprocessing. Already blurred regions alone are not "
@@ -961,6 +1046,10 @@ class ImageProcessingService {
    *   When max retries are reached or a non-recoverable error occurs.
    */
   protected function sendRequestWithRetry(array $api_config, array $request_payload, int $max_retries = 3): array {
+    // Imported enrichment must not repeat a submission with an uncertain result.
+    if ($this->accountingOptions !== []) {
+      $max_retries = 1;
+    }
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {
       try {
@@ -980,6 +1069,11 @@ class ImageProcessingService {
           throw new \RuntimeException(ProviderError::message($body, $status), $status);
         }
         $decoded = json_decode($body, TRUE, 512, JSON_THROW_ON_ERROR);
+        if ($this->accountingOptions && $this->aiClient) {
+          // A successful provider answer consumed tokens even if validation
+          // below rejects it. HTTP failures and parameter repairs book nothing.
+          $this->aiClient->accountChatResponse('vision', $api_config['model'], $this->accountingOptions, $decoded, $request_payload);
+        }
         $content = $decoded['choices'][0]['message']['content'] ?? '';
         if ((!is_string($content) || trim($content) === '') && ($decoded['choices'][0]['finish_reason'] ?? '') === 'length') {
           $this->logger->error('Vision token budget exhausted; increase markaspot_vision.settings.max_tokens.');

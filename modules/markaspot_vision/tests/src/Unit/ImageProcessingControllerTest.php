@@ -2,6 +2,8 @@
 
 namespace Drupal\Tests\markaspot_vision\Unit;
 
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Entity\EntityStorageInterface;
@@ -9,6 +11,8 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\KeyValueStore\KeyValueStoreInterface;
+use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
+use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\Core\Site\Settings;
@@ -144,7 +148,11 @@ class ImageProcessingControllerTest extends UnitTestCase {
   protected function setUp(): void {
     parent::setUp();
 
-    $this->imageProcessingService = $this->createMock(ImageProcessingService::class);
+    // Exercise the shared persistence orchestration while keeping its I/O
+    // boundaries observable through the existing method expectations.
+    $methods = array_diff(get_class_methods(ImageProcessingService::class), ['__construct', 'persistBlurResult']);
+    $this->imageProcessingService = $this->getMockBuilder(ImageProcessingService::class)
+      ->disableOriginalConstructor()->onlyMethods($methods)->getMock();
     $this->mediaAnalysisAccessGuard = $this->createMock(MediaAnalysisAccessGuard::class);
     $this->logger = $this->createMock(LoggerInterface::class);
     $this->flood = $this->createMock(FloodInterface::class);
@@ -200,6 +208,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ->willReturnCallback(fn ($permission) => $permission === 'access dashboard notifications' && $this->dashboardAccess);
     $staffAccess = new StaffAnalysisAccess($account, $configFactory, $entityTypeManager);
 
+    $keyValueFactory = $this->createMock(KeyValueFactoryInterface::class);
     $this->controller = new ImageProcessingController(
       $this->imageProcessingService,
       $loggerFactory,
@@ -209,6 +218,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       $configFactory,
       $scopeResolver,
       $staffAccess,
+      $keyValueFactory,
     );
 
     // Inject entityTypeManager via reflection (ControllerBase stores it
@@ -217,16 +227,16 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $ref->setAccessible(TRUE);
     $ref->setValue($this->controller, $entityTypeManager);
 
-    // Inject the keyvalue store ControllerBase::keyValue() lazily resolves:
-    // the controller reads markaspot_open311.media_publication_manual to let
-    // explicit GeoReport publication decisions win over re-analysis. Default
-    // (no mark) means "not manually controlled" — publish flow unaffected.
+    // Keep editorial marks separate from intake state, as the real factory
+    // does. ControllerBase's single cached collection is deliberately unused.
     $manualPublication = $this->createMock(KeyValueStoreInterface::class);
     $manualPublication->method('get')
       ->willReturnCallback(fn ($key) => $this->manualPublicationMarks[$key] ?? NULL);
-    $keyValueRef = new \ReflectionProperty($this->controller, 'keyValue');
-    $keyValueRef->setAccessible(TRUE);
-    $keyValueRef->setValue($this->controller, $manualPublication);
+    $collections = new KeyValueMemoryFactory();
+    $keyValueFactory->method('get')->willReturnCallback(
+      fn ($collection) => $collection === 'markaspot_open311.media_publication_manual'
+        ? $manualPublication : $collections->get($collection),
+    );
 
     // Inject string translation stub so $this->t() works in tests.
     $this->controller->setStringTranslation($this->getStringTranslationStub());
@@ -708,6 +718,49 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $response = $this->controller->getAIResults($request);
 
     $this->assertEquals(403, $response->getStatusCode());
+  }
+
+  /**
+   * Foreign tenants and unauthorized uploads never acquire intake locks.
+   */
+  public function testRejectedScopeDoesNotAcquireIntakeLock(): void {
+    $this->flood->method('isAllowed')->willReturn(TRUE);
+    $media = $this->createMockMedia(1);
+    $this->mediaStorage->method('loadByProperties')->willReturn([1 => $media]);
+    $store = new KeyValueMemoryFactory();
+    $store->get(MediaIntakeScreening::STORE)->set(1, ['status' => 'pending']);
+    (new \ReflectionProperty($this->controller, 'keyValueFactory'))->setValue($this->controller, $store);
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->never())->method('acquire');
+    (new \ReflectionProperty($this->controller, 'operationLock'))->setValue($this->controller, $lock);
+    $scope = $this->createMock(MediaTenantScopeResolver::class);
+    $scope->method('resolve')->willReturn(MediaTenantScope::refuse('Foreign tenant', 403));
+    (new \ReflectionProperty($this->controller, 'mediaTenantScopeResolver'))->setValue($this->controller, $scope);
+    $this->assertSame(403, $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]))->getStatusCode());
+    $this->allowMediaAnalysis = FALSE;
+    $this->assertSame(403, $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]))->getStatusCode());
+  }
+
+  /**
+   * Reloading under lock does not bypass changed upload authorization.
+   */
+  public function testIntakeReloadRechecksAuthorization(): void {
+    $this->flood->method('isAllowed')->willReturn(TRUE);
+    $media = $this->createMockMedia(1);
+    $this->mediaStorage->method('loadByProperties')->willReturn([1 => $media]);
+    $this->mediaStorage->method('loadUnchanged')->with(1)->willReturn($media);
+    $store = new KeyValueMemoryFactory();
+    $store->get(MediaIntakeScreening::STORE)->set(1, ['status' => 'pending']);
+    (new \ReflectionProperty($this->controller, 'keyValueFactory'))->setValue($this->controller, $store);
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->once())->method('acquire')->with('markaspot_media_intake:1', 900)->willReturnCallback(function (): bool {
+      $this->allowMediaAnalysis = FALSE;
+      return TRUE;
+    });
+    $lock->expects($this->once())->method('release')->with('markaspot_media_intake:1');
+    (new \ReflectionProperty($this->controller, 'operationLock'))->setValue($this->controller, $lock);
+    $this->imageProcessingService->expects($this->never())->method('processImages');
+    $this->assertSame(403, $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]))->getStatusCode());
   }
 
   /**

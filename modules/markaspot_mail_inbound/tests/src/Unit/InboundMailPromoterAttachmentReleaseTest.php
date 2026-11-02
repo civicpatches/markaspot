@@ -7,21 +7,27 @@ namespace Drupal\Tests\markaspot_mail_inbound\Unit;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
+use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\File\Exception\FileException;
+use Drupal\Core\File\Exception\InvalidStreamWrapperException;
+use Drupal\Core\File\FileExists;
 use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Utility\Token;
+use Drupal\Tests\UnitTestCase;
 use Drupal\file\FileInterface;
 use Drupal\markaspot_mail_inbound\Entity\InboundMail;
 use Drupal\markaspot_mail_inbound\Service\InboundMailPromoter;
 use Drupal\markaspot_mail_inbound\Service\InternalRemarkWriter;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\media\MediaInterface;
 use Drupal\node\NodeInterface;
-use Drupal\Tests\UnitTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 /**
@@ -47,6 +53,13 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
   protected array $publicationCalls = [];
 
   /**
+   * Media handed to the same screening queue as Open311 imports.
+   *
+   * @var array<int|string>
+   */
+  protected array $queuedMedia = [];
+
+  /**
    * Builds a promoter whose media storage throws on selected file ids.
    *
    * @param array<int, \Drupal\file\FileInterface|null> $files
@@ -55,8 +68,10 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
    *   File ids whose media save() throws.
    * @param int $mediaCreations
    *   Receives the number of media create() calls (by reference).
+   * @param string $storageFailure
+   *   Optional directory or move failure to simulate.
    */
-  protected function promoter(array $files, array $throwOnFids, int &$mediaCreations): TestablePromoterForAttachments {
+  protected function promoter(array $files, array $throwOnFids, int &$mediaCreations, string $storageFailure = ''): TestablePromoterForAttachments {
     $fileStorage = $this->createMock(EntityStorageInterface::class);
     $fileStorage->method('load')->willReturnCallback(
       static fn(int|string $fid) => $files[(int) $fid] ?? NULL
@@ -101,14 +116,29 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
     $moduleHandler = $this->createMock(ModuleHandlerInterface::class);
     $moduleHandler->method('moduleExists')->with('media')->willReturn(TRUE);
 
-    // resolveMediaDirectory(): the entity field manager throws (media field
-    // storage not relevant here) and prepareDirectory() FAILS, so the
-    // directory resolves to NULL and moveFileToMediaScheme() is a no-op —
-    // the test isolates the media-creation branch.
     $entityFieldManager = $this->createMock(EntityFieldManagerInterface::class);
-    $entityFieldManager->method('getFieldStorageDefinitions')->willThrowException(new \RuntimeException('no media definitions'));
     $fileSystem = $this->createMock(FileSystemInterface::class);
-    $fileSystem->method('prepareDirectory')->willReturn(FALSE);
+    if ($storageFailure === 'directory exception') {
+      $fileSystem->method('prepareDirectory')->willThrowException(new InvalidStreamWrapperException('Missing private wrapper.'));
+    }
+    else {
+      $fileSystem->method('prepareDirectory')->willReturn($storageFailure !== 'directory false');
+    }
+    $fileSystem->expects(str_starts_with($storageFailure, 'directory') ? $this->never() : ($storageFailure === 'file save exception' ? $this->exactly(2) : $this->any()))
+      ->method('move')->willReturnCallback(static function ($source, $destination, $mode) use ($storageFailure) {
+        if ($storageFailure === 'move exception') {
+          throw new FileException('Private move failed.');
+        }
+        if ($storageFailure === 'file save exception' && str_starts_with($source, 'private://')) {
+          self::assertSame('public://mail-inbound-staged/mail-7.jpg', $destination);
+          self::assertSame(FileExists::Error, $mode);
+        }
+        return $storageFailure === 'move false' ? FALSE : $destination;
+      });
+    $logger = $this->createMock(LoggerChannelInterface::class);
+    if ($storageFailure !== '') {
+      $logger->expects($this->once())->method(str_starts_with($storageFailure, 'directory') ? 'error' : 'warning');
+    }
 
     $config = $this->createMock(ImmutableConfig::class);
     $config->method('get')->willReturn([]);
@@ -117,11 +147,16 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
     $token = $this->createMock(Token::class);
     $token->method('replace')->willReturnArgument(0);
 
+    $screening = $this->createMock(MediaIntakeScreening::class);
+    $screening->method('register')->willReturnCallback(function (MediaInterface $media): void {
+      $this->queuedMedia[] = $media->id();
+    });
+    $screening->expects($this->never())->method('enqueue');
     return new TestablePromoterForAttachments(
       $etm,
       $moduleHandler,
       $this->createMock(EventDispatcherInterface::class),
-      $this->createMock(LoggerChannelInterface::class),
+      $logger,
       $entityFieldManager,
       $configFactory,
       $fileSystem,
@@ -131,16 +166,19 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
       NULL,
       NULL,
       $this->createMock(LanguageManagerInterface::class),
+      NULL,
+      NULL,
+      $screening,
     );
   }
 
   /**
    * Builds a file mock with an id and uri.
    */
-  protected function file(int $fid): FileInterface {
+  protected function file(int $fid, string $scheme = 'private'): FileInterface {
     $file = $this->createMock(FileInterface::class);
     $file->method('id')->willReturn($fid);
-    $file->method('getFileUri')->willReturn('private://mail-inbound-staged/mail-' . $fid . '.jpg');
+    $file->method('getFileUri')->willReturn($scheme . '://mail-inbound-staged/mail-' . $fid . '.jpg');
     return $file;
   }
 
@@ -184,6 +222,7 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
     $this->assertCount(1, $result['items']);
     $this->assertSame(1008, $result['items'][0]['target_id']);
     $this->assertSame(2, $mediaCreations, 'Both files were attempted.');
+    $this->assertSame([1008], $this->queuedMedia, 'Successful media are held before node insert hooks can publish them.');
   }
 
   /**
@@ -202,6 +241,7 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
     $promoter->exposeBuildAttachmentMedia($this->mail([7, 8]), $this->node(TRUE));
 
     $this->assertSame(['unpublished', 'unpublished'], $this->publicationCalls);
+    $this->assertSame([1007, 1008], $this->queuedMedia);
   }
 
   /**
@@ -240,6 +280,44 @@ class InboundMailPromoterAttachmentReleaseTest extends UnitTestCase {
 
     $this->assertSame(['items' => [], 'fids' => []], $result);
     $this->assertSame(0, $mediaCreations, 'The field check runs BEFORE any media creation.');
+  }
+
+  /**
+   * Public staging must never become a report attachment on storage failure.
+   */
+  #[DataProvider('storageFailures')]
+  public function testStorageFailureKeepsAttachmentStaged(string $failure): void {
+    $mediaCreations = 0;
+    $file = $this->file(7, 'public');
+    if ($failure === 'file save exception') {
+      $uris = [];
+      $file->expects($this->exactly(2))->method('setFileUri')->willReturnCallback(function ($uri) use (&$uris, $file) {
+        $uris[] = $uri;
+        return $file;
+      });
+      $file->expects($this->once())->method('save')->willThrowException(new EntityStorageException('Synthetic save failure.'));
+    }
+    else {
+      $file->expects($this->never())->method('setFileUri');
+      $file->expects($this->never())->method('save');
+    }
+    $promoter = $this->promoter([7 => $file], [], $mediaCreations, $failure);
+    $result = $promoter->exposeBuildAttachmentMedia($this->mail([7]), $this->node(TRUE));
+    $this->assertSame(['items' => [], 'fids' => []], $result);
+    $this->assertSame(0, $mediaCreations);
+    $this->assertSame([], $this->queuedMedia);
+    if ($failure === 'file save exception') {
+      $this->assertSame(['private://request-imports/mail-7.jpg', 'public://mail-inbound-staged/mail-7.jpg'], $uris);
+    }
+  }
+
+  /**
+   * Directory and move APIs can fail by return value or exception.
+   */
+  public static function storageFailures(): array {
+    return array_map(static fn(string $failure): array => [$failure], [
+      'directory false', 'directory exception', 'move false', 'move exception', 'file save exception',
+    ]);
   }
 
 }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_open311\Kernel;
 
+use Drupal\Core\StreamWrapper\PrivateStream;
+use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
@@ -14,6 +16,7 @@ use Drupal\markaspot_open311\Service\GeoreportProcessorService;
 use Drupal\markaspot_open311\Service\RemoteImageException;
 use Drupal\markaspot_open311\Service\RemoteImageFetcher;
 use Drupal\markaspot_open311\Service\StatusClassifier;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\media\Entity\Media;
 use Drupal\media\Entity\MediaType;
 use Drupal\node\Entity\NodeType;
@@ -52,10 +55,34 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
   private array $fetchResults = [];
 
   /**
+   * Imported media handed to the asynchronous screening queue.
+   *
+   * @var array<int|string>
+   */
+  private array $queuedMedia = [];
+
+  /**
+   * Jobs actually scheduled after the report succeeds.
+   *
+   * @var array<int|string>
+   */
+  private array $scheduledMedia = [];
+
+  /**
+   * {@inheritdoc}
+   */
+  public function register(ContainerBuilder $container) {
+    parent::register($container);
+    $container->register('stream_wrapper.private', PrivateStream::class)
+      ->addTag('stream_wrapper', ['scheme' => 'private']);
+  }
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     parent::setUp();
+    $this->setSetting('file_private_path', $this->siteDirectory . '/private');
     foreach (['user', 'file', 'node', 'media'] as $entityType) {
       $this->installEntitySchema($entityType);
     }
@@ -92,7 +119,7 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
   /**
    * Builds the processor with a fetcher that replays $fetchResults.
    */
-  private function processor(): GeoreportProcessorService {
+  private function processor(bool $withVision = TRUE): GeoreportProcessorService {
     $results = &$this->fetchResults;
     $fetcher = new class(new Client(), $results) extends RemoteImageFetcher {
 
@@ -114,6 +141,14 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
     };
 
     $container = $this->container;
+    $screening = $this->createMock(MediaIntakeScreening::class);
+    $screening->method('register')->willReturnCallback(function ($media): void {
+      $this->assertFalse($media->isPublished());
+      $this->queuedMedia[] = $media->id();
+    });
+    $screening->method('enqueue')->willReturnCallback(function ($media): void {
+      $this->scheduledMedia[] = $media->id();
+    });
     return new GeoreportProcessorService(
       $container->get('config.factory'),
       $container->get('current_user'),
@@ -136,6 +171,7 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
       NULL,
       new KeyValueMemoryFactory(),
       $fetcher,
+      $withVision ? $screening : NULL,
     );
   }
 
@@ -149,23 +185,81 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
   }
 
   /**
-   * A PNG behind any URL is stored under a generated name as published media.
+   * A PNG behind any URL is stored under a generated name, unpublished.
    */
   public function testImageIsStoredUnderGeneratedName(): void {
     $this->fetchResults = [
       ['data' => base64_decode(self::PNG), 'extension' => 'png', 'mime' => 'image/png'],
     ];
 
-    $references = $this->import(['media_url' => 'https://images.example.com/../../shell.php']);
+    $processor = $this->processor();
+    $handler = new \ReflectionMethod($processor, 'handleMediaUrls');
+    $references = $handler->invoke($processor, ['media_url' => 'https://images.example.com/../../shell.php']);
 
     $this->assertCount(1, $references);
     $media = Media::load($references[0]['target_id']);
     $this->assertSame('request_image', $media->bundle());
-    $this->assertTrue($media->isPublished());
+    $this->assertFalse($media->isPublished());
     $file = File::load($media->get('field_media_image')->target_id);
-    $this->assertMatchesRegularExpression('#^public://([^/]+/)*open311-[0-9a-f]{16}\.png$#', $file->getFileUri());
+    $this->assertMatchesRegularExpression('#^private://request-imports/([^/]+/)*open311-[0-9a-f]{16}\.png$#', $file->getFileUri());
     $this->assertSame('image/png', $file->getMimeType());
     $this->assertTrue($file->isPermanent());
+    $this->assertSame([$media->id()], $this->queuedMedia);
+    $this->assertSame([], $this->scheduledMedia, 'No queue job runs before successful report creation.');
+    $processor->commitImportedMedia();
+    $this->assertSame([$media->id()], $this->scheduledMedia);
+    // The intake path only stores and enqueues, with no synchronous blur.
+    $this->assertStringStartsWith('private://request-imports/', $file->getFileUri());
+    $this->assertSame(base64_decode(self::PNG), file_get_contents($file->getFileUri()));
+  }
+
+  /**
+   * Installs without Vision retain their original publication behavior.
+   */
+  public function testImportWithoutVisionPublishesUnlessFlagged(): void {
+    $oldRequired = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=0');
+    try {
+      $this->fetchResults = [
+        ['data' => base64_decode(self::PNG), 'extension' => 'png', 'mime' => 'image/png'],
+      ];
+      $processor = $this->processor(FALSE);
+      $handler = new \ReflectionMethod($processor, 'handleMediaUrls');
+      $references = $handler->invoke($processor, ['media_url' => 'https://images.example.com/image.png']);
+      $media = Media::load($references[0]['target_id']);
+      $this->assertTrue($media->isPublished());
+      $this->assertSame([], $this->queuedMedia);
+      $file = File::load($media->get('field_media_image')->target_id);
+      $flagged = (new \ReflectionMethod($processor, 'createMediaEntity'))->invoke($processor, 'request_image', $file, TRUE);
+      $this->assertFalse($flagged->isPublished());
+      putenv('MARKASPOT_BLUR_REQUIRED=1');
+      $required = (new \ReflectionMethod($processor, 'createMediaEntity'))->invoke($processor, 'request_image', $file);
+      $this->assertFalse($required->isPublished(), 'Required blur holds clean imports even without Vision.');
+    }
+    finally {
+      putenv($oldRequired === FALSE ? 'MARKASPOT_BLUR_REQUIRED' : 'MARKASPOT_BLUR_REQUIRED=' . $oldRequired);
+    }
+  }
+
+  /**
+   * Server-side private storage failure is not reported as bad client input.
+   */
+  public function testMissingPrivateStorageIsServerError(): void {
+    $this->setSetting('file_private_path', '');
+    $this->container->get('stream_wrapper_manager')->unregister();
+    $this->container->get('stream_wrapper_manager')->register();
+    $this->fetchResults = [
+      ['data' => base64_decode(self::PNG), 'extension' => 'png', 'mime' => 'image/png'],
+    ];
+    try {
+      $this->import(['media_url' => 'https://images.example.com/image.png']);
+      $this->fail('Missing private storage must reject the import.');
+    }
+    catch (GeoreportException $e) {
+      $this->assertSame(500, $e->getCode());
+      $this->assertSame('Image import storage is unavailable.', $e->getMessage());
+    }
+    $this->assertSame([], $this->container->get('entity_type.manager')->getStorage('media')->loadMultiple());
   }
 
   /**

@@ -2,6 +2,9 @@
 
 namespace Drupal\markaspot_open311\Service;
 
+use Psr\Log\NullLogger;
+use Drupal\markaspot_vision\Service\ScreeningMarker;
+use Drupal\markaspot_ai\Utility\BlurPolicy;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\File\FileExists;
@@ -34,6 +37,8 @@ use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\Utility\Token;
 use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\KeyValueStore\KeyValueStoreInterface;
+use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\Core\Lock\NullLockBackend;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Component\Utility\Bytes;
 use Drupal\Component\Utility\Html;
@@ -41,6 +46,7 @@ use Drupal\Component\Datetime\Time;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Image\RequestImageStyles;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_open311\Exception\GeoreportException;
 use Drupal\paragraphs\Entity\Paragraph;
 use Psr\Log\LoggerInterface;
@@ -415,6 +421,10 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
    *   The keyvalue store factory.
    * @param \Drupal\markaspot_open311\Service\RemoteImageFetcher|null $remoteImageFetcher
    *   The hardened downloader for media_url imports.
+   * @param \Drupal\markaspot_vision\Service\MediaIntakeScreening|null $intakeScreening
+   *   Optional asynchronous privacy screening for imported images.
+   * @param \Drupal\Core\Lock\LockBackendInterface|null $mediaPublicationLock
+   *   Serializes editorial publication with background media writes.
    */
   public function __construct(
     ConfigFactoryInterface $configFactory,
@@ -438,6 +448,8 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     ?LoggerInterface $logger = NULL,
     ?KeyValueFactoryInterface $keyValueFactory = NULL,
     ?RemoteImageFetcher $remoteImageFetcher = NULL,
+    protected ?MediaIntakeScreening $intakeScreening = NULL,
+    protected ?LockBackendInterface $mediaPublicationLock = NULL,
   ) {
     $this->remoteImageFetcher = $remoteImageFetcher ?? new RemoteImageFetcher($httpClient, $logger);
     $this->configFactory = $configFactory;
@@ -4110,8 +4122,8 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
       throw new GeoreportException(sprintf('media_url accepts at most %d URLs.', $maxUrls), 400);
     }
 
-    $storageSetting = $mediaStorageDefinitions['field_media_image']->getSetting('uri_scheme');
-    $wrapperScheme = $this->getWrapperScheme($storageSetting);
+    // An unpublished media entity cannot protect a public source URL.
+    $wrapperScheme = 'private://request-imports/';
     $fieldSettings = $this->configFactory->get('field.field.media.request_image.field_media_image')->get('settings') ?? [];
     $fileDirectory = $this->token->replace($fieldSettings['file_directory'] ?? '');
     $fileDirectory = trim($fileDirectory, '/');
@@ -4176,15 +4188,17 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
    */
   private function storeImportedImage(string $url, array $image, string $directoryPath): array {
     $privacyFlagged = $this->isExistingMediaUrlPrivacyFlagged($url);
-    $this->fileSystem->prepareDirectory($directoryPath, FileSystemInterface::CREATE_DIRECTORY);
     $destination = $directoryPath . 'open311-' . bin2hex(random_bytes(8)) . '.' . $image['extension'];
 
     try {
+      if (!$this->fileSystem->prepareDirectory($directoryPath, FileSystemInterface::CREATE_DIRECTORY)) {
+        throw new FileException('Private import directory is unavailable.');
+      }
       $filePath = $this->fileSystem->saveData($image['data'], $destination, FileExists::Rename);
     }
     catch (FileException | InvalidStreamWrapperException $e) {
       $this->logger?->error('Open311 media_url could not be stored: @message', ['@message' => $e->getMessage()]);
-      throw new GeoreportException('Image could not be retrieved via URL', 400);
+      throw new GeoreportException('Image import storage is unavailable.', 500);
     }
 
     $file = File::create([
@@ -4234,6 +4248,11 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
    * {@inheritdoc}
    */
   public function commitImportedMedia(): void {
+    foreach ($this->importedMedia as $entity) {
+      if ($entity instanceof MediaInterface) {
+        $this->intakeScreening?->enqueue($entity);
+      }
+    }
     $this->importedMedia = [];
   }
 
@@ -4290,8 +4309,16 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
       $media->set('field_ai_privacy_flag', TRUE);
     }
 
-    $media->setName('media:' . $bundle . ':' . $media->uuid())
-      ->setPublished(!$privacyFlagged);
+    $media->setName('media:' . $bundle . ':' . $media->uuid());
+    if (!class_exists(BlurPolicy::class)) {
+      require_once __DIR__ . '/../../../markaspot_ai/src/Utility/BlurPolicy.php';
+    }
+    if ($this->intakeScreening !== NULL || $privacyFlagged || BlurPolicy::isRequired($this->logger ?? new NullLogger())) {
+      $media->setUnpublished();
+    }
+    else {
+      $media->setPublished();
+    }
 
     // Media::save() does not validate, so the extension, size and image
     // checks of field_media_image would never run for files created here.
@@ -4301,6 +4328,8 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     }
 
     $media->save();
+
+    $this->intakeScreening?->register($media);
 
     return $media;
   }
@@ -4340,28 +4369,6 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
       }
     }
     return FALSE;
-  }
-
-  /**
-   * Determines the appropriate wrapper scheme based on the storage setting.
-   *
-   * @param string $storageSetting
-   *   The storage setting (e.g., 'private', 's3fs', 'public').
-   *
-   * @return string
-   *   The wrapper scheme.
-   */
-  private function getWrapperScheme(string $storageSetting): string {
-    switch ($storageSetting) {
-      case 'private':
-        return 'private://';
-
-      case 's3fs':
-        return 's3fs://';
-
-      default:
-        return 'public://';
-    }
   }
 
   /**
@@ -4437,6 +4444,10 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
         throw new AccessDeniedHttpException('GeoReport media publication updates are not permitted for this API account.');
       }
 
+      if ($published) {
+        $this->assertImportedMediaScreened($media);
+      }
+
       $validatedUpdates[] = [
         'media' => $media,
         'mid' => $mid,
@@ -4449,31 +4460,69 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
       $mid = $validatedUpdate['mid'];
       $published = $validatedUpdate['published'];
 
-      $currentStatus = $media->isPublished();
-      // Only update if status is changing.
-      if ($currentStatus !== $published) {
-        if ($published) {
-          $media->setPublished();
-        }
-        else {
-          $media->setUnpublished();
-        }
-        $media->save();
+      $publicationLock = $this->mediaPublicationLock ?? new NullLockBackend();
+      $lockName = 'markaspot_open311.media_publication.' . $mid;
+      if (!$publicationLock->acquire($lockName, 30)) {
+        throw new GeoreportException('Media publication is being updated. Please retry.', 409);
       }
+      try {
+        if ($this->mediaPublicationLock) {
+          $media = $this->entityTypeManager->getStorage('media')->loadUnchanged($mid);
+        }
+        if ($published) {
+          $this->assertImportedMediaScreened($media);
+        }
+        $currentStatus = $media->isPublished();
+        // Only update if status is changing.
+        if ($currentStatus !== $published) {
+          if ($published) {
+            $media->setPublished();
+          }
+          else {
+            $media->setUnpublished();
+          }
+          $media->save();
+        }
 
-      // Record that this media's publication is now under explicit editorial
-      // control, regardless of publish direction or whether a save was needed
-      // (the mark must also stick when the requested state already matched).
-      // The 'update open311 request media publication' permission is
-      // restrict-access (trusted roles / human-in-the-loop only), so once such
-      // a consumer sets the state, the AI publication pipeline must hand off
-      // entirely: markaspot_vision's node-save hook and the AI screening
-      // controller both consult this mark and skip manually controlled media
-      // (privacy safety net included). The last explicit decision wins; there
-      // is deliberately no path back to automatic management short of
-      // deleting and re-uploading the media. Cleaned up in
-      // markaspot_open311_media_delete().
-      $this->manualMediaPublication()->set($mid, TRUE);
+        if ($published && $this->mediaPublicationState('markaspot_vision.media_intake')->has($mid) && !$media->isPublished()) {
+          throw new GeoreportException('Imported image privacy screening must complete before publication.', 409);
+        }
+
+        // Preserve editorial publication decisions through automatic screening.
+        // Imported bytes still require blur before an editor can publish them.
+        // The mark is removed by markaspot_open311_media_delete().
+        $this->manualMediaPublication()->set($mid, TRUE);
+
+        $this->mediaPublicationState('markaspot_vision.report_media_hold')->delete($mid);
+      }
+      finally {
+        $publicationLock->release($lockName);
+      }
+    }
+  }
+
+  /**
+   * Editorial decisions cannot bypass required blur of imported source bytes.
+   */
+  private function assertImportedMediaScreened(MediaInterface $media): void {
+    $uri = $media->hasField('field_media_image') ? $media->get('field_media_image')->entity?->getFileUri() : NULL;
+    $intake = $this->mediaPublicationState('markaspot_vision.media_intake')->get($media->id());
+    if (!$intake && !str_starts_with((string) $uri, 'private://request-imports/')) {
+      return;
+    }
+    if (!class_exists(BlurPolicy::class)) {
+      require_once __DIR__ . '/../../../markaspot_ai/src/Utility/BlurPolicy.php';
+    }
+    $required = BlurPolicy::isRequired($this->logger ?? new NullLogger());
+    if (!$intake && !$required) {
+      return;
+    }
+    $metadata = $media->hasField('field_ai_metadata') ? json_decode((string) $media->get('field_ai_metadata')->value, TRUE) : [];
+    $marker = $metadata['intake_screening'] ?? [];
+    $hash = $uri ? @hash_file('sha256', $uri) : FALSE;
+    if (($intake && $intake['status'] !== 'done') || !$hash || !class_exists(ScreeningMarker::class)
+      || !ScreeningMarker::allowsPublication($marker, $hash, $required)) {
+      throw new GeoreportException('Imported image privacy screening must complete before publication.', 409);
     }
   }
 
@@ -4488,8 +4537,15 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
    * instantiation without the optional keyvalue factory.
    */
   protected function manualMediaPublication(): KeyValueStoreInterface {
+    return $this->mediaPublicationState('markaspot_open311.media_publication_manual');
+  }
+
+  /**
+   * Returns publication workflow state using the optional injected factory.
+   */
+  private function mediaPublicationState(string $collection): KeyValueStoreInterface {
     $factory = $this->keyValueFactory ?? \Drupal::service('keyvalue');
-    return $factory->get('markaspot_open311.media_publication_manual');
+    return $factory->get($collection);
   }
 
   /**

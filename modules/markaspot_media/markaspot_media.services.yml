@@ -19,3 +19,8 @@ services:
       - '@markaspot_media.request_image_upload_storage_guard'
     tags:
       - { name: event_subscriber }
+
+  markaspot_media.private_image_response_subscriber:
+    class: Drupal\markaspot_media\EventSubscriber\PrivateImageResponseSubscriber
+    tags:
+      - { name: event_subscriber }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_mail_inbound\Kernel;
 
+use Drupal\Core\StreamWrapper\PrivateStream;
+use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\group\Entity\Group;
@@ -14,6 +16,7 @@ use Drupal\markaspot_mail_inbound\Exception\PromotionConflictException;
 use Drupal\markaspot_mail_inbound\IngestResult;
 use Drupal\markaspot_mail_inbound\Service\InboundMailPromoter;
 use Drupal\markaspot_mail_inbound\Service\MailCategorySuggestionService;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
 use Drupal\paragraphs\Entity\Paragraph;
@@ -83,6 +86,15 @@ class InboundMailStagingKernelTest extends KernelTestBase {
    * The jurisdiction group id.
    */
   protected int $gid;
+
+  /**
+   * {@inheritdoc}
+   */
+  public function register(ContainerBuilder $container) {
+    parent::register($container);
+    $container->register('stream_wrapper.private', PrivateStream::class)
+      ->addTag('stream_wrapper', ['scheme' => 'private']);
+  }
 
   /**
    * {@inheritdoc}
@@ -536,19 +548,27 @@ class InboundMailStagingKernelTest extends KernelTestBase {
    * report is published).
    */
   public function testPromotionRelocatesAttachmentAndReleasesReference(): void {
+    $this->setSetting('file_private_path', $this->siteDirectory . '/private');
     $staged = $this->ingest($this->makeRawWithImage('att-promote-001@example.org'));
     $this->assertSame(IngestResult::STAGED, $staged->status);
     $mail = $this->loadMail((int) $staged->entityId);
     $fileIds = $mail->getAttachmentFileIds();
     $this->assertNotEmpty($fileIds);
 
-    $node = $this->makePromoter()->promoteToServiceRequest($mail, $this->categoryTid);
+    $screening = $this->createMock(MediaIntakeScreening::class);
+    $screening->expects($this->once())->method('enqueueReport')->willReturnCallback(function (NodeInterface $saved): void {
+      $this->assertFalse($saved->isNew(), 'Queue dispatch follows the node save.');
+      $stored = $this->container->get('entity_type.manager')->getStorage('node')->loadUnchanged($saved->id());
+      $this->assertNotNull($stored);
+      $this->assertFalse($stored->get('field_request_media')->isEmpty(), 'Attachments are associated before queue dispatch.');
+    });
+    $node = $this->makePromoter(screening: $screening)->promoteToServiceRequest($mail, $this->categoryTid);
 
     $fid = (int) reset($fileIds);
     $file = $this->container->get('entity_type.manager')->getStorage('file')->load($fid);
     $this->assertNotNull($file);
     $uri = (string) $file->getFileUri();
-    $this->assertStringStartsWith('public://', $uri);
+    $this->assertStringStartsWith('private://request-imports/', $uri);
     $this->assertStringNotContainsString('mail-inbound-staged/', $uri, 'The promoted file left the denied staging subdir (within-scheme move).');
     $this->assertFileExists($uri);
     $this->assertTrue($file->isPermanent());
@@ -844,8 +864,10 @@ class InboundMailStagingKernelTest extends KernelTestBase {
    * @param bool $emptyStatusNote
    *   When TRUE the double leaves field_status_note empty so the promoter's
    *   MEDIUM 4 default-note fallback is exercised.
+   * @param \Drupal\markaspot_vision\Service\MediaIntakeScreening|null $screening
+   *   Optional intake queue boundary.
    */
-  protected function makePromoter(bool $emptyStatusNote = FALSE): InboundMailPromoter {
+  protected function makePromoter(bool $emptyStatusNote = FALSE, ?MediaIntakeScreening $screening = NULL): InboundMailPromoter {
     $statusTerm = Term::create(['vid' => 'service_category', 'name' => 'Open']);
     $statusTerm->save();
     $statusTid = (int) $statusTerm->id();
@@ -942,6 +964,9 @@ class InboundMailStagingKernelTest extends KernelTestBase {
       $processor,
       NULL,
       $this->container->get('language_manager'),
+      NULL,
+      NULL,
+      $screening,
     );
   }
 

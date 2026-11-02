@@ -242,6 +242,9 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
       ->willReturnMap([
         ['markaspot_open311.settings', $config],
         ['system.date', $dateConfig],
+        ['markaspot_nuxt.settings', $this->getConfigFactoryStub([
+          'markaspot_nuxt.settings' => ['enterprise_showcase' => 'disabled'],
+        ])->get('markaspot_nuxt.settings')],
       ]);
 
     $time = $this->createMock(Time::class);
@@ -281,6 +284,22 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
       $this->logger,
       $this->keyValueFactory = new KeyValueMemoryFactory(),
     );
+  }
+
+  /**
+   * A failed directory preparation stops before writing downloaded bytes.
+   */
+  public function testImportDirectoryFailureIsServerError(): void {
+    $this->logger->expects($this->once())->method('error');
+    $filesystem = $this->createMock(FileSystemInterface::class);
+    $filesystem->method('prepareDirectory')->willReturn(FALSE);
+    $filesystem->expects($this->never())->method('saveData');
+    (new \ReflectionProperty($this->processor, 'fileSystem'))->setValue($this->processor, $filesystem);
+    $this->expectException(GeoreportException::class);
+    $this->expectExceptionCode(500);
+    (new \ReflectionMethod($this->processor, 'storeImportedImage'))->invoke($this->processor, '', [
+      'data' => 'Fictional bytes', 'extension' => 'png', 'mime' => 'image/png',
+    ], 'private://request-imports/');
   }
 
   /**
@@ -1477,6 +1496,132 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
   }
 
   /**
+   * Manual publication cannot release imported bytes before mandatory blur.
+   */
+  public function testManualPublicationRequiresCurrentImportedBlur(): void {
+    $old = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=1');
+    $uri = tempnam(sys_get_temp_dir(), 'screening-test-');
+    file_put_contents($uri, 'fictional source');
+    try {
+      $node = $this->buildNodeWithRequestMediaIds([10]);
+      $media = $this->createMock(MediaInterface::class);
+      $media->method('id')->willReturn(10);
+      $media->method('hasField')->willReturn(TRUE);
+      $file = $this->createMock(FileInterface::class);
+      $file->method('getFileUri')->willReturn($uri);
+      $image = $this->createMock(FieldItemListInterface::class);
+      $image->method('__get')->with('entity')->willReturn($file);
+      $marker = [];
+      $metadata = $this->createMock(FieldItemListInterface::class);
+      $metadata->method('__get')->willReturnCallback(static function () use (&$marker): string {
+        return json_encode(['intake_screening' => $marker]);
+      });
+      $media->method('get')->willReturnMap([['field_media_image', $image], ['field_ai_metadata', $metadata]]);
+      $this->mediaStorage->method('load')->with(10)->willReturn($media);
+      $this->currentUser->method('hasPermission')->willReturn(TRUE);
+      $this->keyValueFactory->get('markaspot_vision.media_intake')->set(10, ['status' => 'done']);
+      $published = FALSE;
+      $media->method('isPublished')->willReturnCallback(static function () use (&$published): bool {
+        return $published;
+      });
+      $media->expects($this->once())->method('setPublished')->willReturnCallback(static function () use (&$published, $media) {
+        $published = TRUE;
+        return $media;
+      });
+      $media->expects($this->once())->method('save');
+      $markers = [
+        [],
+        ['privacy_screened' => TRUE, 'processed' => TRUE, 'blur_required' => TRUE, 'source_sha256' => 'stale'],
+      ];
+      foreach ($markers as $marker) {
+        try {
+          $this->processor->updateMediaPublishedStatus([['target_id' => 10, 'status' => '1']], $node);
+          $this->fail('Unscreened or replaced bytes must stay private.');
+        }
+        catch (GeoreportException $e) {
+          $this->assertSame(409, $e->getCode());
+        }
+      }
+      $marker = [
+        'privacy_screened' => TRUE,
+        'processed' => TRUE,
+        'blur_required' => TRUE,
+        'source_sha256' => hash_file('sha256', $uri),
+      ];
+      $this->keyValueFactory->get('markaspot_vision.media_intake')->set(10, ['status' => 'done']);
+      $this->processor->updateMediaPublishedStatus([['target_id' => 10, 'status' => '1']], $node);
+      $this->assertTrue($this->keyValueFactory->get('markaspot_vision.media_intake')->has(10));
+    }
+    finally {
+      unlink($uri);
+      $old === FALSE ? putenv('MARKASPOT_BLUR_REQUIRED') : putenv('MARKASPOT_BLUR_REQUIRED=' . $old);
+    }
+  }
+
+  /**
+   * Optional blur never lets a pending import become manually held by mistake.
+   */
+  public function testOptionalBlurRejectsPendingEditorialPublication(): void {
+    $old = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=0');
+    try {
+      $node = $this->buildNodeWithRequestMediaIds([10]);
+      $media = $this->createMock(MediaInterface::class);
+      $media->method('id')->willReturn(10);
+      $media->expects($this->never())->method('save');
+      $this->mediaStorage->method('load')->with(10)->willReturn($media);
+      $this->currentUser->method('hasPermission')->willReturn(TRUE);
+      $this->keyValueFactory->get('markaspot_vision.media_intake')->set(10, ['status' => 'pending']);
+      try {
+        $this->processor->updateMediaPublishedStatus([['target_id' => 10, 'status' => '1']], $node);
+        $this->fail('Pending intake must return a conflict.');
+      }
+      catch (GeoreportException $e) {
+        $this->assertSame(409, $e->getCode());
+        $this->assertFalse($this->keyValueFactory->get('markaspot_open311.media_publication_manual')->has(10));
+      }
+    }
+    finally {
+      putenv($old === FALSE ? 'MARKASPOT_BLUR_REQUIRED' : 'MARKASPOT_BLUR_REQUIRED=' . $old);
+    }
+  }
+
+  /**
+   * A rejected import must not partially apply earlier editorial updates.
+   */
+  public function testUnscreenedImportRejectsPublicationBatchBeforeWrites(): void {
+    $old = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=1');
+    try {
+      $node = $this->buildNodeWithRequestMediaIds([10, 11]);
+      $first = $this->createMock(MediaInterface::class);
+      $second = $this->createMock(MediaInterface::class);
+      $first->method('id')->willReturn(10);
+      $second->method('id')->willReturn(11);
+      $first->expects($this->never())->method('save');
+      $second->expects($this->never())->method('save');
+      $this->mediaStorage->method('load')->willReturnMap([[10, $first], [11, $second]]);
+      $this->currentUser->method('hasPermission')->willReturn(TRUE);
+      $this->keyValueFactory->get('markaspot_vision.media_intake')->set(11, ['status' => 'pending']);
+      try {
+        $this->processor->updateMediaPublishedStatus([
+          ['target_id' => 10, 'status' => '0'],
+          ['target_id' => 11, 'status' => '1'],
+        ], $node);
+        $this->fail('Unscreened import must reject the whole batch.');
+      }
+      catch (GeoreportException $e) {
+        $this->assertSame(409, $e->getCode());
+        $this->assertFalse($this->keyValueFactory->get('markaspot_open311.media_publication_manual')->has(10));
+      }
+    }
+    finally {
+      $old === FALSE ? putenv('MARKASPOT_BLUR_REQUIRED') : putenv('MARKASPOT_BLUR_REQUIRED=' . $old);
+    }
+  }
+
+  /**
    * GeoReport media status updates can publish state on referenced media.
    *
    * @covers ::updateMediaPublishedStatus
@@ -1603,6 +1748,12 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
         [11, $matchedMedia],
       ]);
 
+    $intake = $this->keyValueFactory->get('markaspot_vision.media_intake');
+    $reportHolds = $this->keyValueFactory->get('markaspot_vision.report_media_hold');
+    foreach ([10, 11] as $mid) {
+      $intake->set($mid, ['status' => 'failed']);
+      $reportHolds->set($mid, TRUE);
+    }
     $this->processor->updateMediaPublishedStatus([
       0 => [
         'target_id' => 10,
@@ -1617,6 +1768,10 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
     $store = $this->keyValueFactory->get('markaspot_open311.media_publication_manual');
     $this->assertTrue((bool) $store->get(10));
     $this->assertTrue((bool) $store->get(11));
+    foreach ([10, 11] as $mid) {
+      $this->assertTrue($intake->has($mid), 'Editorial decisions retain the mandatory privacy checkpoint.');
+      $this->assertFalse($reportHolds->has($mid));
+    }
   }
 
   /**
@@ -4260,6 +4415,7 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
    */
   private function installStaticDrupalContainerForCaseAssignment(): void {
     $container = new ContainerBuilder();
+    $container->set('module_handler', $this->createMock(ModuleHandlerInterface::class));
     $container->set('config.factory', $this->configFactory);
     $container->set('entity_type.manager', $this->entityTypeManager);
     $container->set('markaspot_group.hierarchy_resolver', $this->hierarchyResolver);

@@ -8,6 +8,29 @@
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Database\Query\ConditionInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
+use Drupal\Core\Site\Settings;
+
+/**
+ * Implements hook_requirements().
+ */
+function markaspot_open311_requirements(string $phase): array {
+  if ($phase !== 'runtime') {
+    return [];
+  }
+  $resource = \Drupal::config('rest.resource.georeport_request_index_resource');
+  $imports = $resource->get('status') && ($resource->get('configuration.POST') !== NULL || in_array('POST', $resource->get('configuration.methods') ?? [], TRUE));
+  if (!$imports || (Settings::get('file_private_path') && \Drupal::service('stream_wrapper_manager')->isValidScheme('private'))) {
+    return [];
+  }
+  return [
+    'markaspot_open311_private_imports' => [
+      'title' => t('Open311 imported image storage'),
+      'value' => t('Private file system unavailable'),
+      'severity' => REQUIREMENT_ERROR,
+      'description' => t('Image URL imports require private storage. Configure file_private_path and make the directory writable by PHP.'),
+    ],
+  ];
+}
 
 /**
  * Implements hook_install().

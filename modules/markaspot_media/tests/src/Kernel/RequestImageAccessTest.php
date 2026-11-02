@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_media\Kernel;
 
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\HttpKernel\HttpKernelInterface;
+use Symfony\Component\HttpKernel\Event\ResponseEvent;
 use Drupal\image\Controller\ImageStyleDownloadController;
 use Drupal\image\Entity\ImageStyle;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -262,6 +265,13 @@ final class RequestImageAccessTest extends KernelTestBase {
     $response = $controller->download($request);
     $this->assertSame(200, $response->getStatusCode());
     $this->assertTrue($response->headers->hasCacheControlDirective('private'));
+    $request->attributes->set('_route', 'system.private_file_download');
+    $event = new ResponseEvent(
+      $this->container->get('http_kernel'), $request, HttpKernelInterface::MAIN_REQUEST, $response,
+    );
+    $this->container->get('event_dispatcher')->dispatch($event, KernelEvents::RESPONSE);
+    $this->assertTrue($response->headers->hasCacheControlDirective('no-store'));
+    $this->assertFalse($response->headers->has('ETag'));
     $this->container->get('current_user')->setAccount(User::getAnonymousUser());
     $this->resetAccess();
     $this->expectException(AccessDeniedHttpException::class);

@@ -24,6 +24,7 @@ use Drupal\markaspot_mail_inbound\Event\InboundRequestCreatedEvent;
 use Drupal\markaspot_mail_inbound\Exception\LocationOutsideJurisdictionException;
 use Drupal\markaspot_mail_inbound\Exception\PromotionConflictException;
 use Drupal\markaspot_mail_inbound\Util\MailTextUtils;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\node\NodeInterface;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
@@ -92,6 +93,7 @@ class InboundMailPromoter {
     protected ?LanguageManagerInterface $languageManager = NULL,
     protected ?object $boundaryValidator = NULL,
     protected ?object $hierarchyResolver = NULL,
+    protected ?MediaIntakeScreening $intakeScreening = NULL,
   ) {
   }
 
@@ -358,6 +360,8 @@ class InboundMailPromoter {
     // the web path. markaspot_group is a hard transitive dependency
     // (markaspot_open311 -> markaspot_group), so the hook is always present.
     $node->save();
+
+    $this->intakeScreening?->enqueueReport($node);
 
     // The staged body is the FULL conversation log (original message plus
     // every citizen reply appended while staged and every staff/auto reply).
@@ -770,6 +774,9 @@ class InboundMailPromoter {
     $fileStorage = $this->entityTypeManager->getStorage('file');
     $hasMedia = $this->moduleHandler->moduleExists('media');
     $mediaDirectory = $this->resolveMediaDirectory();
+    if ($mediaDirectory === NULL) {
+      return ['items' => [], 'fids' => []];
+    }
 
     $values = [];
     $attachedFids = [];
@@ -779,7 +786,9 @@ class InboundMailPromoter {
       if ($file === NULL) {
         continue;
       }
-      $this->moveFileToMediaScheme($file, $mediaDirectory);
+      if (!$this->moveFileToMediaScheme($file, $mediaDirectory)) {
+        continue;
+      }
       if ($hasMedia) {
         try {
           /** @var \Drupal\media\MediaInterface $media */
@@ -799,6 +808,7 @@ class InboundMailPromoter {
           $media->setName('media:request_image:' . $media->uuid())
             ->setUnpublished()
             ->save();
+          $this->intakeScreening?->register($media);
           $values[] = [
             'target_id' => $media->id(),
             'alt' => 'Email attachment',
@@ -822,37 +832,28 @@ class InboundMailPromoter {
   }
 
   /**
-   * Resolves the target directory for promoted media, mirroring the web path.
+   * Resolves private storage for promoted images awaiting screening.
    *
-   * Uses the media image field's uri_scheme and the request_image field's
-   * file_directory, exactly like GeoreportProcessorService::handleMediaUrls().
+   * Keeps the configured file directory under the private import namespace.
+   * Unpublished media cannot protect a source in the public filesystem.
    *
    * @return string|null
    *   The prepared media directory URI, or NULL when it cannot be prepared.
    */
   protected function resolveMediaDirectory(): ?string {
-    $uriScheme = 'public';
-    try {
-      $mediaStorageDefinitions = $this->entityFieldManager->getFieldStorageDefinitions('media');
-      if (isset($mediaStorageDefinitions['field_media_image'])) {
-        $uriScheme = (string) $mediaStorageDefinitions['field_media_image']->getSetting('uri_scheme');
-      }
-    }
-    catch (\Throwable) {
-      // Media entity type not installed; fall back to public.
-    }
-    $scheme = match ($uriScheme) {
-      'private' => 'private://',
-      's3fs' => 's3fs://',
-      default => 'public://',
-    };
+    $scheme = 'private://';
     $fieldSettings = $this->configFactory
       ->get('field.field.media.request_image.field_media_image')
       ->get('settings');
     $fileDirectory = trim($this->token->replace((string) ($fieldSettings['file_directory'] ?? '')), '/');
-    $directory = $scheme . ($fileDirectory !== '' ? $fileDirectory . '/' : '');
-    if (!$this->fileSystem->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY)) {
-      $this->logger->error('Promoted inbound mail media directory @dir is not writable; keeping the staged location.', ['@dir' => $directory]);
+    $directory = $scheme . 'request-imports/' . ($fileDirectory !== '' ? $fileDirectory . '/' : '');
+    try {
+      if (!$this->fileSystem->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY)) {
+        throw new \RuntimeException('Private import directory is unavailable.');
+      }
+    }
+    catch (\Throwable $e) {
+      $this->logger->error('Promoted inbound mail media directory @dir is unavailable; attachments remain staged and are not attached to the report.', ['@dir' => $directory]);
       return NULL;
     }
     return $directory;
@@ -861,17 +862,18 @@ class InboundMailPromoter {
   /**
    * Moves a staged attachment file into the normal media scheme.
    *
-   * No-op when the file already lives in the target directory or the media
-   * directory could not be prepared (the file then stays where it is so the
-   * report still has its image, logged for follow-up).
+   * Failed moves leave the attachment staged and excluded from the report.
+   *
+   * @return bool
+   *   Whether the file is safely stored in the private media directory.
    */
-  protected function moveFileToMediaScheme(FileInterface $file, ?string $mediaDirectory): void {
+  protected function moveFileToMediaScheme(FileInterface $file, ?string $mediaDirectory): bool {
     if ($mediaDirectory === NULL) {
-      return;
+      return FALSE;
     }
     $currentUri = (string) $file->getFileUri();
     if ($currentUri === '') {
-      return;
+      return FALSE;
     }
     // Compare the file's DIRECTORY to the target exactly. A prefix check
     // (str_starts_with) treated public://mail-inbound-staged/x.jpg as already
@@ -881,21 +883,44 @@ class InboundMailPromoter {
     $slash = strrpos($currentUri, '/');
     $currentDirectory = $slash === FALSE ? '' : substr($currentUri, 0, $slash + 1);
     if ($currentDirectory === $mediaDirectory) {
-      return;
+      return TRUE;
     }
     $destination = $mediaDirectory . basename($currentUri);
+    $moved = FALSE;
     try {
-      $this->fileSystem->move($currentUri, $destination, FileExists::Rename);
+      $destination = $this->fileSystem->move($currentUri, $destination, FileExists::Rename);
+      if (!$destination) {
+        throw new \RuntimeException('Private attachment move failed.');
+      }
+      $moved = TRUE;
       // file_move() would also handle the entity, but the file is already a
       // managed entity here; update its uri and re-save to keep usage intact.
       $file->setFileUri($destination);
       $file->save();
+      return TRUE;
     }
     catch (\Throwable $e) {
+      if ($moved) {
+        try {
+          // The managed file still references staging if its save failed.
+          // Restore the bytes there so the retained mail reference is usable.
+          if (!$this->fileSystem->move($destination, $currentUri, FileExists::Error)) {
+            throw new \RuntimeException('Attachment move rollback failed.');
+          }
+          $file->setFileUri($currentUri);
+        }
+        catch (\Throwable $rollbackError) {
+          $this->logger->error('Inbound mail attachment @fid requires storage repair after a failed move rollback (@type).', [
+            '@fid' => $file->id(),
+            '@type' => get_class($rollbackError),
+          ]);
+        }
+      }
       $this->logger->warning('Could not move staged inbound mail attachment @uri into the media scheme; keeping it in staging: @message', [
         '@uri' => $currentUri,
         '@message' => $e->getMessage(),
       ]);
+      return FALSE;
     }
   }
 

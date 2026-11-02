@@ -14,6 +14,7 @@
 declare(strict_types=1);
 
 use Drupal\Core\Field\BaseFieldDefinition;
+use Drupal\Core\Site\Settings;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\markaspot_mail_inbound\Entity\InboundMail;
 
@@ -88,6 +89,15 @@ function markaspot_mail_inbound_requirements(string $phase): array {
   /** @var \Drupal\markaspot_mail_inbound\Service\MailIntakeFidelity $fidelity */
   $aiAvailable = $fidelity->aiAvailable();
   $settings = \Drupal::config('markaspot_mail_inbound.settings');
+  if ((int) ($settings->get('max_attachments') ?? 5) > 0
+    && (!Settings::get('file_private_path') || !\Drupal::service('stream_wrapper_manager')->isValidScheme('private'))) {
+    $requirements['markaspot_mail_inbound_private_imports'] = [
+      'title' => t('Inbound mail attachment storage'),
+      'value' => t('Private file system unavailable'),
+      'severity' => REQUIREMENT_ERROR,
+      'description' => t('Importing email attachments requires private storage. Configure file_private_path and make the directory writable by PHP. Attachments remain staged until private storage is available.'),
+    ];
+  }
   $autoPromote = (bool) ($settings->get('auto_promote_enabled') ?? FALSE);
   if ($aiAvailable) {
     $requirements['markaspot_mail_inbound_categorization'] = [
