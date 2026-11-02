@@ -82,6 +82,10 @@ class FastMapWorkspaceCreateWorkspaceTest extends UnitTestCase {
         'slug' => 'paid-workspace',
         'email' => 'user@example.com',
         'categories' => ['Road Damage'],
+        'boundary' => [
+          'type' => 'Polygon',
+          'coordinates' => [[[6.8, 50.8], [7.0, 50.8], [7.0, 51.0], [6.8, 50.8]]],
+        ],
         'selected_tier' => 'pro',
       ])
     );
@@ -171,6 +175,10 @@ class FastMapWorkspaceCreateWorkspaceTest extends UnitTestCase {
       'slug' => 'test-workspace',
       'email' => 'user@example.com',
       'categories' => ['Road Damage'],
+      'boundary' => [
+        'type' => 'Polygon',
+        'coordinates' => [[[6.8, 50.8], [7.0, 50.8], [7.0, 51.0], [6.8, 50.8]]],
+      ],
     ], $extraPayload);
 
     $request = Request::create(
