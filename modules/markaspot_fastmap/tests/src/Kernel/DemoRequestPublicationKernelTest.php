@@ -106,6 +106,7 @@ final class DemoRequestPublicationKernelTest extends KernelTestBase {
    */
   public function testDemoRequestsPublishedWhileCitizenReportsStayGated(): void {
     $result = $this->container->get('markaspot_fastmap.workspace_provisioning')->provisionWorkspace([
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.1, 50.8], [7.1, 51.1], [6.8, 50.8]]]],
       'name' => 'Lindenhof School Routes',
       'slug' => 'lindenhof',
       'email' => 'parents@example.test',
@@ -158,6 +159,7 @@ final class DemoRequestPublicationKernelTest extends KernelTestBase {
    */
   public function testDemoRequestsSpreadOverStatuses(): void {
     $result = $this->container->get('markaspot_fastmap.workspace_provisioning')->provisionWorkspace([
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.1, 50.8], [7.1, 51.1], [6.8, 50.8]]]],
       'name' => 'Lindenhof School Routes',
       'slug' => 'lindenhof',
       'email' => 'parents@example.test',

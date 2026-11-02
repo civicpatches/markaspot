@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_fastmap\Unit;
 
+use Drupal\markaspot_fastmap\Validation\WorkspaceBoundaryException;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Database\Connection;
@@ -339,6 +340,18 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
   }
 
   /**
+   * Boundary validation precedes pending signup, mail and provisioning writes.
+   */
+  public function testMissingBoundaryRequiresConfirmationBeforeSignup(): void {
+    $this->database->expects($this->never())->method('insert');
+    $this->mailManager->expects($this->never())->method('mail');
+    $request = Request::create('/api/fastmap/create-workspace', 'POST', [], [], [], [], json_encode($this->validRequestData(['boundary' => NULL])));
+    $response = $this->controller->createWorkspace($request);
+    $this->assertSame(422, $response->getStatusCode());
+    $this->assertSame('boundary_confirmation_required', json_decode($response->getContent(), TRUE)['code']);
+  }
+
+  /**
    * Returns valid workspace creation data.
    *
    * @param array $overrides
@@ -357,6 +370,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
       'lat' => 50.9,
       'lng' => 6.9,
       'zoom' => 14,
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.0, 50.8], [7.0, 51.0], [6.8, 50.8]]]],
       'template' => 'civic-report',
     ], $overrides);
   }
@@ -1537,6 +1551,52 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $data = json_decode($response->getContent(), TRUE);
     $this->assertEquals('Workspace provisioning failed', $data['error']);
     $this->assertStringNotContainsString('SQLSTATE', $response->getContent());
+    $this->assertSame(0, $this->transaction->rollbacks);
+  }
+
+  /**
+   * Old pending signups retain their record and return an actionable error.
+   */
+  public function testVerifyLegacySignupRequiresBoundaryConfirmation(): void {
+    $workspaceData = [
+      'name' => 'Test',
+      'slug' => 'test-ws',
+      'email' => 'user@example.com',
+      'categories' => ['Cat A'],
+    ];
+
+    $record = [
+      'id' => 1,
+      'token' => str_repeat('ef', 32),
+      'email' => 'user@example.com',
+      'workspace_data' => json_encode($workspaceData),
+      'created' => time() - 3600,
+    ];
+
+    $statement = $this->createMock(StatementInterface::class);
+    $statement->method('fetchAssoc')->willReturn($record);
+
+    $select = $this->createMock(SelectInterface::class);
+    $select->method('fields')->willReturnSelf();
+    $select->method('condition')->willReturnSelf();
+    $select->method('range')->willReturnSelf();
+    $select->method('forUpdate')->willReturnSelf();
+    $select->method('execute')->willReturn($statement);
+
+    $this->database->method('select')->willReturn($select);
+
+    $this->provisioning->method('provisionWorkspace')
+      ->willThrowException(new WorkspaceBoundaryException('Confirm the reporting area again.'));
+
+    $this->database->expects($this->never())->method('delete');
+    $this->database->expects($this->never())->method('merge');
+    $response = $this->controller->verifyWorkspace(str_repeat('ef', 32));
+
+    $this->assertInstanceOf(JsonResponse::class, $response);
+    $this->assertEquals(422, $response->getStatusCode());
+    $data = json_decode($response->getContent(), TRUE);
+    $this->assertSame('boundary_confirmation_required', $data['code']);
+    $this->assertSame('Confirm the reporting area again.', $data['error']);
     $this->assertSame(0, $this->transaction->rollbacks);
   }
 

@@ -457,6 +457,7 @@ final class BrandingAssetLifecycleKernelTest extends KernelTestBase {
    */
   private function provisionWorkspace(string $slug): Group {
     $result = $this->provisioning->provisionWorkspace([
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.1, 50.8], [7.1, 51.1], [6.8, 50.8]]]],
       'name' => ucwords(str_replace('-', ' ', $slug)),
       'slug' => $slug,
       'email' => $slug . '@example.test',

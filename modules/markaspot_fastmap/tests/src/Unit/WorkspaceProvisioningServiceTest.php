@@ -365,7 +365,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
       'zoom' => 14,
       'template' => 'civic-report',
       'language' => '',
-      'boundary' => NULL,
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.0, 50.8], [7.0, 51.0], [6.8, 50.8]]]],
     ], $overrides);
   }
 
@@ -1411,6 +1411,16 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
       'unknown' => ['nonexistent-template', 'issue-reporter', 'blue'],
       'empty' => ['', 'issue-reporter', 'blue'],
     ];
+  }
+
+  /**
+   * Legacy pending signups cannot invent a radius during verification.
+   */
+  public function testProvisioningRejectsMissingBoundaryBeforeWrites(): void {
+    $this->database->expects($this->never())->method('startTransaction');
+    $this->groupStorage->expects($this->never())->method('create');
+    $this->expectException(\InvalidArgumentException::class);
+    $this->service->provisionWorkspace($this->validData(['boundary' => NULL]));
   }
 
   /**

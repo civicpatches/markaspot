@@ -18,6 +18,8 @@ use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningServiceInterface;
 use Drupal\markaspot_fastmap\Validation\CategoryTranslations;
+use Drupal\markaspot_fastmap\Validation\WorkspaceBoundary;
+use Drupal\markaspot_fastmap\Validation\WorkspaceBoundaryException;
 use Drupal\markaspot_fastmap\Validation\WorkspaceClaim;
 use Drupal\markaspot_nuxt\Plugin\Validation\Constraint\ProjectPromptConstraint;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
@@ -264,6 +266,13 @@ class FastMapWorkspaceController extends ControllerBase {
       return new JsonResponse(['error' => $e->getMessage()], 400);
     }
 
+    try {
+      $boundary = WorkspaceBoundary::validate($data['boundary'] ?? NULL);
+    }
+    catch (WorkspaceBoundaryException $e) {
+      return new JsonResponse(['error' => $e->getMessage(), 'code' => 'boundary_confirmation_required'], 422);
+    }
+
     // Validate optional explicit category icons: index-aligned with the
     // per-locale categories arrays. Invalid or out-of-range entries fall
     // back to WorkspaceProvisioningService's keyword heuristic per index.
@@ -402,7 +411,7 @@ class FastMapWorkspaceController extends ControllerBase {
         'zoom' => (int) ($data['zoom'] ?? 13),
         'template' => $data['template'] ?? 'issue-reporter',
         'language' => $data['language'] ?? '',
-        'boundary' => $this->validateBoundarySize($data['boundary'] ?? NULL),
+        'boundary' => $boundary,
         'statuses' => $statuses,
         'status_translations' => $statusTranslations ?: NULL,
         'category_icons' => $categoryIcons,
@@ -643,6 +652,9 @@ class FastMapWorkspaceController extends ControllerBase {
         $result = $this->provisioning->provisionWorkspace($workspaceData);
         $provisionedGroupId = (int) $result['group_id'];
       }
+      catch (WorkspaceBoundaryException $e) {
+        return $this->sensitiveJsonResponse(['error' => $e->getMessage(), 'code' => 'boundary_confirmation_required'], 422);
+      }
       catch (\RuntimeException $e) {
         if ($e->getMessage() === 'Slug already taken') {
           return $this->sensitiveJsonResponse(['error' => $e->getMessage()], 409);
@@ -768,20 +780,6 @@ class FastMapWorkspaceController extends ControllerBase {
   private function countSubmittedCategories(array $categories): int {
     $first = reset($categories);
     return is_array($first) ? count($first) : count($categories);
-  }
-
-  /**
-   * Validates boundary size, returns NULL if too large (max 512KB).
-   */
-  private function validateBoundarySize(mixed $boundary): mixed {
-    if ($boundary === NULL) {
-      return NULL;
-    }
-    $encoded = json_encode($boundary);
-    if ($encoded === FALSE || strlen($encoded) > 512 * 1024) {
-      return NULL;
-    }
-    return $boundary;
   }
 
   /**

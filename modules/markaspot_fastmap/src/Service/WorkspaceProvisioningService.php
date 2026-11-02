@@ -25,6 +25,7 @@ use Drupal\markaspot_group\Service\WorkspaceAccountName;
 use Drupal\markaspot_ai\Service\AiClientService;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Validation\CategoryTranslations;
+use Drupal\markaspot_fastmap\Validation\WorkspaceBoundary;
 use Drupal\markaspot_fastmap\Validation\WorkspaceClaim;
 use Drupal\markaspot_group\JurisdictionTeardownContext;
 use Drupal\markaspot_group\MembershipRoleNormalizer;
@@ -1345,6 +1346,8 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
       throw new \RuntimeException('Maximum ' . self::MAX_CATEGORIES . ' categories allowed');
     }
 
+    $boundaryJson = $this->buildBoundaryJson($boundary, $name);
+
     $groupStorage = $this->entityTypeManager->getStorage('group');
     $slugLockName = $this->buildWorkspaceSlugLockName($slug);
     if (!$this->lock->acquire($slugLockName, self::WORKSPACE_SLUG_LOCK_TTL)) {
@@ -1380,7 +1383,6 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         if ($wording !== NULL && $wording !== 'report') {
           $nuxtConfig['i18n']['wording'] = $wording;
         }
-        $boundaryJson = $this->buildBoundaryJson($boundary, $name);
 
         $jurisdictionType = $this->jurisdictionGroupType();
         $groupFields = [
@@ -1394,16 +1396,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         if ($aiSystemPrompt) {
           $groupFields['field_ai_system_prompt'] = $aiSystemPrompt;
         }
-        if ($boundaryJson) {
-          $groupFields['field_boundary'] = $boundaryJson;
-        }
-        elseif ($lat && $lng) {
-          // Generate a 1km radius circle as default boundary.
-          $groupFields['field_boundary'] = json_encode(
-            $this->generateCircleBoundary($lat, $lng, 1.0),
-            JSON_UNESCAPED_UNICODE
-          );
-        }
+        $groupFields['field_boundary'] = $boundaryJson;
         $group = $groupStorage->create($groupFields);
         $group->save();
 
@@ -1995,10 +1988,8 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
   /**
    * Builds a GeoJSON FeatureCollection from a boundary geometry.
    */
-  public function buildBoundaryJson(mixed $boundary, string $name): ?string {
-    if (!is_array($boundary) || !in_array($boundary['type'] ?? '', ['Polygon', 'MultiPolygon'], TRUE)) {
-      return NULL;
-    }
+  public function buildBoundaryJson(mixed $boundary, string $name): string {
+    $boundary = WorkspaceBoundary::validate($boundary);
 
     $feature = [
       'type' => 'FeatureCollection',
