@@ -21,6 +21,7 @@ use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\Site\Settings;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\group\GroupMembership;
 use Drupal\group\GroupMembershipLoaderInterface;
@@ -53,12 +54,16 @@ class GroupInvitationControllerTest extends UnitTestCase {
    */
   protected function setUp(): void {
     parent::setUp();
+    new Settings(['markaspot_operating_mode' => 'saas']);
 
     // Set up container for Cache::mergeContexts() used by AccessResult.
     $cacheContextsManager = $this->createMock(CacheContextsManager::class);
     $cacheContextsManager->method('assertValidTokens')->willReturn(TRUE);
     $container = new ContainerBuilder();
     $container->set('cache_contexts_manager', $cacheContextsManager);
+    $container->set('config.factory', $this->getConfigFactoryStub([
+      'markaspot_nuxt.settings' => [], 'markaspot_open311.settings' => [],
+    ]));
     $language = $this->createMock(LanguageInterface::class);
     $language->method('getId')->willReturn('en');
     $languageManager = $this->createMock(LanguageManagerInterface::class);
@@ -512,8 +517,8 @@ class GroupInvitationControllerTest extends UnitTestCase {
    * @covers ::checkMemberLimit
    */
   #[DataProvider('memberLimitConflicts')]
-  public function testInviteReturnsStructuredMemberLimitConflict(string $tier, int $limit, string $expectedError): void {
-    $group = $this->createGroup('jur', NULL, NULL, $tier);
+  public function testInviteReturnsStructuredMemberLimitConflict(?string $tier, int $limit, string $expectedError): void {
+    $group = $this->createGroup('jur', NULL, NULL, $tier, $tier !== NULL);
     $group->method('id')->willReturn(5);
 
     $groupStorage = $this->createMock(EntityStorageInterface::class);
@@ -608,11 +613,43 @@ class GroupInvitationControllerTest extends UnitTestCase {
       [
         'error' => $expectedError,
         'code' => 'member_limit_reached',
-        'tier' => $tier,
+        'tier' => in_array($tier, ['starter', 'pro', 'heart'], TRUE) ? $tier : 'free',
         'limit' => $limit,
       ],
       json_decode((string) $response->getContent(), TRUE)
     );
+  }
+
+  /**
+   * Operator-managed installations never receive a Fastmap member cap.
+   */
+  public function testSelfHostedHasNoMemberLimit(): void {
+    new Settings(['markaspot_operating_mode' => 'self_hosted']);
+    $class = new \ReflectionClass(GroupInvitationController::class);
+    $controller = $class->newInstanceWithoutConstructor();
+    $class->getProperty('tierConfigService')->setValue($controller, new \stdClass());
+    $modules = $this->createMock(ModuleHandlerInterface::class);
+    $modules->method('moduleExists')->willReturn(TRUE);
+    $class->getProperty('moduleHandler')->setValue($controller, $modules);
+    $group = $this->createMock(GroupInterface::class);
+    $group->expects($this->never())->method('hasField');
+    $this->assertNull($class->getMethod('checkMemberLimit')->invoke($controller, $group));
+  }
+
+  /**
+   * The SaaS demo accepts invitations even without a stored tier.
+   */
+  public function testShowcaseHasNoMemberLimit(): void {
+    \Drupal::getContainer()->set('config.factory', $this->getConfigFactoryStub([
+      'markaspot_nuxt.settings' => ['enterprise_showcase' => 'enabled'],
+    ]));
+    $class = new \ReflectionClass(GroupInvitationController::class);
+    $controller = $class->newInstanceWithoutConstructor();
+    $class->getProperty('tierConfigService')->setValue($controller, new \stdClass());
+    $class->getProperty('moduleHandler')->setValue($controller, $this->createMock(ModuleHandlerInterface::class));
+    $group = $this->createMock(GroupInterface::class);
+    $group->expects($this->never())->method('hasField');
+    $this->assertNull($class->getMethod('checkMemberLimit')->invoke($controller, $group));
   }
 
   /**
@@ -623,6 +660,12 @@ class GroupInvitationControllerTest extends UnitTestCase {
    */
   public static function memberLimitConflicts(): array {
     return [
+      'missing field' => [NULL, 1, "Member limit reached for the 'free' tier (1 member). Upgrade to add more members."],
+      'empty tier' => ['', 1, "Member limit reached for the 'free' tier (1 member). Upgrade to add more members."],
+      'unknown tier' => [
+        'unknown', 1,
+        "Member limit reached for the 'free' tier (1 member). Upgrade to add more members.",
+      ],
       'singular' => [
         'free',
         1,
@@ -1590,13 +1633,12 @@ class GroupInvitationControllerTest extends UnitTestCase {
   /**
    * Creates a mocked group entity for invitation tests.
    */
-  protected function createGroup(string $bundle, ?string $slug = NULL, ?int $jurisdictionId = NULL, ?string $tier = NULL): GroupInterface {
+  protected function createGroup(string $bundle, ?string $slug = NULL, ?int $jurisdictionId = NULL, ?string $tier = NULL, bool $hasTierField = TRUE): GroupInterface {
     $group = $this->createMock(GroupInterface::class);
     $group->method('bundle')->willReturn($bundle);
-    $group->method('hasField')->willReturnCallback(static fn(string $field): bool => in_array($field, [
+    $group->method('hasField')->willReturnCallback(static fn(string $field): bool => $field === 'field_tier' ? $hasTierField : in_array($field, [
       'field_slug',
       'field_jurisdiction',
-      'field_tier',
     ], TRUE));
     $group->method('get')->willReturnCallback(function (string $field) use ($slug, $jurisdictionId, $tier): FieldItemListInterface {
       $fieldItem = $this->createMock(FieldItemListInterface::class);

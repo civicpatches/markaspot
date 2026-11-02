@@ -640,8 +640,8 @@ class TierConfigServiceTest extends UnitTestCase {
   public function testGetMemberLimitFromConfig(): void {
     $this->memberLimits = [
       'free' => 2,
-      'starter' => 10,
-      'pro' => 50,
+      'starter' => '10',
+      'pro' => '50',
     ];
 
     $config = $this->createMock(ImmutableConfig::class);
@@ -666,8 +666,10 @@ class TierConfigServiceTest extends UnitTestCase {
     );
 
     $this->assertEquals(2, $service->getMemberLimit('free'));
-    $this->assertEquals(10, $service->getMemberLimit('starter'));
-    $this->assertEquals(50, $service->getMemberLimit('pro'));
+    $this->assertSame(2, $service->getMemberLimit('unknown'));
+    $this->assertSame(2, $service->getMemberLimit(''));
+    $this->assertSame(10, $service->getMemberLimit('starter'));
+    $this->assertSame(50, $service->getMemberLimit('pro'));
   }
 
   /**
@@ -683,12 +685,13 @@ class TierConfigServiceTest extends UnitTestCase {
   }
 
   /**
-   * Tests getMemberLimit() returns NULL for unknown tiers.
+   * Tests unknown and empty tiers use the Free member limit.
    *
    * @covers ::getMemberLimit
    */
   public function testGetMemberLimitUnknownTier(): void {
-    $this->assertNull($this->service->getMemberLimit('nonexistent'));
+    $this->assertSame(1, $this->service->getMemberLimit('nonexistent'));
+    $this->assertSame(1, $this->service->getMemberLimit(''));
   }
 
   /**

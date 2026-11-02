@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_nuxt\Controller;
 
+use Drupal\markaspot_group\Service\WorkspaceTier;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
 use Drupal\Core\Controller\ControllerBase;
@@ -742,25 +743,12 @@ final class TenantSettingsController extends ControllerBase {
 
   /**
    * Checks whether the jurisdiction tier may use case assignment.
-   *
-   * With field_tier now attached everywhere (markaspot_group), field
-   * presence no longer identifies the platform. A missing or empty tier is
-   * only permissive on enterprise/self-hosted stacks; on the shared
-   * self-service platform an untiered workspace (demo, pending checkout)
-   * must not receive this paid feature. Mirrors
-   * _markaspot_group_case_assignment_enabled_for_jurisdiction().
    */
   private function canUseCaseAssignment(GroupInterface $group): bool {
-    $tier_group = $this->effectiveCaseAssignmentTierGroup($group);
-    if (!$tier_group->hasField('field_tier')
-      || $tier_group->get('field_tier')->isEmpty()) {
-      return $this->featureScopeResolver->allowsEnterpriseFeatures();
-    }
-
-    return in_array(
-      (string) $tier_group->get('field_tier')->value,
-      ['pro', 'heart', 'community', 'premium'],
-      TRUE,
+    return WorkspaceTier::allowsCaseAssignment(
+      $this->effectiveCaseAssignmentTierGroup($group),
+      $this->featureScopeResolver->isSelfServicePlatform(),
+      $this->featureScopeResolver->isEnterpriseShowcase(),
     );
   }
 

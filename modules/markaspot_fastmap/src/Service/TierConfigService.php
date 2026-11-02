@@ -294,14 +294,21 @@ class TierConfigService {
    *   The tier machine name (free, starter, pro, heart).
    *
    * @return int|null
-   *   The member limit, or NULL for unknown tiers (unlimited).
+   *   The member limit. Unknown tiers use the Free limit.
    */
   public function getMemberLimit(string $tier): ?int {
     $config = $this->configFactory->get('markaspot_fastmap.settings');
     $memberLimits = $config->get('member_limits');
+    if (!in_array($tier, self::EXPECTED_TIER_LIMITS, TRUE)) {
+      $tier = 'free';
+    }
 
-    if (!empty($memberLimits) && isset($memberLimits[$tier])) {
-      return (int) $memberLimits[$tier];
+    $limit = $memberLimits[$tier] ?? NULL;
+    $validLimit = is_int($limit) || is_string($limit)
+      ? filter_var($limit, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+      : FALSE;
+    if ($validLimit !== FALSE) {
+      return (int) $limit;
     }
 
     // Hardcoded defaults if config is not set.
@@ -309,7 +316,7 @@ class TierConfigService {
       'free' => 1,
       'starter', 'heart' => 5,
       'pro' => 20,
-      default => NULL,
+      default => 1,
     };
   }
 

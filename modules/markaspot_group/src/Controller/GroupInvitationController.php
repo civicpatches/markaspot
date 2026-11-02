@@ -23,6 +23,7 @@ use Drupal\group\GroupMembershipLoaderInterface;
 use Drupal\markaspot_group\MembershipRoleNormalizer;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Service\WorkspaceAccountName;
+use Drupal\markaspot_group\Service\WorkspaceTier;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Service\FrontendUrlService;
 use Drupal\user\UserInterface;
@@ -699,8 +700,7 @@ class GroupInvitationController extends ControllerBase {
   /**
    * Checks whether the group has reached its member limit.
    *
-   * Skips the check if markaspot_fastmap is not installed or if the group
-   * has no tier field.
+   * Applies only to the self-service platform. Missing tiers use Free limits.
    *
    * @param \Drupal\group\Entity\GroupInterface $group
    *   The group to check.
@@ -709,23 +709,19 @@ class GroupInvitationController extends ControllerBase {
    *   Error response data if limit is exceeded, NULL if within limits.
    */
   protected function checkMemberLimit(GroupInterface $group): ?array {
-    if (!$this->tierConfigService) {
+    if (!$this->tierConfigService || !WorkspaceTier::isSelfService($this->moduleHandler)
+      || $this->config('markaspot_nuxt.settings')->get('enterprise_showcase') === 'enabled') {
       return NULL;
     }
 
     // Resolve to the jurisdiction group (for org groups, find parent).
     $jurGroup = $this->resolveJurisdictionGroup($group);
-    if (!$jurGroup || !$jurGroup->hasField('field_tier') || $jurGroup->get('field_tier')->isEmpty()) {
+    if (!$jurGroup) {
       return NULL;
     }
 
-    $tier = (string) $jurGroup->get('field_tier')->value;
+    $tier = WorkspaceTier::resolve($jurGroup, TRUE);
     $limit = $this->tierConfigService->getMemberLimit($tier);
-
-    if ($limit === NULL) {
-      // Unknown tier, no limit.
-      return NULL;
-    }
 
     // Count active members and pending invitations across all groups in this
     // jurisdiction (jur + all org sub-groups) to prevent limit bypass via
