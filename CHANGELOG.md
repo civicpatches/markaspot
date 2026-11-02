@@ -1,5 +1,18 @@
 # Changelog
 
+## [11.9.242](https://github.com/markaspot/markaspot/compare/11.9.241...11.9.242) (2026-11-02)
+
+### Features
+
+* **vision:** hold imported images until blur and screening complete ([0832093](https://github.com/markaspot/markaspot/commit/08320938e7635f23a166e1577e178a062301f506))
+
+### Bug Fixes
+
+* **fastmap:** provide confirmed boundaries in workspace creation tests ([4ba180f](https://github.com/markaspot/markaspot/commit/4ba180fe3acd79a2b1f5d6e1a3a32c41e364621e))
+* **fastmap:** reject city-wide signups without a confirmed boundary instead of a 1 km circle ([12cdf19](https://github.com/markaspot/markaspot/commit/12cdf19175f3385a274a28648e11e5ae54a5bd2f))
+* **group:** enforce the free member limit when a workspace has no tier ([c368309](https://github.com/markaspot/markaspot/commit/c36830979d517ff5e108b06d5f77e85a79f15513))
+* **mail-inbound:** configure private storage in the staging test ([69cb3e7](https://github.com/markaspot/markaspot/commit/69cb3e748031b515d112d23a1cb445e6caca9cc4))
+
 ## [11.9.241](https://github.com/markaspot/markaspot/compare/11.9.240...11.9.241) (2026-11-02)
 
 ### Features
