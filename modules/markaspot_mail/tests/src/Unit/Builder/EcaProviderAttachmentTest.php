@@ -51,9 +51,13 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     yield 'quoted display name' => ['"Example Works" <provider@example.test>', [], TRUE];
     yield 'angle address' => ['<provider@example.test>', [], TRUE];
     yield 'second stored mailbox' => ['dispatch@example.test', [], TRUE];
-    yield 'all stored mailboxes' => ['provider@example.test, dispatch@example.test', [], TRUE];
-    yield 'array of mailboxes' => [['provider@example.test', 'dispatch@example.test'], [], TRUE];
-    yield 'array containing list' => [['provider@example.test, dispatch@example.test'], [], TRUE];
+    yield 'all stored mailboxes' => ['provider@example.test, dispatch@example.test', [], FALSE];
+    yield 'array of mailboxes' => [['provider@example.test', 'dispatch@example.test'], [], FALSE];
+    yield 'array containing list' => [['provider@example.test, dispatch@example.test'], [], FALSE];
+    yield 'single mailbox array' => [['provider@example.test'], [], TRUE];
+    yield 'duplicate mailbox' => ['provider@example.test, provider@example.test', [], FALSE];
+    yield 'custom To header' => ['provider@example.test', ['To' => 'staff@example.test'], FALSE];
+    yield 'custom mixed case To header' => ['provider@example.test', ['tO' => 'dispatch@example.test'], FALSE];
     yield 'empty copy headers' => ['provider@example.test', ['Cc' => '', 'Bcc' => ' '], TRUE];
     yield 'reply-to is not a recipient' => ['provider@example.test', ['Reply-To' => 'staff@example.test'], TRUE];
     yield 'organisation' => ['org@example.test', [], FALSE];
@@ -123,13 +127,13 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     if (in_array('provider.pdf', $expected, TRUE)) {
       $attachment = $message->attachments[array_key_last($message->attachments)];
       $this->assertSame('private://provider.pdf', $attachment->filepath);
-      $this->assertSame('application/pdf', $attachment->filemime);
+      $this->assertSame($mime, $attachment->filemime);
       $this->assertSame($size, $attachment->filesize);
     }
   }
 
   /**
-   * Uses the shipped whitelist without widening it.
+   * Exercises the shipped whitelist and explicit operator restrictions.
    */
   public static function policyCases(): iterable {
     yield 'private PDF opt-in' => [[], 'application/pdf', 1024, TRUE, ['citizen.jpg', 'provider.pdf']];
@@ -137,10 +141,10 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     yield 'oversized' => [[], 'application/pdf', 5242881, TRUE, ['citizen.jpg']];
     yield 'at per-file cap' => [[], 'application/pdf', 5242880, TRUE, ['citizen.jpg', 'provider.pdf']];
     yield 'disallowed executable' => [[], 'application/x-executable', 1024, TRUE, ['citizen.jpg']];
-    yield 'XLS stays disallowed' => [[], 'application/vnd.ms-excel', 1024, TRUE, ['citizen.jpg']];
-    yield 'XLSX stays disallowed' => [
+    yield 'XLS allowed' => [[], 'application/vnd.ms-excel', 1024, TRUE, ['citizen.jpg', 'provider.pdf']];
+    yield 'XLSX allowed' => [
       [], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      1024, TRUE, ['citizen.jpg'],
+      1024, TRUE, ['citizen.jpg', 'provider.pdf'],
     ];
     yield 'combined budget exceeded' => [['max_total_bytes' => 2047], 'application/pdf', 1024, TRUE, ['citizen.jpg']];
     yield 'combined budget exactly met' => [
@@ -148,6 +152,26 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
       ['citizen.jpg', 'provider.pdf'],
     ];
     yield 'temporary file' => [[], 'application/pdf', 1024, FALSE, ['citizen.jpg']];
+  }
+
+  /**
+   * A stale assignment must still satisfy the provider organisation scope.
+   */
+  public function testProviderOrganisationScope(): void {
+    $matching = $this->buildMail(providerOrg: 7, requestOrg: 7);
+    $this->assertSame(['citizen.jpg', 'provider.pdf'], array_column($matching->attachments, 'filename'));
+    $mismatch = $this->buildMail(providerOrg: 7, requestOrg: 8);
+    $this->assertSame(['citizen.jpg'], array_column($mismatch->attachments, 'filename'));
+    $missing = $this->buildMail(providerOrg: 7);
+    $this->assertSame(['citizen.jpg'], array_column($missing->attachments, 'filename'));
+  }
+
+  /**
+   * An empty optional commissioning field leaves other attachments intact.
+   */
+  public function testEmptyProviderAttachment(): void {
+    $message = $this->buildMail(emptyAttachment: TRUE);
+    $this->assertSame(['citizen.jpg'], array_column($message->attachments, 'filename'));
   }
 
   /**
@@ -179,13 +203,26 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     bool $permanent = TRUE,
     string $contextKey = 'node',
     string $bundle = 'service_request',
+    bool $emptyAttachment = FALSE,
+    ?int $providerOrg = NULL,
+    ?int $requestOrg = NULL,
   ): MailMessage {
     $emailField = $this->createMock(FieldItemListInterface::class);
     $emailField->method('getValue')->willReturn(array_map(static fn(string $email): array => ['value' => $email], $emails));
     $provider = $this->createMock($assignment === 'node' ? NodeInterface::class : TermInterface::class);
     $provider->method('bundle')->willReturn($assignment === 'category' ? 'service_category' : 'service_provider');
-    $provider->method('hasField')->willReturn($assignment !== 'no_email');
-    $provider->method('get')->with('field_sp_email')->willReturn($emailField);
+    $providerOrgField = $this->createMock(FieldItemListInterface::class);
+    $providerOrgField->method('isEmpty')->willReturn($providerOrg === NULL);
+    $providerOrgField->method('getValue')->willReturn($providerOrg === NULL ? [] : [['target_id' => $providerOrg]]);
+    $provider->method('hasField')->willReturnCallback(static fn(string $name): bool => match ($name) {
+      'field_sp_email' => $assignment !== 'no_email',
+      'field_organisation' => TRUE,
+      default => FALSE,
+    });
+    $provider->method('get')->willReturnCallback(static fn(string $name): FieldItemListInterface => match ($name) {
+      'field_sp_email' => $emailField,
+      'field_organisation' => $providerOrgField,
+    });
 
     $providerField = $this->createMock($assignment === 'scalar' ? FieldItemListInterface::class : EntityReferenceFieldItemListInterface::class);
     $providerField->method('isEmpty')->willReturn($assignment === 'empty');
@@ -204,6 +241,16 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
       'field_request_image' => $this->fileField(1, 'citizen.jpg', 'image/jpeg', 1024, TRUE),
       'field_sp_attachment' => $this->fileField(2, 'provider.pdf', $mime, $size, $permanent),
     ];
+    if ($requestOrg !== NULL) {
+      $requestOrgField = $this->createMock(FieldItemListInterface::class);
+      $requestOrgField->method('getValue')->willReturn([['target_id' => $requestOrg]]);
+      $fields['field_organisation'] = $requestOrgField;
+    }
+    if ($emptyAttachment) {
+      $emptyField = $this->createMock(EntityReferenceFieldItemListInterface::class);
+      $emptyField->method('isEmpty')->willReturn(TRUE);
+      $fields['field_sp_attachment'] = $emptyField;
+    }
     if ($assignment !== 'missing') {
       $fields['field_service_provider'] = $providerField;
     }
