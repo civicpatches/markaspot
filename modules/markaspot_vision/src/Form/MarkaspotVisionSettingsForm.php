@@ -116,7 +116,7 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
       '#min' => 0,
       '#step' => 1,
       '#required' => TRUE,
-      '#description' => $this->t('Applies only to staff using authenticated dashboard sessions. Use 0 for no Drupal-side Vision rate limit for staff.'),
+      '#description' => $this->t('Applies only to staff using authenticated dashboard sessions. Use 0 to disable the Drupal-side Vision rate limit for staff. The frontend proxy has its own staff limit (default: 100 requests per hour), so raising this field alone does not raise the effective limit beyond the proxy limit. Hosted installations configure both limits with MARKASPOT_VISION_STAFF_RATE_LIMIT_MAX.'),
     ];
 
     $form['blur'] = [
