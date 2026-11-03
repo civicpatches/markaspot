@@ -11,6 +11,8 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\Language\LanguageInterface;
+use Drupal\Core\Language\Language;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\markaspot_mail\Plugin\Action\SendNotificationMail;
@@ -418,6 +420,11 @@ final class SendNotificationMailTest extends UnitTestCase {
       $flood = $this->createMock(FloodInterface::class);
       $flood->method('isAllowed')->willReturn(TRUE);
     }
+    $language_manager = $this->createMock(LanguageManagerInterface::class);
+    $language_manager->method('getLanguages')->willReturn([
+      'en' => new Language(['id' => 'en']),
+      'de' => new Language(['id' => 'de']),
+    ]);
     $action = new SendNotificationMail(
       $configuration,
       'markaspot_mail_send_notification',
@@ -427,6 +434,7 @@ final class SendNotificationMailTest extends UnitTestCase {
       $configFactory,
       $flood,
       $logger ?? $this->createMock(LoggerInterface::class),
+      $language_manager,
     );
     return $action;
   }

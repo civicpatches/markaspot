@@ -10,6 +10,8 @@ use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\Language\LanguageInterface;
+use Drupal\Core\Language\Language;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\markaspot_mail\Plugin\Action\SendTermNotificationMail;
@@ -182,6 +184,11 @@ final class SendTermNotificationMailTest extends UnitTestCase {
       $flood->method('isAllowed')->willReturn(TRUE);
     }
 
+    $language_manager = $this->createMock(LanguageManagerInterface::class);
+    $language_manager->method('getLanguages')->willReturn([
+      'en' => new Language(['id' => 'en']),
+      'de' => new Language(['id' => 'de']),
+    ]);
     return new SendTermNotificationMail(
       [
         'object' => 'entity',
@@ -194,6 +201,7 @@ final class SendTermNotificationMailTest extends UnitTestCase {
       $config_factory,
       $flood,
       $logger ?? $this->createMock(LoggerInterface::class),
+      $language_manager,
     );
   }
 

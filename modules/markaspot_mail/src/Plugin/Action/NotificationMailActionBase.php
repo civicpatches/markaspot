@@ -10,11 +10,14 @@ use Drupal\Core\Action\ConfigurableActionBase;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Language\LanguageInterface;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\Utility\Token;
+use Drupal\markaspot_mail\Mail\ResolveJurisdictionFromNodeTrait;
 use Drupal\node\NodeInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -29,6 +32,7 @@ use Symfony\Component\Mime\Address;
 abstract class NotificationMailActionBase extends ConfigurableActionBase implements ContainerFactoryPluginInterface {
 
   use StringTranslationTrait;
+  use ResolveJurisdictionFromNodeTrait;
 
   private const RECIPIENT_FLOOD_EVENT = 'markaspot_mail.notification_recipient';
 
@@ -53,6 +57,7 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
     protected readonly ConfigFactoryInterface $configFactory,
     protected readonly FloodInterface $flood,
     protected readonly LoggerInterface $logger,
+    protected readonly LanguageManagerInterface $languageManager,
   ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
   }
@@ -70,6 +75,7 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
       $container->get('config.factory'),
       $container->get('flood'),
       $container->get('logger.factory')->get('markaspot_mail'),
+      $container->get('language_manager'),
     );
   }
 
@@ -178,7 +184,7 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
       return;
     }
 
-    $langcode = $entity->language()->getId();
+    $langcode = $this->resolveNotificationLangcode($entity);
     $params = [
       'node' => $entity,
       'notification_key' => $notificationKey,
@@ -209,6 +215,32 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
         '@nid' => $entity->id(),
       ]);
     }
+  }
+
+  /**
+   * Prefers an explicit report language, then workspace, then site default.
+   */
+  private function resolveNotificationLangcode(NodeInterface $entity): string {
+    $unspecified = [LanguageInterface::LANGCODE_NOT_SPECIFIED, LanguageInterface::LANGCODE_NOT_APPLICABLE];
+    $languages = $this->languageManager->getLanguages();
+    $langcode = $entity->language()->getId();
+    if (!in_array($langcode, $unspecified, TRUE) && isset($languages[$langcode])) {
+      return $langcode;
+    }
+
+    $jurisdiction = $this->resolveJurisdictionGroupFromNode($entity);
+    // markaspot_mail does not depend on markaspot_group; never fatal in the
+    // mail path when the helper is unavailable.
+    if ($jurisdiction !== NULL && function_exists('_markaspot_group_jurisdiction_default_langcode')) {
+      // Share the organisation-mail interpretation of the canonical workspace
+      // setting: field_nuxt_config.languages.default, including locale aliases.
+      $langcode = _markaspot_group_jurisdiction_default_langcode($jurisdiction);
+      if ($langcode !== NULL && !in_array($langcode, $unspecified, TRUE) && isset($languages[$langcode])) {
+        return $langcode;
+      }
+    }
+
+    return $this->languageManager->getDefaultLanguage()->getId();
   }
 
   /**
