@@ -51,11 +51,37 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     yield 'quoted display name' => ['"Example Works" <provider@example.test>', [], TRUE];
     yield 'angle address' => ['<provider@example.test>', [], TRUE];
     yield 'second stored mailbox' => ['dispatch@example.test', [], TRUE];
-    yield 'all stored mailboxes' => ['provider@example.test, dispatch@example.test', [], FALSE];
-    yield 'array of mailboxes' => [['provider@example.test', 'dispatch@example.test'], [], FALSE];
-    yield 'array containing list' => [['provider@example.test, dispatch@example.test'], [], FALSE];
+    yield 'all stored mailboxes' => ['provider@example.test, dispatch@example.test', [], TRUE];
+    yield 'array of mailboxes' => [['provider@example.test', 'dispatch@example.test'], [], TRUE];
+    yield 'array containing list' => [['provider@example.test, dispatch@example.test'], [], TRUE];
     yield 'single mailbox array' => [['provider@example.test'], [], TRUE];
-    yield 'duplicate mailbox' => ['provider@example.test, provider@example.test', [], FALSE];
+    yield 'duplicate mailbox' => ['provider@example.test, provider@example.test', [], TRUE];
+    yield 'all stored display names' => [
+      'Example Works <provider@example.test>, "Dispatch" <dispatch@example.test>', [], TRUE,
+    ];
+    yield 'all stored mailboxes plus Cc' => [
+      'provider@example.test, dispatch@example.test', ['Cc' => 'staff@example.test'], FALSE,
+    ];
+    yield 'all stored mailboxes plus provider Cc' => [
+      'provider@example.test, dispatch@example.test', ['Cc' => 'dispatch@example.test'], FALSE,
+    ];
+    yield 'provider plus malformed mailbox' => ['provider@example.test, not-an-address', [], FALSE];
+    yield 'malformed mailbox plus provider' => ['not-an-address, provider@example.test', [], FALSE];
+    yield 'leading empty mailbox' => [', provider@example.test', [], FALSE];
+    yield 'empty middle mailbox' => ['provider@example.test, , dispatch@example.test', [], FALSE];
+    yield 'array with null mailbox' => [['provider@example.test', NULL], [], FALSE];
+    yield 'array list with outsider' => [['provider@example.test, staff@example.test'], [], FALSE];
+    yield 'quoted comma display name' => ['"Example, Works" <provider@example.test>', [], FALSE];
+    yield 'RFC group' => ['Provider: provider@example.test, dispatch@example.test;', [], FALSE];
+    yield 'comment syntax' => ['provider@example.test (Example Works)', [], FALSE];
+    yield 'colon display prefix' => ['Provider: <provider@example.test>', [], FALSE];
+    yield 'comment display prefix' => ['Name (comment) <provider@example.test>', [], FALSE];
+    yield 'unbalanced comment prefix' => ['(comment <provider@example.test>', [], FALSE];
+    yield 'unquoted at sign prefix' => ['staff@example.test <provider@example.test>', [], FALSE];
+    yield 'quoted-pair display syntax' => ['"Example\\Works" <provider@example.test>', [], FALSE];
+    yield 'list with injected header' => [
+      "provider@example.test, dispatch@example.test\r\nCc: staff@example.test", [], FALSE,
+    ];
     yield 'custom To header' => ['provider@example.test', ['To' => 'staff@example.test'], FALSE];
     yield 'custom mixed case To header' => ['provider@example.test', ['tO' => 'dispatch@example.test'], FALSE];
     yield 'empty copy headers' => ['provider@example.test', ['Cc' => '', 'Bcc' => ' '], TRUE];

@@ -156,13 +156,13 @@ final class EcaActionEmailBuilder implements MailBuilderInterface {
   }
 
   /**
-   * Allows the dedicated file only for one assigned-provider mailbox.
+   * Allows the dedicated file only for the assigned provider's mailboxes.
    *
    * Attachments are shared by all recipients. Any non-empty To/Cc/Bcc header
    * therefore denies this file, even if that copy address belongs to the
-   * provider. Exactly one To address must match a stored provider address;
-   * multiple, malformed or unsupported recipients fail closed. The existing
-   * citizen-upload policy remains independent of this narrower gate.
+   * provider. Every To address must match a stored provider address; mixed,
+   * malformed or unsupported lists fail closed. The existing citizen-upload
+   * policy remains independent of this narrower gate.
    */
   private function recipientsAreAssignedProvider(MailContext $ctx, ContentEntityInterface $entity): bool {
     foreach ($ctx->headers as $name => $value) {
@@ -205,22 +205,25 @@ final class EcaActionEmailBuilder implements MailBuilderInterface {
     }
 
     $recipients = is_array($ctx->to) ? $ctx->to : [$ctx->to];
-    if (count($recipients) !== 1) {
+    if ($recipients === []) {
       return FALSE;
     }
-    $recipient = reset($recipients);
-    if (!is_string($recipient) || preg_match('/[\x00-\x1F\x7F,]/', $recipient)) {
-      return FALSE;
-    }
-    // Accept one bare address or simple display name. More complex RFC
-    // syntax (e.g. quoted commas or groups) is deliberately denied here.
-    $address = trim($recipient);
-    if (preg_match('/^(?:(?:"[^"]*"|[^<>,;"]+)\s*)?<([^<>\s]+)>$/D', $address, $matches)) {
-      $address = $matches[1];
-    }
-    if (filter_var($address, FILTER_VALIDATE_EMAIL) === FALSE
-      || !in_array(strtolower($address), $addresses, TRUE)) {
-      return FALSE;
+    foreach ($recipients as $list) {
+      if (!is_string($list) || preg_match('/[\x00-\x1F\x7F]/', $list)) {
+        return FALSE;
+      }
+      // Accept bare addresses and simple display names. More complex RFC
+      // syntax (e.g. quoted commas or groups) is deliberately denied here.
+      foreach (explode(',', $list) as $recipient) {
+        $address = trim($recipient);
+        if (preg_match('/^(?:(?:"[^"\\\\]*"|[^<>,;":()\[\]@.\\\\]+)\s*)?<([^<>\s]+)>$/D', $address, $matches)) {
+          $address = $matches[1];
+        }
+        if (filter_var($address, FILTER_VALIDATE_EMAIL) === FALSE
+          || !in_array(strtolower($address), $addresses, TRUE)) {
+          return FALSE;
+        }
+      }
     }
     return TRUE;
   }
