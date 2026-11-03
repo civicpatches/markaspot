@@ -96,7 +96,7 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
     $form['rate_limit'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Vision Request Rate Limit'),
-      '#description' => $this->t('Limits analysis requests per upload session. Set the maximum to 0 to disable this limiter completely.'),
+      '#description' => $this->t('Limits analysis requests separately for citizens and staff. Set a maximum to 0 to disable that limiter.'),
     ];
 
     $form['rate_limit']['rate_limit_max'] = [
@@ -106,7 +106,7 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
       '#min' => 0,
       '#step' => 1,
       '#required' => TRUE,
-      '#description' => $this->t('Use 0 for no Drupal-side Vision rate limit. Cloud deployments can override this with MARKASPOT_VISION_RATE_LIMIT_MAX.'),
+      '#description' => $this->t('Applies only to citizens (anonymous users and authenticated users who are not staff). Use 0 for no Drupal-side Vision rate limit for citizens. Cloud deployments can override this with MARKASPOT_VISION_RATE_LIMIT_MAX.'),
     ];
 
     $form['rate_limit']['rate_limit_max_staff'] = [
@@ -116,7 +116,7 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
       '#min' => 0,
       '#step' => 1,
       '#required' => TRUE,
-      '#description' => $this->t('Applies to authenticated dashboard staff sessions. Use 0 for no Drupal-side Vision rate limit for staff.'),
+      '#description' => $this->t('Applies only to staff using authenticated dashboard sessions. Use 0 for no Drupal-side Vision rate limit for staff.'),
     ];
 
     $form['blur'] = [
