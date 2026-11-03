@@ -1,5 +1,15 @@
 # Changelog
 
+## [11.9.243](https://github.com/markaspot/markaspot/compare/11.9.242...11.9.243) (2026-11-03)
+
+### Features
+
+* **ai:** enforce a sovereign IONOS provider for AI processing of report content ([9eb18b2](https://github.com/markaspot/markaspot/commit/9eb18b2239521416c97b1e89bae23b60e8d7d7de))
+
+### Bug Fixes
+
+* **mail:** use workspace language for unspecified reports ([b928355](https://github.com/markaspot/markaspot/commit/b9283554a28bb281daf1d991c52cfa8a8e8134cb))
+
 ## [11.9.242](https://github.com/markaspot/markaspot/compare/11.9.241...11.9.242) (2026-11-02)
 
 ### Features
