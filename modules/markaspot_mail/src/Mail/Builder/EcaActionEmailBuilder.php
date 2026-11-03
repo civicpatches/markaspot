@@ -54,6 +54,14 @@ final class EcaActionEmailBuilder implements MailBuilderInterface {
   use SplitParagraphsTrait;
   use StringTranslationTrait;
 
+  /**
+   * Extra MIME types for staff uploads sent to the assigned provider only.
+   */
+  private const PROVIDER_ATTACHMENT_MIME = [
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ];
+
   public function __construct(
     private readonly LoggerInterface $logger,
     private readonly AttachmentResolver $attachmentResolver,
@@ -121,14 +129,17 @@ final class EcaActionEmailBuilder implements MailBuilderInterface {
       && $entity->bundle() === 'service_request'
       && !$this->recipientIsReporter($ctx->to, $entity)) {
       $fields = ['field_request_image', 'field_request_media', 'field_attachment'];
+      $extraMimeByField = [];
       if ($this->recipientsAreAssignedProvider($ctx, $entity)) {
         $fields[] = 'field_sp_attachment';
+        $extraMimeByField['field_sp_attachment'] = self::PROVIDER_ATTACHMENT_MIME;
       }
       // Resolve together so all files share one size budget and deduplication.
       $attachments = $this->attachmentResolver->resolve(
         $entity,
         $fields,
         includePrivate: TRUE,
+        extraMimeByField: $extraMimeByField,
       );
     }
 

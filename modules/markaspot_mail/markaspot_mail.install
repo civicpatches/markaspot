@@ -113,8 +113,6 @@ function _markaspot_mail_seed_attachment_defaults(): array {
       'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'message/rfc822',
       'text/plain',
     ],
@@ -992,39 +990,4 @@ function markaspot_mail_update_10017(): string {
   return $changes !== []
     ? ucfirst(implode('; ', $changes)) . '.'
     : 'Default-language mail text and BPMN notification models are already aligned.';
-}
-
-/**
- * Allows provider spreadsheets while preserving custom attachment policies.
- */
-function markaspot_mail_update_10018(): string {
-  $config = \Drupal::configFactory()->getEditable('markaspot_mail.settings');
-  $allowedMime = $config->get('attachments.allowed_mime');
-  if ($allowedMime === NULL) {
-    _markaspot_mail_seed_attachment_defaults();
-    return 'Seeded missing attachment defaults including XLS and XLSX.';
-  }
-
-  $legacyDefault = [
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'message/rfc822',
-    'text/plain',
-  ];
-  // Only the exact shipped default is ours to widen. Empty lists deliberately
-  // disable the MIME gate; custom lists are an explicit operator policy.
-  if ($allowedMime !== $legacyDefault) {
-    return 'Attachment MIME policy preserved.';
-  }
-
-  array_splice($allowedMime, 6, 0, [
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ]);
-  $config->set('attachments.allowed_mime', $allowedMime)->save();
-  return 'Added XLS and XLSX to the default attachment MIME policy.';
 }

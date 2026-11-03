@@ -9,6 +9,8 @@ use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\file\FileInterface;
 use Drupal\markaspot_mail\Mail\Builder\EcaActionEmailBuilder;
+use Drupal\markaspot_mail\Mail\Builder\EscalationNotificationBuilder;
+use Drupal\markaspot_mail\Mail\Builder\ModerationNoticeBuilder;
 use Drupal\markaspot_mail\Mail\MailContext;
 use Drupal\markaspot_mail\Mail\MailMessage;
 use Drupal\markaspot_mail\Service\AttachmentResolver;
@@ -177,7 +179,55 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
       ['max_total_bytes' => 2048], 'application/pdf', 1024, TRUE,
       ['citizen.jpg', 'provider.pdf'],
     ];
+    yield 'spreadsheet oversized' => [[], 'application/vnd.ms-excel', 5242881, TRUE, ['citizen.jpg']];
+    yield 'spreadsheet temporary' => [[], 'application/vnd.ms-excel', 1024, FALSE, ['citizen.jpg']];
+    yield 'spreadsheet budget exceeded' => [
+      ['max_total_bytes' => 2047], 'application/vnd.ms-excel', 1024, TRUE, ['citizen.jpg'],
+    ];
+    yield 'empty shared whitelist' => [
+      ['allowed_mime' => []], 'application/x-custom', 1024, TRUE, ['citizen.jpg', 'provider.pdf'],
+    ];
     yield 'temporary file' => [[], 'application/pdf', 1024, FALSE, ['citizen.jpg']];
+  }
+
+  /**
+   * Spreadsheet exceptions cannot escape the provider field and audience.
+   */
+  #[DataProvider('spreadsheetCases')]
+  public function testSpreadsheetScope(string $builderType, string $mime, string $to, bool $provider): void {
+    $message = $this->buildMail(
+      to: $to,
+      mime: $mime,
+      citizenMime: $mime,
+      builderType: $builderType,
+    );
+    $this->assertSame(
+      $provider ? ['citizen.jpg', 'provider.pdf'] : ['citizen.jpg'],
+      array_column($message->attachments, 'filename'),
+    );
+    if ($provider) {
+      $this->assertSame($mime, $message->attachments[1]->filemime);
+    }
+  }
+
+  /**
+   * Both spreadsheet formats across provider and citizen attachment routes.
+   */
+  public static function spreadsheetCases(): iterable {
+    $mimes = [
+      'xls' => 'application/vnd.ms-excel',
+      'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    foreach ($mimes as $extension => $mime) {
+      foreach (['eca', 'escalation', 'moderation'] as $builder) {
+        foreach (['provider', 'staff'] as $recipient) {
+          yield "$extension $builder $recipient" => [
+            $builder, $mime, "$recipient@example.test",
+            $builder === 'eca' && $recipient === 'provider',
+          ];
+        }
+      }
+    }
   }
 
   /**
@@ -232,6 +282,8 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     bool $emptyAttachment = FALSE,
     ?int $providerOrg = NULL,
     ?int $requestOrg = NULL,
+    ?string $citizenMime = NULL,
+    string $builderType = 'eca',
   ): MailMessage {
     $emailField = $this->createMock(FieldItemListInterface::class);
     $emailField->method('getValue')->willReturn(array_map(static fn(string $email): array => ['value' => $email], $emails));
@@ -267,6 +319,9 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
       'field_request_image' => $this->fileField(1, 'citizen.jpg', 'image/jpeg', 1024, TRUE),
       'field_sp_attachment' => $this->fileField(2, 'provider.pdf', $mime, $size, $permanent),
     ];
+    if ($citizenMime !== NULL) {
+      $fields['field_attachment'] = $this->fileField(3, 'citizen.xls', $citizenMime, 1024, TRUE);
+    }
     if ($requestOrg !== NULL) {
       $requestOrgField = $this->createMock(FieldItemListInterface::class);
       $requestOrgField->method('getValue')->willReturn([['target_id' => $requestOrg]]);
@@ -289,12 +344,21 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     $config = Yaml::decode(file_get_contents(dirname(__DIR__, 4) . '/config/install/markaspot_mail.settings.yml'));
     $config['attachments'] = array_replace($config['attachments'], $settings);
     $resolver = new AttachmentResolver($this->getConfigFactoryStub(['markaspot_mail.settings' => $config]), new NullLogger());
-    $builder = new EcaActionEmailBuilder(new NullLogger(), $resolver);
+    $builder = match ($builderType) {
+      'escalation' => new EscalationNotificationBuilder(new NullLogger(), $resolver),
+      'moderation' => new ModerationNoticeBuilder(new NullLogger(), $resolver),
+      default => new EcaActionEmailBuilder(new NullLogger(), $resolver),
+    };
     $context = new MailContext(
       module: 'system',
       key: 'action_send_email',
       langcode: 'en',
-      params: ['context' => ['subject' => 'Commissioning', $contextKey => $node]],
+      params: [
+        'context' => ['subject' => 'Commissioning', $contextKey => $node],
+        'node' => $node,
+        'subject' => 'Commissioning',
+        'body' => 'Please handle this request.',
+      ],
       to: $to,
       subject: 'Commissioning',
       body: ['Please handle this request.'],

@@ -89,13 +89,19 @@ class AttachmentResolver {
    *   an outgoing mail. Default FALSE fails closed against accidental
    *   public routing (e.g. a citizen-confirmation builder mis-wired to
    *   attach files).
+   * @param array<string, list<string>> $extraMimeByField
+   *   Additional MIME types allowed only for the named source field. Callers
+   *   must authorize the recipient before adding field-specific exceptions.
+   *   An empty shared allowlist still disables the MIME gate entirely.
    *
    * @return list<\Drupal\markaspot_mail\Mail\MailAttachment>
+   *   Attachments that passed all policy gates.
    */
   public function resolve(
     ContentEntityInterface $entity,
     array $fieldNames,
     bool $includePrivate = FALSE,
+    array $extraMimeByField = [],
   ): array {
     $settings = $this->configFactory
       ->get('markaspot_mail.settings')
@@ -122,7 +128,7 @@ class AttachmentResolver {
     $out = [];
     $used = 0;
 
-    foreach ($candidates as $index => $file) {
+    foreach ($candidates as $index => [$fieldName, $file]) {
       $uri = (string) $file->getFileUri();
 
       if (!$includePrivate && str_starts_with($uri, 'private://')) {
@@ -137,7 +143,8 @@ class AttachmentResolver {
       }
 
       $mime = (string) $file->getMimeType();
-      if ($allowedMime !== NULL && !isset($allowedMime[$mime])) {
+      if ($allowedMime !== NULL && !isset($allowedMime[$mime])
+        && !in_array($mime, $extraMimeByField[$fieldName] ?? [], TRUE)) {
         $this->logger->notice(
           'Mail attachment rejected: MIME @mime not in whitelist (file @fid, @name).',
           [
@@ -207,7 +214,10 @@ class AttachmentResolver {
    * files are dropped silently — those are not policy rejections, they
    * are "not an attachment candidate" at the type level.
    *
-   * @return list<\Drupal\file\FileInterface>
+   * @return array
+   *   Source field and file pairs, deduplicated by file ID.
+   *
+   * @phpstan-return list<array{0: string, 1: \Drupal\file\FileInterface}>
    */
   private function collectCandidates(ContentEntityInterface $entity, array $fieldNames): array {
     $out = [];
@@ -235,7 +245,7 @@ class AttachmentResolver {
               $fid = (int) $file->id();
               if (!isset($seen[$fid])) {
                 $seen[$fid] = TRUE;
-                $out[] = $file;
+                $out[] = [$fieldName, $file];
               }
             }
           }
@@ -247,7 +257,7 @@ class AttachmentResolver {
         $fid = (int) $referenced->id();
         if (!isset($seen[$fid])) {
           $seen[$fid] = TRUE;
-          $out[] = $referenced;
+          $out[] = [$fieldName, $referenced];
         }
       }
     }

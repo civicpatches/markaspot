@@ -28,7 +28,7 @@ use Psr\Log\LoggerInterface;
 final class AttachmentResolverTest extends UnitTestCase {
 
   /**
-   *
+   * Master switch disabled returns empty.
    */
   public function testMasterSwitchDisabledReturnsEmpty(): void {
     $resolver = $this->buildResolver(['enabled' => FALSE]);
@@ -37,7 +37,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Missing field is silently skipped.
    */
   public function testMissingFieldIsSilentlySkipped(): void {
     $resolver = $this->buildResolver();
@@ -46,7 +46,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Empty field is silently skipped.
    */
   public function testEmptyFieldIsSilentlySkipped(): void {
     $resolver = $this->buildResolver();
@@ -55,7 +55,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Temporary file is skipped.
    */
   public function testTemporaryFileIsSkipped(): void {
     $resolver = $this->buildResolver();
@@ -65,7 +65,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Non file referenced entity is skipped.
    */
   public function testNonFileReferencedEntityIsSkipped(): void {
     $resolver = $this->buildResolver();
@@ -75,7 +75,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Permanent public file is resolved.
    */
   public function testPermanentPublicFileIsResolved(): void {
     $resolver = $this->buildResolver();
@@ -90,7 +90,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Private scheme blocked by default.
    */
   public function testPrivateSchemeBlockedByDefault(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -104,7 +104,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Private scheme allowed when opted in.
    */
   public function testPrivateSchemeAllowedWhenOptedIn(): void {
     $resolver = $this->buildResolver();
@@ -120,7 +120,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Mime whitelist rejects unlisted mime.
    */
   public function testMimeWhitelistRejectsUnlistedMime(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -137,7 +137,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Empty allowed mime list disables mime gate.
    */
   public function testEmptyAllowedMimeListDisablesMimeGate(): void {
     // Empty list is policy: MIME gate off. Operators must flip 'enabled'
@@ -149,7 +149,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Per file cap exceeded is rejected.
    */
   public function testPerFileCapExceededIsRejected(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -166,7 +166,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Budget exhausted stops and logs aggregate.
    */
   public function testBudgetExhaustedStopsAndLogsAggregate(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -184,13 +184,13 @@ final class AttachmentResolverTest extends UnitTestCase {
     $third = $this->buildFile(id: 3, filename: 'c.jpg', size: 800);
     $entity = $this->buildEntity(['field_request_image' => [$first, $second, $third]]);
     $result = $resolver->resolve($entity, ['field_request_image']);
-    // First fits (800 &lt;= 1500), second would bring us to 1600 &gt; 1500 — stop.
+    // First fits (800 <= 1500); the second exceeds the budget (1600 > 1500).
     $this->assertCount(1, $result);
     $this->assertSame('a.jpg', $result[0]->filename);
   }
 
   /**
-   *
+   * Inclusive budget check allows exact fit.
    */
   public function testInclusiveBudgetCheckAllowsExactFit(): void {
     $resolver = $this->buildResolver([
@@ -205,7 +205,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Unknown size treated as worst case.
    */
   public function testUnknownSizeTreatedAsWorstCase(): void {
     // NULL size books perFileCap against the budget, so one unknown-size
@@ -218,14 +218,14 @@ final class AttachmentResolverTest extends UnitTestCase {
     $small = $this->buildFile(id: 2, filename: 'tiny.jpg', size: 100);
     $entity = $this->buildEntity(['field_request_image' => [$nullSize, $small]]);
     $result = $resolver->resolve($entity, ['field_request_image']);
-    // First books 1000 (cap). Second needs 100, 1000+100=1100 &lt;= 1500 — fits.
+    // First books 1000 (cap). Second needs 100; 1100 fits the 1500 budget.
     $this->assertCount(2, $result);
     $this->assertNull($result[0]->filesize);
     $this->assertSame(100, $result[1]->filesize);
   }
 
   /**
-   *
+   * Field order preserved across multiple fields.
    */
   public function testFieldOrderPreservedAcrossMultipleFields(): void {
     $resolver = $this->buildResolver();
@@ -243,6 +243,49 @@ final class AttachmentResolverTest extends UnitTestCase {
     // First-come-first-serve: field order determines attachment order.
     $this->assertSame('photo.jpg', $result[0]->filename);
     $this->assertSame('report.pdf', $result[1]->filename);
+  }
+
+  /**
+   * Field exceptions retain private opt-in and first-seen deduplication.
+   */
+  public function testFieldMimeExceptionKeepsOtherGates(): void {
+    $resolver = $this->buildResolver();
+    $mime = 'application/vnd.ms-excel';
+    $file = $this->buildFile(mime: $mime, uri: 'private://provider.xls');
+    $entity = $this->buildEntity([
+      'field_attachment' => [$file],
+      'field_sp_attachment' => [$file, $file],
+    ]);
+    $extra = ['field_sp_attachment' => [$mime]];
+    $this->assertSame([], $resolver->resolve(
+      $entity, ['field_sp_attachment'], extraMimeByField: $extra,
+    ));
+    $this->assertCount(1, $resolver->resolve(
+      $entity, ['field_sp_attachment'], includePrivate: TRUE, extraMimeByField: $extra,
+    ));
+    // A duplicate reference retains the first source field's policy.
+    $this->assertSame([], $resolver->resolve(
+      $entity, ['field_attachment', 'field_sp_attachment'],
+      includePrivate: TRUE, extraMimeByField: $extra,
+    ));
+    $this->assertCount(1, $resolver->resolve(
+      $entity, ['field_sp_attachment', 'field_attachment'],
+      includePrivate: TRUE, extraMimeByField: $extra,
+    ));
+  }
+
+  /**
+   * Empty shared allowlists still disable MIME filtering for every field.
+   */
+  public function testEmptyAllowlistWithFieldExceptions(): void {
+    $resolver = $this->buildResolver(['allowed_mime' => []]);
+    $entity = $this->buildEntity([
+      'field_attachment' => [$this->buildFile(mime: 'application/x-custom')],
+    ]);
+    $this->assertCount(1, $resolver->resolve(
+      $entity, ['field_attachment'],
+      extraMimeByField: ['field_sp_attachment' => ['application/vnd.ms-excel']],
+    ));
   }
 
   /**
@@ -308,8 +351,7 @@ final class AttachmentResolverTest extends UnitTestCase {
   }
 
   /**
-   * Helper: builds a ContentEntityInterface mock whose hasField/get
-   * responds according to the provided field → referenced-entities map.
+   * Builds an entity mock with fields mapped to referenced entities.
    *
    * Passing an empty array for a field produces an empty-list field
    * mock (isEmpty true). Omitting a field makes hasField return FALSE.

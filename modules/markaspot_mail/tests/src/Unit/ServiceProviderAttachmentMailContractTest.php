@@ -13,35 +13,26 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
- * Guards provider upload MIME support and preservation of tenant policies.
+ * Guards shared attachment defaults and preservation of tenant policies.
  */
 #[Group('markaspot_mail')]
 final class ServiceProviderAttachmentMailContractTest extends UnitTestCase {
 
   /**
-   * Every extension accepted by the provider upload has a mail MIME default.
+   * Shared defaults must not permit provider-only spreadsheet MIME types.
    */
-  public function testUploadExtensionsHaveMailMimeDefaults(): void {
-    $root = dirname(__DIR__, 5);
-    $field = Yaml::decode(file_get_contents($root . '/modules/service_request/config/install/field.field.node.service_request.field_sp_attachment.yml'));
-    $mimeByExtension = [
-      'pdf' => 'application/pdf',
-      'doc' => 'application/msword',
-      'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'xls' => 'application/vnd.ms-excel',
-      'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ];
-    foreach (explode(' ', $field['settings']['file_extensions']) as $extension) {
-      $this->assertArrayHasKey($extension, $mimeByExtension);
-      $this->assertContains($mimeByExtension[$extension], self::defaults()['allowed_mime']);
-    }
+  public function testSharedDefaultsExcludeSpreadsheets(): void {
+    $this->assertNotContains('application/vnd.ms-excel', self::defaults()['allowed_mime']);
+    $this->assertNotContains('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', self::defaults()['allowed_mime']);
+    require_once dirname(__DIR__, 3) . '/markaspot_mail.install';
+    $this->assertFalse(function_exists('markaspot_mail_update_10018'));
   }
 
   /**
-   * The update is additive only for shipped defaults, and is idempotent.
+   * Seeding fills missing defaults, preserves tenant policy and is idempotent.
    */
   #[DataProvider('policyCases')]
-  public function testUpdatePreservesTenantPolicy(array $initial, array $expected, int $saves): void {
+  public function testSeedPreservesTenantPolicy(array $initial, array $expected, int $saves): void {
     require_once dirname(__DIR__, 3) . '/markaspot_mail.install';
     $state = $initial;
     $config = $this->createMock(Config::class);
@@ -64,9 +55,9 @@ final class ServiceProviderAttachmentMailContractTest extends UnitTestCase {
     $container->set('config.factory', $factory);
     \Drupal::setContainer($container);
 
-    \markaspot_mail_update_10018();
+    \_markaspot_mail_seed_attachment_defaults();
     $this->assertSame($expected, $state);
-    \markaspot_mail_update_10018();
+    \_markaspot_mail_seed_attachment_defaults();
     $this->assertSame($expected, $state);
   }
 
@@ -75,12 +66,6 @@ final class ServiceProviderAttachmentMailContractTest extends UnitTestCase {
    */
   public static function policyCases(): iterable {
     $current = self::defaults();
-    $legacy = $current;
-    $legacy['allowed_mime'] = array_values(array_diff($current['allowed_mime'], [
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ]));
-    yield 'historic default' => [$legacy, $current, 1];
     yield 'current default' => [$current, $current, 0];
     yield 'absent defaults' => [[], $current, 1];
     $disabled = $current;
