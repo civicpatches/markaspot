@@ -32,6 +32,7 @@ use Drupal\markaspot_nuxt\Service\FrontendUrlService;
 use Drupal\markaspot_nuxt\Service\PublicUrlValidator;
 use Drupal\markaspot_passwordless\Service\BreakGlassOtpServiceInterface;
 use Drupal\markaspot_passwordless\Service\OtpService;
+use Drupal\markaspot_vision\Service\StaffAnalysisAccess;
 use Drupal\user\UserInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -158,6 +159,8 @@ class PasswordlessAuthController extends ControllerBase {
    *   Holds the tag-invalidated group slice of the status payload.
    * @param \Drupal\Core\Cache\CacheTagsChecksumInterface|null $cacheTagsChecksum
    *   Detects invalidations that overlap building that slice.
+   * @param \Drupal\markaspot_vision\Service\StaffAnalysisAccess|null $staffAnalysisAccess
+   *   The optional vision staff budget resolver.
    */
   public function __construct(
     OtpService $otp_service,
@@ -175,6 +178,7 @@ class PasswordlessAuthController extends ControllerBase {
     protected ?DemoStaffAccount $demoStaffAccount = NULL,
     protected ?CacheBackendInterface $authStatusCache = NULL,
     protected ?CacheTagsChecksumInterface $cacheTagsChecksum = NULL,
+    protected ?StaffAnalysisAccess $staffAnalysisAccess = NULL,
   ) {
     $this->otpService = $otp_service;
     $this->currentUser = $current_user;
@@ -189,6 +193,16 @@ class PasswordlessAuthController extends ControllerBase {
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container) {
+    $staff_analysis_access = NULL;
+    try {
+      if ($container->has('markaspot_vision.staff_analysis_access')) {
+        $staff_analysis_access = $container->get('markaspot_vision.staff_analysis_access');
+      }
+    }
+    catch (\Throwable) {
+      // Optional vision failures must not break status or grant staff budgets.
+    }
+
     return new static(
       $container->get('markaspot_passwordless.otp'),
       $container->get('current_user'),
@@ -207,6 +221,7 @@ class PasswordlessAuthController extends ControllerBase {
         ? $container->get('markaspot_fastmap.demo_staff_account') : NULL,
       $container->get('cache.default'),
       $container->get('cache_tags.invalidator.checksum'),
+      $staff_analysis_access,
     );
   }
 
@@ -731,12 +746,13 @@ class PasswordlessAuthController extends ControllerBase {
    */
   public function status(Request $request): JsonResponse {
     $account = $this->currentUser;
-    // This account capability stays outside the cached group slice. The
-    // frontend must also check the current jurisdiction's configured fields.
+    // These capabilities stay outside the cached group slice. For priority,
+    // the frontend also checks the current jurisdiction's configured fields.
     $capabilities = [
       'view_field_priority' => $account->isAuthenticated()
         && $account->hasPermission('view field_priority')
         && FieldConfig::loadByName('node', 'service_request', 'field_priority') !== NULL,
+      'vision_staff_budget' => $this->hasVisionStaffBudget($request),
     ];
 
     if ($account->isAuthenticated()) {
@@ -764,13 +780,29 @@ class PasswordlessAuthController extends ControllerBase {
       ]);
     }
 
-    // Permissions can be revoked at any time. Neither Drupal nor downstream
-    // HTTP caches may retain this response, even for the same account.
+    // Permissions and staff session eligibility can change at any time. Neither
+    // Drupal nor downstream HTTP caches may retain this response, even for the
+    // same account. Max-age zero also covers session and group dependencies.
     $response->addCacheableDependency((new CacheableMetadata())
       ->setCacheContexts(['user', 'user.permissions'])
       ->setCacheMaxAge(0));
     $response->headers->set('Cache-Control', 'private, no-store');
     return $response;
+  }
+
+  /**
+   * Exposes only the optional vision service's current staff budget decision.
+   */
+  protected function hasVisionStaffBudget(Request $request): bool {
+    try {
+      return $this->currentUser->isAuthenticated()
+        && $this->staffAnalysisAccess !== NULL
+        && $this->staffAnalysisAccess->getRateLimitIdentifier($request) !== NULL;
+    }
+    catch (\Throwable) {
+      // Fail closed without logging private identifiers or session details.
+      return FALSE;
+    }
   }
 
   /**
