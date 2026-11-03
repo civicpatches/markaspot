@@ -4,6 +4,7 @@ namespace Drupal\markaspot_vision\Form;
 
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Drupal\Core\Form\FormStateInterface;
@@ -339,6 +340,15 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
       '#required' => FALSE,
     ];
 
+    if (SovereignPolicy::enforced()) {
+      $form['service']['#description'] = $this->t('IONOS: fixed by the operator. Model: markaspot_ai.sovereign.vision_model. Missing models or failed required blur block analysis. Self-hosted image privacy preprocessing is allowed.');
+      foreach (['api_url', 'auth_type', 'api_key', 'ai_model'] as $key) {
+        $form['service'][$key]['#disabled'] = TRUE;
+      }
+      $form['service']['api_url']['#default_value'] = SovereignPolicy::API_URL . '/chat/completions';
+      $form['service']['auth_type']['#default_value'] = 'bearer';
+      $form['service']['ai_model']['#default_value'] = $this->configFactory->get('markaspot_ai.sovereign')->get('vision_model') ?? '';
+    }
     return parent::buildForm($form, $form_state);
   }
 
@@ -348,6 +358,9 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
   public function validateForm(array &$form, FormStateInterface $form_state) {
     parent::validateForm($form, $form_state);
 
+    if (SovereignPolicy::enforced()) {
+      return;
+    }
     $auth_type = $form_state->getValue('auth_type');
     $api_key = trim($form_state->getValue('api_key') ?? '');
     $api_url = $form_state->getValue('api_url');
@@ -374,6 +387,13 @@ class MarkaspotVisionSettingsForm extends ConfigFormBase {
    */
   public function submitForm(array &$form, FormStateInterface $form_state) {
     $config = $this->configFactory->getEditable('markaspot_vision.settings');
+
+    if (SovereignPolicy::enforced()) {
+      // Preserve dormant settings even for a forged form submission.
+      foreach (['api_url', 'auth_type', 'api_key', 'ai_model'] as $key) {
+        $form_state->setValue($key, $config->get($key));
+      }
+    }
 
     // Save basic settings.
     $config

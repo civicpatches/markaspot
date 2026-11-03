@@ -14,6 +14,7 @@ use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\markaspot_health\Plugin\HealthCheck\VisionEnvDriftCheck;
 use Drupal\Tests\UnitTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests the vision-env-drift detector.
@@ -446,6 +447,48 @@ class VisionEnvDriftCheckTest extends UnitTestCase {
     $this->assertFalse($result->passed);
     $this->assertSame('error', $result->severity);
     $this->assertStringContainsString('blur preprocessing is disabled', $result->message);
+  }
+
+  /**
+   * Sovereignty skips dormant credentials but retains every blur wiring check.
+   */
+  #[DataProvider('sovereignBlurStates')]
+  public function testSovereignBlurWiring(bool $enabled, string $url, string $key, bool $passed, string $message): void {
+    $previous = getenv('MARKASPOT_AI_SOVEREIGN');
+    putenv('MARKASPOT_AI_SOVEREIGN=ionos');
+    putenv("MARKASPOT_BLUR_API_KEY=$key");
+    try {
+      $config = $this->createConfig([
+        'api_key' => '',
+        'api_url' => '',
+        'enable_blur_preprocessing' => $enabled,
+        'blur_service_url' => $url,
+      ]);
+      $modules = $this->createMock(ModuleHandlerInterface::class);
+      $modules->method('moduleExists')->willReturn(TRUE);
+      $result = $this->createPlugin($this->createConfigFactory($config), $modules)->run(['ai_analysis_required' => TRUE]);
+      $this->assertSame($passed, $result->passed);
+      if (!$passed) {
+        $this->assertSame('error', $result->severity);
+      }
+      $this->assertStringContainsString($message, $result->message);
+    }
+    finally {
+      putenv($previous === FALSE ? 'MARKASPOT_AI_SOVEREIGN' : "MARKASPOT_AI_SOVEREIGN=$previous");
+    }
+  }
+
+  /**
+   * Valid blur is independent of the dormant Vision connection settings.
+   */
+  public static function sovereignBlurStates(): iterable {
+    yield 'disabled' => [FALSE, 'https://blur.example/blur', 'synthetic', FALSE, 'blur preprocessing is disabled'];
+    yield 'missing URL' => [TRUE, '', 'synthetic', FALSE, 'blur_service_url is empty'];
+    yield 'local default' => [
+      TRUE, 'http://markaspot-vision:8200/blur', 'synthetic', FALSE, 'local markaspot-vision default',
+    ];
+    yield 'missing bearer' => [TRUE, 'https://blur.example/blur', '', FALSE, 'no blur bearer'];
+    yield 'ready' => [TRUE, 'https://blur.example/blur', 'synthetic', TRUE, 'Blur wiring checks passed'];
   }
 
   /**

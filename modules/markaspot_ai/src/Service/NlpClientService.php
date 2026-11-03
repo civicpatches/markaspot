@@ -6,6 +6,7 @@ namespace Drupal\markaspot_ai\Service;
 
 use Psr\Http\Message\ResponseInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use GuzzleHttp\ClientInterface;
@@ -212,6 +213,9 @@ class NlpClientService {
    *   TRUE if the service responds with HTTP 200 and Ollama is available.
    */
   public function isAvailable(): bool {
+    if (SovereignPolicy::enforced()) {
+      return FALSE;
+    }
     try {
       $url = $this->getServiceUrl();
       $options = [
@@ -256,6 +260,9 @@ class NlpClientService {
    * @throws \GuzzleHttp\Exception\GuzzleException
    */
   protected function request(string $method, string $path, array $payload, int $timeout): ResponseInterface {
+    if (SovereignPolicy::enforced()) {
+      SovereignPolicy::block($this->logger, 'Local NLP is unavailable in IONOS mode.');
+    }
     $url = $this->getServiceUrl() . $path;
 
     $options = [

@@ -8,6 +8,7 @@ use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Url;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
 use Psr\Log\LoggerInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -740,6 +741,18 @@ class MarkaspotAiSettingsForm extends ConfigFormBase {
       ],
     ];
 
+    if (SovereignPolicy::enforced()) {
+      foreach (['provider' => 'default_provider', 'pii_redaction' => 'pii_provider'] as $section => $key) {
+        $form[$section][$key]['#default_value'] = 'ionos';
+        $form[$section][$key]['#disabled'] = TRUE;
+        $form[$section][$key]['#description'] = $this->t('IONOS: fixed by the operator.');
+      }
+      $form['sovereign_provider'] = [
+        '#type' => 'item',
+        '#title' => $this->t('Sovereign provider'),
+        '#plain_text' => $this->t('IONOS: fixed by the operator. Models are configured in markaspot_ai.sovereign. Local NLP is blocked. Self-hosted image privacy preprocessing is allowed.'),
+      ];
+    }
     return parent::buildForm($form, $form_state);
   }
 
@@ -747,6 +760,10 @@ class MarkaspotAiSettingsForm extends ConfigFormBase {
    * {@inheritdoc}
    */
   public function validateForm(array &$form, FormStateInterface $form_state): void {
+    if (SovereignPolicy::enforced()) {
+      $form_state->setValue('default_provider', 'ionos');
+      $form_state->setValue('pii_provider', 'ionos');
+    }
     parent::validateForm($form, $form_state);
 
     // Validate similarity threshold.
@@ -838,6 +855,11 @@ class MarkaspotAiSettingsForm extends ConfigFormBase {
    */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
     $config = $this->config('markaspot_ai.settings');
+    if (SovereignPolicy::enforced()) {
+      // Preserve dormant selections for when the operator removes the policy.
+      $form_state->setValue('default_provider', $config->get('default_provider'));
+      $form_state->setValue('pii_provider', $config->get('pii_redaction.provider'));
+    }
 
     // Save default provider.
     $config->set('default_provider', $form_state->getValue('default_provider'));

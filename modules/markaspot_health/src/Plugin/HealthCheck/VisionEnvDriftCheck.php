@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace Drupal\markaspot_health\Plugin\HealthCheck;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\markaspot_health\HealthCheckPluginBase;
 use Drupal\markaspot_health\HealthCheckResult;
 use Symfony\Component\DependencyInjection\ContainerInterface;
+
+// The standalone policy is available when the AI module is disabled.
+require_once dirname(__DIR__, 4) . '/markaspot_ai/src/Utility/SovereignPolicy.php';
 
 /**
  * Detects markaspot_vision running without ENV overrides applied.
@@ -89,24 +93,26 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
     }
     $failureSeverity = $aiAnalysisRequired ? 'error' : $this->severity();
 
-    $apiKey = trim((string) $config->get('api_key'));
-    if ($apiKey === '') {
-      return $this->failWithSeverity(
-        $failureSeverity,
-        1,
-        'markaspot_vision.settings.api_key is empty at runtime; ' .
-        'MARKASPOT_VISION_API_KEY is not active.',
-      );
-    }
+    if (!SovereignPolicy::enforced()) {
+      $apiKey = trim((string) $config->get('api_key'));
+      if ($apiKey === '') {
+        return $this->failWithSeverity(
+          $failureSeverity,
+          1,
+          'markaspot_vision.settings.api_key is empty at runtime; ' .
+          'MARKASPOT_VISION_API_KEY is not active.',
+        );
+      }
 
-    $apiUrl = trim((string) $config->get('api_url'));
-    if ($apiUrl === '') {
-      return $this->failWithSeverity(
-        $failureSeverity,
-        1,
-        'markaspot_vision.settings.api_url is empty at runtime; ' .
-        'MARKASPOT_VISION_API_URL is not active.',
-      );
+      $apiUrl = trim((string) $config->get('api_url'));
+      if ($apiUrl === '') {
+        return $this->failWithSeverity(
+          $failureSeverity,
+          1,
+          'markaspot_vision.settings.api_url is empty at runtime; ' .
+          'MARKASPOT_VISION_API_URL is not active.',
+        );
+      }
     }
 
     if ($aiAnalysisRequired) {
@@ -157,6 +163,10 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
       $message = trim((string) getenv('MARKASPOT_BLUR_API_KEY')) !== ''
         ? 'markaspot_vision and blur ENV overrides are active for AI analysis.'
         : 'markaspot_vision ENV override is active; blur bearer uses AI_API_KEY.';
+    }
+    if (SovereignPolicy::enforced()) {
+      $message = 'Legacy Vision connection settings are inactive; see AI provider sovereignty for IONOS status.'
+        . ($aiAnalysisRequired ? ' Blur wiring checks passed.' : ' AI analysis does not require blur wiring checks.');
     }
     return $this->pass($message);
   }

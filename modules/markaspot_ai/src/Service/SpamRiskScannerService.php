@@ -264,7 +264,8 @@ class SpamRiskScannerService {
     // The privacy contract (and operator docs) state samples go only to
     // Anthropic; falling back to the configured default_provider would silently
     // route to OpenAI/Azure/IONOS. An explicit non-empty $provider override is
-    // still honoured for ad-hoc operator runs.
+    // still honoured for ad-hoc operator runs. The operator sovereignty policy
+    // in AiClientService takes precedence over both selections.
     $effectiveProvider = $provider !== NULL && $provider !== '' ? $provider : 'anthropic';
 
     try {

@@ -15,6 +15,8 @@ use Drupal\markaspot_ai\Service\EmbeddingService;
 use Drupal\markaspot_ai\Service\SentimentService;
 use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\Tests\UnitTestCase;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
+use Drupal\markaspot_vision\Service\ImageProcessingService;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
@@ -110,6 +112,66 @@ class SelfTestCommandTest extends UnitTestCase {
       putenv($previous === FALSE ? 'MARKASPOT_AI_API_URL' : 'MARKASPOT_AI_API_URL=' . $previous);
       foreach ($blur_env as $name => $value) {
         putenv($value === FALSE ? $name : "$name=$value");
+      }
+    }
+  }
+
+  /**
+   * Sovereign diagnostics expose the blocked model and ignore legacy hosts.
+   */
+  public function testSovereignMissingVisionModel(): void {
+    $saved = [];
+    foreach ([
+      'MARKASPOT_AI_SOVEREIGN' => 'ionos',
+      'MARKASPOT_AI_API_URL' => 'https://legacy.example/v1',
+      'MARKASPOT_VISION_API_URL' => 'https://legacy-vision.example/v1',
+    ] as $key => $value) {
+      $saved[$key] = getenv($key);
+      putenv("$key=$value");
+    }
+    try {
+      $client = $this->createMock(AiClientService::class);
+      $client->method('resolveChatModel')->willReturn('chat');
+      $client->method('resolveEmbeddingModel')->willReturn('embed');
+      $answer = ['choices' => [['message' => ['content' => '{"ok":true}']]]];
+      $client->expects($this->exactly(2))->method('chat')->willReturn($answer);
+      $client->expects($this->once())->method('embed')->willReturn([
+        'model' => 'embed', 'data' => [['embedding' => [0.1]]],
+      ]);
+      $vision = $this->createMock(ImageProcessingService::class);
+      $vision->method('getBlurMode')->willReturn('off');
+      $vision->expects($this->once())->method('selfTest')->willThrowException(new \RuntimeException('No IONOS model configured for vision.'));
+      $modules = $this->createMock(ModuleHandlerInterface::class);
+      $modules->method('moduleExists')->willReturn(TRUE);
+      $factory = $this->getConfigFactoryStub([
+        'markaspot_ai.settings' => [
+          'default_provider' => 'azure',
+          'providers' => ['ionos' => ['api_url' => SovereignPolicy::API_URL]],
+        ],
+        'markaspot_ai.sovereign' => ['vision_model' => ''],
+        'markaspot_vision.settings' => ['api_url' => 'https://dormant.example/v1', 'ai_model' => 'dormant'],
+      ]);
+      $output = new BufferedOutput();
+      $command = new MarkaspotAiCommands(
+        $this->createMock(EntityTypeManagerInterface::class),
+        $this->createMock(QueueFactory::class),
+        $this->createMock(QueueWorkerManagerInterface::class),
+        $this->createMock(EmbeddingService::class),
+        $this->createMock(SentimentService::class),
+        $this->createMock(Connection::class),
+        NULL, $client, $this->createMock(TokenTrackingService::class), $factory, $modules, $vision,
+      );
+      $command->setOutput($output);
+      $this->assertSame(1, $command->selftest());
+      $text = $output->fetch();
+      $this->assertStringContainsString('provider=ionos model=chat host=openai.inference.de-txl.ionos.com', $text);
+      $this->assertStringContainsString('vision model=[blocked: missing model] host=openai.inference.de-txl.ionos.com', $text);
+      $this->assertStringNotContainsString('legacy', $text);
+      $this->assertStringNotContainsString('dormant', $text);
+    }
+    finally {
+      foreach ($saved as $key => $value) {
+        putenv($value === FALSE ? $key : "$key=$value");
       }
     }
   }

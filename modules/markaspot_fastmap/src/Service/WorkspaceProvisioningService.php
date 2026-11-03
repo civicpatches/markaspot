@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_fastmap\Service;
 
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\service_request\RevisionLog;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -2997,6 +2998,10 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
   private function isAiConfigured(): bool {
     if ($this->aiClient === NULL) {
       return FALSE;
+    }
+
+    if (SovereignPolicy::enforced()) {
+      return SovereignPolicy::apiKey($this->configFactory) !== '';
     }
 
     if (getenv('MARKASPOT_AI_API_KEY')) {

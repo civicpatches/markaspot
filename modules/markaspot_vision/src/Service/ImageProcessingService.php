@@ -19,6 +19,7 @@ use Drupal\media\MediaInterface;
 use GuzzleHttp\ClientInterface;
 use Psr\Log\LoggerInterface;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
 use Drupal\Core\State\StateInterface;
 use Drupal\Component\Datetime\TimeInterface;
@@ -34,6 +35,7 @@ if (!class_exists(BlurAdvisory::class) && is_file(dirname(__DIR__, 3) . '/markas
   require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/BlurAdvisory.php';
 }
 require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/ProviderError.php';
+require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/SovereignPolicy.php';
 
 /**
  * Service for processing images using AI vision APIs.
@@ -365,7 +367,7 @@ class ImageProcessingService {
       $request_options['multipart'][] = ['name' => 'mode', 'contents' => $mode];
     }
 
-    if ($this->isBlurRequired()) {
+    if ($this->isBlurRequired() || SovereignPolicy::enforced()) {
       $request_options['allow_redirects'] = FALSE;
     }
 
@@ -591,9 +593,6 @@ class ImageProcessingService {
     $config = $this->configFactory->get('markaspot_vision.settings');
     $prompt_template = $config->get('image_prompt');
 
-    // Get the API configuration.
-    $api_config = $this->getApiConfig($config);
-
     try {
       // Process all images together.
       $image_data = [];
@@ -676,6 +675,10 @@ class ImageProcessingService {
       if (empty($image_data)) {
         throw new \Exception('No images could be prepared for AI analysis.');
       }
+
+      // Privacy preprocessing is independent of model availability. A missing
+      // sovereign Vision model still fails closed after the blur has run.
+      $api_config = $this->getApiConfig($config);
 
       $categories = $this->getAllCategoriesHierarchical($jurisdictionId, $langcode);
       $category_json = json_encode($categories, JSON_UNESCAPED_UNICODE);
@@ -1046,18 +1049,23 @@ class ImageProcessingService {
    *   When max retries are reached or a non-recoverable error occurs.
    */
   protected function sendRequestWithRetry(array $api_config, array $request_payload, int $max_retries = 3): array {
-    // Imported enrichment must not repeat a submission with an uncertain result.
+    SovereignPolicy::assertEndpoint($api_config['url'], $this->logger);
+    // Imported enrichment must not repeat an uncertain submission.
     if ($this->accountingOptions !== []) {
       $max_retries = 1;
     }
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {
       try {
-        $response = $this->httpClient->post($api_config['url'], [
+        $request_options = [
           'headers' => $api_config['headers'],
           'json' => $request_payload,
           'http_errors' => FALSE,
-        ]);
+        ];
+        if (SovereignPolicy::enforced()) {
+          $request_options['allow_redirects'] = FALSE;
+        }
+        $response = $this->httpClient->post($api_config['url'], $request_options);
         $status = $response->getStatusCode();
         $body = (string) $response->getBody();
         if ($status === 400 && !$adapted && $this->adaptRejectedParameter($request_payload, (array) json_decode($body, TRUE), $api_config)) {
@@ -1373,6 +1381,16 @@ class ImageProcessingService {
    *   The API configuration array containing url, model, and headers.
    */
   protected function getApiConfig(ImmutableConfig $config): array {
+    if (SovereignPolicy::enforced()) {
+      return [
+        'url' => SovereignPolicy::endpoint($this->configFactory, 'chat/completions', $this->logger),
+        'model' => SovereignPolicy::model($this->configFactory, 'vision', $this->logger),
+        'headers' => [
+          'Content-Type' => 'application/json',
+          'Authorization' => 'Bearer ' . SovereignPolicy::apiKey($this->configFactory),
+        ],
+      ];
+    }
     $auth_type = getenv('MARKASPOT_VISION_AUTH_TYPE') ?: $config->get('auth_type') ?? 'bearer';
     $api_key = $this->resolveApiKey($config);
     // ENV takes priority over config and allows per-instance overrides without

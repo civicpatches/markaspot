@@ -2,6 +2,13 @@
 
 namespace Drupal\Tests\markaspot_vision\Unit;
 
+use Drupal\Component\Datetime\TimeInterface;
+use Drupal\Core\File\FileSystemInterface;
+use Drupal\Core\State\StateInterface;
+use Drupal\image\ImageStyleInterface;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Response;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -699,6 +706,74 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $response = $this->controller->getAIResults($request);
 
     $this->assertEquals(200, $response->getStatusCode());
+  }
+
+  /**
+   * Required blur runs even without a Vision model; held media stays held.
+   */
+  public function testSovereignMissingVisionModelKeepsMediaHeldAfterBlur(): void {
+    $saved = [];
+    foreach ([
+      'MARKASPOT_AI_SOVEREIGN' => 'ionos',
+      'MARKASPOT_BLUR_REQUIRED' => '1',
+      'MARKASPOT_BLUR_URL' => 'https://blur.example/blur',
+      'MARKASPOT_BLUR_API_KEY' => 'synthetic-blur-key',
+    ] as $key => $value) {
+      $saved[$key] = getenv($key);
+      putenv("$key=$value");
+    }
+    $path = tempnam(sys_get_temp_dir(), 'sovereign-held-');
+    $bytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=');
+    file_put_contents($path, $bytes);
+    try {
+      $factory = $this->getConfigFactoryStub([
+        'markaspot_ai.settings' => ['providers' => ['ionos' => ['api_url' => SovereignPolicy::API_URL]]],
+        'markaspot_ai.sovereign' => ['vision_model' => ''],
+        'markaspot_vision.settings' => ['enable_blur_preprocessing' => FALSE],
+      ]);
+      $style = $this->createMock(ImageStyleInterface::class);
+      $style->method('buildUri')->willReturn($path);
+      $storage = $this->createMock(EntityStorageInterface::class);
+      $storage->method('load')->with('ai_analysis')->willReturn($style);
+      $entities = $this->createMock(EntityTypeManagerInterface::class);
+      $entities->method('getStorage')->with('image_style')->willReturn($storage);
+      $http = $this->createMock(Client::class);
+      $blurRequest = [];
+      $http->expects($this->once())->method('post')->willReturnCallback(function ($url, $options) use ($bytes, &$blurRequest): Response {
+        $blurRequest = [$url, $options];
+        return new Response(200, ['X-Image-Blurred' => 'true'], $bytes);
+      });
+      $http->expects($this->never())->method('request');
+      $logs = $this->createMock(LoggerChannelFactoryInterface::class);
+      $logs->method('get')->willReturn($this->logger);
+      $images = new ImageProcessingService(
+        $http, $factory, $entities, $this->createMock(FileSystemInterface::class),
+        $logs, $this->createMock(StateInterface::class), $this->createMock(TimeInterface::class),
+      );
+      (new \ReflectionProperty($this->controller, 'imageProcessingService'))->setValue($this->controller, $images);
+      $this->flood->method('isAllowed')->willReturn(TRUE);
+      $media = $this->createMockMedia(1, fileUri: $path);
+      $media->method('isPublished')->willReturn(FALSE);
+      $media->expects($this->never())->method('setPublished');
+      $media->expects($this->never())->method('save');
+      $this->mediaStorage->method('loadByProperties')->willReturn([1 => $media]);
+      $errors = [];
+      $this->logger->method('error')->willReturnCallback(static function ($message, $context = []) use (&$errors): void {
+        $errors[] = strtr($message, $context);
+      });
+      $response = $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]));
+      $this->assertSame(500, $response->getStatusCode());
+      $this->assertSame('https://blur.example/blur', $blurRequest[0]);
+      $this->assertFalse($blurRequest[1]['allow_redirects']);
+      $this->assertSame($bytes, $blurRequest[1]['multipart'][0]['contents']);
+      $this->assertStringContainsString('No IONOS model configured for vision', implode("\n", $errors));
+    }
+    finally {
+      unlink($path);
+      foreach ($saved as $key => $value) {
+        putenv($value === FALSE ? $key : "$key=$value");
+      }
+    }
   }
 
   /**

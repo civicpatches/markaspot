@@ -11,6 +11,7 @@
 declare(strict_types=1);
 
 use Drupal\service_request\RevisionLog;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Database\Query\AlterableInterface;
 use Drupal\Core\Database\Query\SelectInterface;
 use Drupal\Core\Entity\EntityInterface;
@@ -97,7 +98,7 @@ function markaspot_ai_node_presave(NodeInterface $node): void {
     // PII defaults to 'ionos' (EU/DE residency), unlike embeddings which
     // default to 'openai'. The key is resolved here as a pre-flight check;
     // AiClientService::chat() resolves its own key internally.
-    $provider = $config->get('pii_redaction.provider') ?: $config->get('default_provider') ?: 'ionos';
+    $provider = SovereignPolicy::provider($config->get('pii_redaction.provider') ?: $config->get('default_provider') ?: 'ionos');
     $provider_config = $config->get('providers.' . $provider) ?? [];
     $api_key = _markaspot_ai_resolve_provider_key($provider, $provider_config);
 
@@ -1026,6 +1027,10 @@ function _markaspot_ai_internal_remark_author_uid(int $current_uid): ?int {
  *   A failed result means the text was NOT screened.
  */
 function _markaspot_ai_detect_names_via_llm(string $text, string $provider, string $api_key, string $node_key): NameScreeningResult {
+  if (SovereignPolicy::enforced()) {
+    $provider = 'ionos';
+    $api_key = SovereignPolicy::apiKey(\Drupal::configFactory());
+  }
   // Self-hosted primary path: skip the OpenAI-compatible client entirely and
   // speak the Phi-3 container's native REST dialect. No fallback — if the
   // admin explicitly chose local_nlp, they don't want silent fail-over to an
@@ -1066,20 +1071,27 @@ PROMPT;
         return NameScreeningResult::withNames($names);
       }
       // An answer without a parseable names_found list is not a clean result.
-      \Drupal::logger('markaspot_ai')->warning('PII primary provider (@provider) returned an unusable answer for @key, trying NLP fallback.', [
+      \Drupal::logger('markaspot_ai')->warning('PII primary provider (@provider) returned an unusable answer for @key, @next.', [
         '@provider' => $provider,
         '@key' => $node_key,
+        '@next' => SovereignPolicy::enforced() ? 'no fallback permitted' : 'trying NLP fallback',
       ]);
     }
     catch (\Exception $e) {
       // Provider exception messages can echo the submitted text: log the
       // class only.
-      \Drupal::logger('markaspot_ai')->warning('PII primary provider (@provider) failed for @key (@class), trying NLP fallback.', [
+      \Drupal::logger('markaspot_ai')->warning('PII primary provider (@provider) failed for @key (@class), @next.', [
         '@provider' => $provider,
         '@key' => $node_key,
+        '@next' => SovereignPolicy::enforced() ? 'no fallback permitted' : 'trying NLP fallback',
         '@class' => (new \ReflectionClass($e))->getShortName(),
       ]);
     }
+  }
+
+  if (SovereignPolicy::enforced()) {
+    \Drupal::logger('markaspot_ai')->error('AI provider sovereignty: IONOS name screening failed; NLP fallback blocked.');
+    return NameScreeningResult::failed(NameScreeningResult::REASON_UNAVAILABLE);
   }
 
   // Fallback: local NLP service (self-hosted, so never a step towards an
@@ -1228,6 +1240,9 @@ function _markaspot_ai_validate_names(array $raw): ?array {
  *   The API key, or empty string if not configured.
  */
 function _markaspot_ai_resolve_provider_key(string $provider, array $provider_config): string {
+  if (SovereignPolicy::enforced()) {
+    return SovereignPolicy::apiKey(\Drupal::configFactory());
+  }
   $env_vars = match ($provider) {
     'openai' => ['OPENAI_API_KEY', 'MARKASPOT_AI_OPENAI_KEY'],
     'azure' => ['AZURE_OPENAI_API_KEY', 'MARKASPOT_AI_AZURE_KEY'],

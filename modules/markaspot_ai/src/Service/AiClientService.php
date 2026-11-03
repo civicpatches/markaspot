@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\markaspot_ai\Service;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use GuzzleHttp\ClientInterface;
@@ -169,10 +170,13 @@ class AiClientService {
     }
 
     $config = $this->getConfig();
-    $provider = $options['provider'] ?? $config->get('default_provider') ?? 'openai';
+    $provider = SovereignPolicy::provider($options['provider'] ?? $config->get('default_provider') ?? 'openai');
     $provider_config = $config->get("providers.{$provider}") ?? [];
 
-    $model = $this->resolveChatModel($options['model'] ?? NULL, $provider);
+    $model = $this->resolveChatModel($options['model'] ?? NULL, $provider, $messages);
+    if (SovereignPolicy::enforced()) {
+      $provider_config['auth_type'] = 'bearer';
+    }
     if ($provider === 'anthropic') {
       return $this->chatAnthropic($messages, $provider_config, $model, $options);
     }
@@ -210,9 +214,20 @@ class AiClientService {
   }
 
   /**
-   * Resolves a chat model from an override, provider config, or the default.
+   * Resolves the effective text or image model for dispatch and reporting.
    */
-  public function resolveChatModel(?string $override = NULL, ?string $provider = NULL): string {
+  public function resolveChatModel(?string $override = NULL, ?string $provider = NULL, array $messages = []): string {
+    if (SovereignPolicy::enforced()) {
+      $feature = 'chat';
+      foreach ($messages as $message) {
+        foreach (is_array($message['content'] ?? NULL) ? $message['content'] : [] as $part) {
+          if (in_array($part['type'] ?? '', ['image_url', 'image'], TRUE)) {
+            $feature = 'vision';
+          }
+        }
+      }
+      return SovereignPolicy::model($this->configFactory, $feature, $this->logger);
+    }
     $provider ??= $this->getConfig()->get('default_provider') ?? 'openai';
     return trim($override ?? '') !== '' ? $override : (($this->getConfig()->get("providers.{$provider}")['chat_model'] ?? NULL) ?: self::DEFAULT_CHAT_MODEL);
   }
@@ -221,6 +236,9 @@ class AiClientService {
    * Resolves the embedding model consistently for requests and stored vectors.
    */
   public function resolveEmbeddingModel(?string $override = NULL, ?string $provider = NULL): string {
+    if (SovereignPolicy::enforced()) {
+      return SovereignPolicy::model($this->configFactory, 'embedding', $this->logger);
+    }
     $provider ??= $this->getConfig()->get('default_provider') ?? 'openai';
     return trim($override ?? '') !== '' ? $override : (($this->getConfig()->get("providers.{$provider}")['embedding_model'] ?? NULL) ?: self::DEFAULT_EMBEDDING_MODEL);
   }
@@ -335,7 +353,7 @@ class AiClientService {
     }
 
     $config = $this->getConfig();
-    $provider = $options['provider'] ?? $config->get('default_provider') ?? 'openai';
+    $provider = SovereignPolicy::provider($options['provider'] ?? $config->get('default_provider') ?? 'openai');
     $provider_config = $config->get("providers.{$provider}") ?? [];
     if ($provider === 'anthropic') {
       throw new \InvalidArgumentException(
@@ -344,6 +362,9 @@ class AiClientService {
     }
 
     $model = $this->resolveEmbeddingModel($options['model'] ?? NULL, $provider);
+    if (SovereignPolicy::enforced()) {
+      $provider_config['auth_type'] = 'bearer';
+    }
     $endpoint = $this->buildEndpoint($provider, $provider_config, $model, 'embeddings');
 
     $headers = $this->buildAuthHeaders(
@@ -500,6 +521,9 @@ class AiClientService {
    *   The fully constructed endpoint URL.
    */
   protected function buildEndpoint(string $provider, array $providerConfig, string $model, string $operation): string {
+    if (SovereignPolicy::enforced()) {
+      return SovereignPolicy::endpoint($this->configFactory, $operation, $this->logger);
+    }
     $api_url = rtrim(
       getenv('MARKASPOT_AI_API_URL') ?: $providerConfig['api_url'] ?? 'https://api.openai.com/v1',
       '/'
@@ -668,6 +692,10 @@ class AiClientService {
       $options['json'] = $payload;
     }
 
+    SovereignPolicy::assertEndpoint($url, $this->logger);
+    if (SovereignPolicy::enforced()) {
+      $options['allow_redirects'] = FALSE;
+    }
     try {
       $response = $this->httpClient->request($method, $url, $options);
     }
@@ -864,6 +892,9 @@ class AiClientService {
    *   The resolved API key, or empty string if not found.
    */
   protected function resolveApiKey(string $provider, array $providerConfig): string {
+    if (SovereignPolicy::enforced()) {
+      return SovereignPolicy::apiKey($this->configFactory);
+    }
     // Stage 1: canonical ENV (#309 schema).
     $canonical = getenv('MARKASPOT_AI_API_KEY');
     if (is_string($canonical) && $canonical !== '') {

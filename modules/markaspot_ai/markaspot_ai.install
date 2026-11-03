@@ -899,3 +899,16 @@ function markaspot_ai_update_11903(array &$sandbox): string {
     $sandbox['deleted'],
   );
 }
+
+/**
+ * Adds model defaults for the opt-in sovereign provider policy.
+ */
+function markaspot_ai_update_11904(): string {
+  $config = \Drupal::configFactory()->getEditable('markaspot_ai.sovereign');
+  if ($config->isNew()) {
+    $path = \Drupal::service('extension.list.module')->getPath('markaspot_ai');
+    $defaults = Yaml::decode(file_get_contents($path . '/config/install/markaspot_ai.sovereign.yml'));
+    $config->setData($defaults)->save();
+  }
+  return 'Sovereign IONOS model configuration installed; operator policy remains unchanged.';
+}

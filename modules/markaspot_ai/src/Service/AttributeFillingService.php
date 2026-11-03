@@ -297,9 +297,8 @@ class AttributeFillingService {
     // Get model from config.
     $config = $this->configFactory->get('markaspot_ai.settings');
     $provider = $config->get('default_provider') ?? 'openai';
-    $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider);
-
     try {
+      $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider, $messages);
       $response = $this->aiClient->chat(
         $messages,
         [
@@ -326,6 +325,7 @@ class AttributeFillingService {
 
         // Retry without images.
         $messages[1]['content'] = [['type' => 'text', 'text' => $userText]];
+        $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider, $messages);
         $response = $this->aiClient->chat($messages, [
           'model' => $model,
           'temperature' => 0.3,
@@ -498,9 +498,8 @@ class AttributeFillingService {
 
     $config = $this->configFactory->get('markaspot_ai.settings');
     $provider = $config->get('default_provider') ?? 'openai';
-    $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider);
-
     try {
+      $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider, $messages);
       $response = $this->aiClient->chat($messages, [
         'model' => $model,
         'temperature' => 0.3,
@@ -1527,9 +1526,8 @@ class AttributeFillingService {
     // --- Call LLM ---
     $config = $this->configFactory->get('markaspot_ai.settings');
     $provider = $config->get('default_provider') ?? 'openai';
-    $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider);
-
     try {
+      $model = $this->aiClient->resolveChatModel($config->get('attribute_filling.model'), $provider, $messages);
       $response = $this->aiClient->chat($messages, [
         'model' => $model,
         'temperature' => 0.3,

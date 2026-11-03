@@ -7,6 +7,7 @@ namespace Drupal\markaspot_ai\Drush\Commands;
 use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
 use Drupal\Core\Database\Connection;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -60,14 +61,25 @@ class MarkaspotAiCommands extends DrushCommands {
       throw new \RuntimeException('AI self-test services are unavailable.');
     }
     $config = $this->configFactory->get('markaspot_ai.settings');
-    $provider = ($options['provider'] ?? NULL) ?: ($config->get('default_provider') ?? 'openai');
+    $provider = SovereignPolicy::provider(($options['provider'] ?? NULL) ?: ($config->get('default_provider') ?? 'openai'));
     $provider_config = $config->get("providers.{$provider}");
     if (!is_array($provider_config)) {
       $this->output()->writeln('provider: http 0: unknown provider');
       return 1;
     }
-    $model = $this->aiClient->resolveChatModel(NULL, $provider);
+    try {
+      $model = $this->aiClient->resolveChatModel(NULL, $provider);
+    }
+    catch (\RuntimeException $e) {
+      // In sovereign mode a missing IONOS chat model blocks AI by design;
+      // report it like the other blocked checks instead of aborting.
+      $this->output()->writeln('provider=' . $provider . ' model=[blocked] ' . $e->getMessage());
+      return 1;
+    }
     $url = getenv('MARKASPOT_AI_API_URL') ?: ($provider_config['api_url'] ?? ($provider === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'));
+    if (SovereignPolicy::enforced()) {
+      $url = (string) $config->get('providers.ionos.api_url');
+    }
     $this->output()->writeln(sprintf('provider=%s model=%s host=%s', $provider, $model, parse_url($url, PHP_URL_HOST) ?: 'unknown'));
     $blur_mode = $this->vision ? $this->vision->getBlurMode() : BlurPolicy::mode($this->blurLogger ?? new NullLogger());
     $this->output()->writeln('blur mode=' . $blur_mode);
@@ -94,8 +106,13 @@ class MarkaspotAiCommands extends DrushCommands {
     if (empty($options['skip-vision']) && $this->moduleHandler->moduleExists('markaspot_vision') && $this->vision) {
       $vision_config = $this->configFactory->get('markaspot_vision.settings');
       $vision_url = getenv('MARKASPOT_VISION_API_URL') ?: $vision_config->get('api_url');
-      if ($vision_url && $vision_config->get('ai_model')) {
-        $this->output()->writeln(sprintf('vision model=%s host=%s', $vision_config->get('ai_model'), parse_url($vision_url, PHP_URL_HOST) ?: 'unknown'));
+      $vision_model = $vision_config->get('ai_model');
+      if (SovereignPolicy::enforced()) {
+        $vision_url = $config->get('providers.ionos.api_url');
+        $vision_model = $this->configFactory->get('markaspot_ai.sovereign')->get('vision_model');
+      }
+      if (SovereignPolicy::enforced() || ($vision_url && $vision_model)) {
+        $this->output()->writeln(sprintf('vision model=%s host=%s', $vision_model ?: '[blocked: missing model]', parse_url($vision_url, PHP_URL_HOST) ?: 'unknown'));
         $checks['vision'] = fn() => $this->vision->selfTest();
       }
     }

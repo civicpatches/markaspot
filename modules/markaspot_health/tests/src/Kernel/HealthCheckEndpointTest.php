@@ -41,6 +41,17 @@ class HealthCheckEndpointTest extends KernelTestBase {
   }
 
   /**
+   * The sovereignty check is discovered and constructed through real DI.
+   */
+  public function testSovereigntyPluginDiscovery(): void {
+    $manager = $this->container->get('plugin.manager.markaspot_health_check');
+    $definition = $manager->getDefinition('ai_provider_sovereignty');
+    $this->assertSame('AI provider sovereignty', (string) $definition['label']);
+    $plugin = $manager->createInstance('ai_provider_sovereignty');
+    $this->assertSame('ai-provider-sovereignty', $plugin->run()->id());
+  }
+
+  /**
    * Tests that the permission is registered.
    */
   public function testPermissionRegistered(): void {

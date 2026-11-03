@@ -257,3 +257,17 @@ markaspot_ai.settings:
         model:
           type: string
           label: 'Optional attribute filling model'
+
+markaspot_ai.sovereign:
+  type: config_object
+  label: 'Operator-enforced IONOS models'
+  mapping:
+    chat_model:
+      type: string
+      label: 'IONOS chat model (empty blocks chat)'
+    vision_model:
+      type: string
+      label: 'IONOS vision model (empty blocks image analysis)'
+    embedding_model:
+      type: string
+      label: 'IONOS embedding model (empty blocks embeddings)'

@@ -1,0 +1,4 @@
+# These models apply only when the operator enforces IONOS.
+chat_model: 'mistralai/Mistral-Small-24B-Instruct'
+vision_model: 'mistralai/Mistral-Small-24B-Instruct'
+embedding_model: 'BAAI/bge-m3'
