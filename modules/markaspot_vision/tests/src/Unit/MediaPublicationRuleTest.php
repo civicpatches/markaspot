@@ -37,7 +37,7 @@ final class MediaPublicationRuleTest extends UnitTestCase {
    * Only screened, clean images of published reports are released.
    */
   #[DataProvider('publicationCases')]
-  public function testPublication(bool $nodePublished, string $metadata, bool $flag, string $issues, ?array $intake, bool $strict, bool $manual, bool $publish, bool $busy = FALSE): void {
+  public function testPublication(bool $nodePublished, string $metadata, bool $flag, string $issues, ?array $intake, bool $strict, bool $manual, bool $publish, bool $busy = FALSE, bool $required = FALSE, bool $restore = FALSE): void {
     require_once dirname(__DIR__, 3) . '/markaspot_vision.module';
     $container = new ContainerBuilder();
     $container->set('config.factory', $this->getConfigFactoryStub(['markaspot_vision.settings' => ['require_ai_screening' => $strict]]));
@@ -68,6 +68,9 @@ final class MediaPublicationRuleTest extends UnitTestCase {
     }
     if ($intake !== NULL) {
       $keyValue->get(MediaIntakeScreening::STORE)->set(42, $intake);
+    }
+    if ($restore) {
+      $keyValue->get('markaspot_vision.report_media_hold')->set(42, TRUE);
     }
     if ($manual) {
       $keyValue->get('markaspot_open311.media_publication_manual')->set(42, TRUE);
@@ -103,6 +106,8 @@ final class MediaPublicationRuleTest extends UnitTestCase {
     $node->method('bundle')->willReturn('service_request');
     $node->method('isPublished')->willReturn($nodePublished);
     $node->method('get')->with('field_request_media')->willReturn($references);
+    $oldRequired = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=' . (int) $required);
     try {
       _markaspot_vision_publish_safe_media($node);
       if (($intake['prepared_hash'] ?? '') === 'wrong') {
@@ -110,6 +115,7 @@ final class MediaPublicationRuleTest extends UnitTestCase {
       }
     }
     finally {
+      putenv($oldRequired === FALSE ? 'MARKASPOT_BLUR_REQUIRED' : 'MARKASPOT_BLUR_REQUIRED=' . $oldRequired);
       unlink($source);
     }
   }
@@ -229,6 +235,9 @@ final class MediaPublicationRuleTest extends UnitTestCase {
       'pending import legacy' => [TRUE, '', FALSE, '', ['status' => 'pending'], FALSE, FALSE, FALSE],
       'failed import legacy' => [TRUE, '{}', FALSE, '', ['status' => 'failed'], FALSE, FALSE, FALSE],
       'manual unpublished' => [TRUE, '{}', FALSE, '', NULL, TRUE, TRUE, FALSE],
+      // NULL analysis leaves no AI metadata or privacy verdict on the upload.
+      'legacy required blur NULL analysis' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, FALSE, FALSE, TRUE],
+      'legacy required blur report restore' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE],
       'legacy ordinary media' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, TRUE],
       'busy publication lock' => [TRUE, '{}', FALSE, '', NULL, TRUE, FALSE, FALSE, TRUE],
     ];

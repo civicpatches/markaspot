@@ -182,14 +182,15 @@ function markaspot_vision_node_update(NodeInterface $node): void {
 /**
  * Publishes media on a service request based on privacy screening results.
  *
- * When require_ai_screening is enabled (default), media stays unpublished
- * until screening has completed successfully (field_ai_metadata is set)
+ * When require_ai_screening is enabled (default) or blur is required, media
+ * stays unpublished until screening has completed successfully
+ * (field_ai_metadata is set)
  * and no privacy flag or privacy issue was raised. This prevents unscreened
  * images from being published (privacy by design, fail-closed).
  *
- * When require_ai_screening is disabled (legacy mode), media is published
- * unless it has been explicitly flagged by AI. Imported images still require
- * their privacy checkpoint, regardless of the optional analysis setting.
+ * When require_ai_screening is disabled and blur is optional, media is
+ * published unless it has been explicitly flagged by AI. Imported images still
+ * require their privacy checkpoint regardless of the analysis setting.
  */
 function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
   if ($node->bundle() !== 'service_request') {
@@ -323,7 +324,7 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
         continue;
       }
       $restore = (bool) $report_holds->get($media->id());
-      if ($restore && !$has_privacy_hold) {
+      if ($restore && !$has_privacy_hold && (!($require_screening || $required) || $ai_completed)) {
         $media->setPublished();
         $media->save();
         $report_holds->delete($media->id());
@@ -337,7 +338,7 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
         $media->save();
       }
       elseif (!$media->isPublished()) {
-        if ($require_screening) {
+        if ($require_screening || $required) {
           // Strict mode: only publish screened media without privacy issues.
           if ($ai_completed && !$has_privacy_hold) {
             $media->setPublished();
