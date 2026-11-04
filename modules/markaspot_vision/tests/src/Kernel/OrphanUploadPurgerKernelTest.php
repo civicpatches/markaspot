@@ -18,6 +18,7 @@ use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_vision\Service\MediaTenantScopeResolver;
 use Drupal\markaspot_vision\Service\OriginalImageStore;
 use Drupal\markaspot_vision\Service\OrphanUploadPurger;
+use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\media\Entity\Media;
 use Drupal\media\Entity\MediaType;
 use Drupal\node\Entity\Node;
@@ -87,7 +88,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $c->get('lock'),
-      $c->get('state'), $clock, $c->get('logger.factory'),
+      $c->get('state'), $clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $this->purger);
     $c->set('markaspot_vision.media_tenant_scope', new MediaTenantScopeResolver(
@@ -294,7 +295,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $this->clock, $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $purger);
     $transaction = $c->get('database')->startTransaction();
@@ -324,7 +325,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $this->clock, $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $purger);
     $media->setUnpublished()->save();
@@ -387,7 +388,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $this->clock, $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $purger);
     $node = Node::create(['type' => 'service_request', 'title' => 'Race', 'field_request_media' => $media->id()]);
@@ -434,7 +435,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $this->clock, $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
     );
     $this->assertSame(0, $parallel->purge());
     $this->assertTrue($pending->has($key));

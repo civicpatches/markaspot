@@ -93,3 +93,4 @@ services:
       - '@state'
       - '@datetime.time'
       - '@logger.factory'
+      - '@markaspot_nuxt.feature_scope_resolver'

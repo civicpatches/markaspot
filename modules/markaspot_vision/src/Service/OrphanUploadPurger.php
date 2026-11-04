@@ -18,6 +18,8 @@ use Drupal\Core\State\StateInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Drupal\media\MediaInterface;
+use Drupal\group\Entity\GroupInterface;
+use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 
 /**
  * Removes expired uploads only when no stored reference can still use them.
@@ -63,6 +65,7 @@ class OrphanUploadPurger {
     protected StateInterface $state,
     protected TimeInterface $time,
     protected LoggerChannelFactoryInterface $loggerFactory,
+    protected FeatureScopeResolver $featureScopeResolver,
   ) {}
 
   /**
@@ -218,10 +221,6 @@ class OrphanUploadPurger {
     try {
       // Build the complete inventory before deleting anything. Unknown storage
       // or a missing table fails closed rather than silently losing references.
-      if ($this->mayHaveOfflineReference()) {
-        $this->loggerFactory->get('markaspot_vision')->notice('Orphan upload cleanup deferred: offline retries have no server-side upload lease.');
-        return 0;
-      }
       $media_references = $this->referenceColumns('media');
       $file_references = $this->referenceColumns('file');
       $this->retryFiles($file_references);
@@ -252,7 +251,8 @@ class OrphanUploadPurger {
             if (!$media instanceof MediaInterface
               || $media->getCreatedTime() >= $cutoff || $media->getChangedTime() >= $cutoff
               || $this->keyValue->get('markaspot_open311.media_publication_manual')->has($id)
-              || $this->isReferenced($media_references, (int) $id)) {
+              || $this->isReferenced($media_references, (int) $id)
+              || $this->mayHaveOfflineReference($media)) {
               continue;
             }
             $files = $this->mediaFiles($media);
@@ -436,30 +436,18 @@ class OrphanUploadPurger {
   }
 
   /**
-   * Offline retries hold remote UUIDs in IndexedDB, without a server lease.
+   * Protects browser-only retries according to this upload's bound tenant.
    *
-   * Conservatively retain uploads when any jurisdiction permits offline work.
-   * This also protects legacy uploads without a trusted jurisdiction binding.
+   * Unbound uploads and deleted jurisdictions use the installation default;
+   * an unrelated workspace's self-service flag cannot pause this collector.
    */
-  protected function mayHaveOfflineReference(): bool {
-    if (!$this->entityTypeManager->hasDefinition('group')) {
-      return FALSE;
-    }
-    foreach ($this->entityTypeManager->getStorage('group')->loadMultiple() as $group) {
-      if (!$group->hasField('field_nuxt_config')) {
-        continue;
-      }
-      $raw = (string) $group->get('field_nuxt_config')->value;
-      $config = $raw === '' ? [] : json_decode($raw, TRUE, 512, JSON_THROW_ON_ERROR);
-      if (!is_array($config)) {
-        throw new \RuntimeException('Offline policy is unavailable.');
-      }
-      $offline = $config['features']['offline'] ?? FALSE;
-      if ($offline === TRUE || (is_array($offline) && ($offline['enabled'] ?? FALSE))) {
-        return TRUE;
-      }
-    }
-    return FALSE;
+  protected function mayHaveOfflineReference(MediaInterface $media): bool {
+    $id = $this->keyValue->get(MediaTenantScopeResolver::STORE)->get($media->uuid());
+    $jurisdiction = is_numeric($id) && $this->entityTypeManager->hasDefinition('group')
+      ? $this->entityTypeManager->getStorage('group')->load($id) : NULL;
+    return $jurisdiction instanceof GroupInterface
+      ? $this->featureScopeResolver->isEnabledEffective('offline', $jurisdiction)
+      : $this->featureScopeResolver->isPlatformFeatureEnabled('offline');
   }
 
 }
