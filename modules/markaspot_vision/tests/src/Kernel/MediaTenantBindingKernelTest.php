@@ -22,6 +22,7 @@ use Drupal\markaspot_fastmap\Service\TierConfigService;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\markaspot_vision\Controller\ImageProcessingController;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_ai\Service\AiClientService;
 use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
@@ -693,10 +694,26 @@ final class MediaTenantBindingKernelTest extends KernelTestBase {
   public function testQueueAndControllerShareTheBudgetLock(): void {
     $request = $this->anonymousUploadRequest('upload-budget-lock');
     $media = $this->createUpload($request, NULL, (string) $this->tenantA->id());
+    $media_lock = MediaIntakeScreening::QUEUE . ':' . $media->id();
+    $budget_lock = MediaIntakeScreening::QUEUE . ':budget:' . $this->tenantA->id();
     $lock = $this->createMock(LockBackendInterface::class);
-    $lock->expects($this->exactly(2))->method('acquire')
-      ->with('markaspot_media_intake:budget:' . $this->tenantA->id(), 30)->willReturn(FALSE);
+    // Every upload takes its own media lock before reserving tenant budget.
+    // Only the budget lock is held by the competing queue job.
+    $acquired = [];
+    $lock->expects($this->exactly(3))->method('acquire')
+      ->willReturnCallback(static function (string $name, float $timeout) use (&$acquired, $media_lock): bool {
+        $acquired[] = [$name, $timeout];
+        return $name === $media_lock;
+      });
+    $lock->expects($this->once())->method('wait')->with($budget_lock, 1);
+    $lock->expects($this->once())->method('release')->with($media_lock);
     $this->assertStatus(429, $this->analyze($request, [$media], $this->tenantA->id(), TRUE, NULL, $lock));
+    $this->assertSame([
+      [$media_lock, 900.0],
+      [$budget_lock, 30.0],
+      [$budget_lock, 30.0],
+    ], $acquired);
+    $this->assertSame([], $this->budgetChecks);
     $this->assertSame([], $this->providerCalls);
     $this->assertSame([], $this->charges);
   }

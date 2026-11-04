@@ -6,9 +6,41 @@
  */
 
 use Drupal\Core\Config\FileStorage;
+use Drupal\Core\Queue\DatabaseQueue;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
+use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_vision\Service\MediaTenantScopeResolver;
 use Drupal\markaspot_vision\Service\OriginalImageStore;
+
+/**
+ * Implements hook_install().
+ */
+function markaspot_vision_install(): void {
+  _markaspot_vision_prepare_publication_queue();
+}
+
+/**
+ * Prepare queue storage before publication retries join report transactions.
+ */
+function markaspot_vision_update_11809(): string {
+  _markaspot_vision_prepare_publication_queue();
+  return 'Prepared queue storage for transactional image publication retries.';
+}
+
+/**
+ * Creates the core database queue table outside report-save transactions.
+ */
+function _markaspot_vision_prepare_publication_queue(): void {
+  $queue = \Drupal::queue(MediaIntakeScreening::QUEUE);
+  if ($queue instanceof DatabaseQueue) {
+    $schema = \Drupal::database()->schema();
+    if (!$schema->tableExists(DatabaseQueue::TABLE_NAME)) {
+      // DatabaseQueue::createQueue() is a no-op. Lazy CREATE TABLE on the first
+      // createItem() would implicitly commit a report transaction on MySQL.
+      $schema->createTable(DatabaseQueue::TABLE_NAME, $queue->schemaDefinition());
+    }
+  }
+}
 
 /**
  * Install hazard level and category fields for media entities.

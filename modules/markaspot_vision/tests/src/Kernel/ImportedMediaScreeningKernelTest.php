@@ -666,6 +666,10 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
    */
   public function testHistoricalMediaRestoresUnlessPrivacyHeld(): void {
     [$media, $node] = $this->fixture();
+    // Strict publication restores only media with a completed checkpoint.
+    $this->screening->process((int) $media->id());
+    $media = Media::load($media->id());
+    $this->assertTrue($media->isPublished());
     $this->container->get('keyvalue')->get(MediaIntakeScreening::STORE)->delete($media->id());
     $media->setPublished()->save();
     $node->setUnpublished();
@@ -681,6 +685,24 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
     $fresh->set('field_ai_privacy_flag', TRUE)->save();
     $node->setPublished();
     _markaspot_vision_publish_safe_media($node);
+    $this->assertFalse($storage->loadUnchanged($media->id())->isPublished());
+  }
+
+  /**
+   * Prior publication alone cannot restore an unscreened historical image.
+   */
+  public function testHistoricalUnscreenedMediaStaysHeld(): void {
+    [$media, $node] = $this->fixture();
+    $this->container->get('keyvalue')->get(MediaIntakeScreening::STORE)->delete($media->id());
+    $media->setPublished()->save();
+    $node->setUnpublished();
+    _markaspot_vision_publish_safe_media($node);
+    $storage = $this->container->get('entity_type.manager')->getStorage('media');
+    $this->assertFalse($storage->loadUnchanged($media->id())->isPublished());
+    $node->setPublished();
+    _markaspot_vision_publish_safe_media($node);
+    $this->assertFalse($storage->loadUnchanged($media->id())->isPublished());
+    $this->screening->process((int) $media->id());
     $this->assertFalse($storage->loadUnchanged($media->id())->isPublished());
   }
 

@@ -3,6 +3,7 @@
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
 use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\Core\Queue\DatabaseQueue;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
@@ -104,6 +105,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $this->installSchema('file', ['file_usage']);
     $this->installSchema('node', ['node_access']);
     require_once dirname(__DIR__, 3) . '/markaspot_vision.install';
+    markaspot_vision_install();
     $c->get('database')->schema()->createTable(OriginalImageStore::TABLE, markaspot_vision_schema()[OriginalImageStore::TABLE]);
     $this->installConfig(['system', 'user', 'field', 'filter', 'node', 'file', 'image']);
     $this->setSetting('file_private_path', $this->siteDirectory . '/private');
@@ -159,6 +161,25 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     ]);
     $media->save();
     return $media;
+  }
+
+  /**
+   * Install and update prepare an empty queue without losing existing work.
+   */
+  public function testPublicationQueueInitialization(): void {
+    $schema = $this->container->get('database')->schema();
+    $this->assertTrue($schema->tableExists(DatabaseQueue::TABLE_NAME));
+    $schema->dropTable(DatabaseQueue::TABLE_NAME);
+    markaspot_vision_update_11809();
+    $this->assertTrue($schema->tableExists(DatabaseQueue::TABLE_NAME));
+    $queue = $this->container->get('queue')->get(MediaIntakeScreening::QUEUE);
+    $item_id = $queue->createItem(['media_id' => 123]);
+    markaspot_vision_install();
+    markaspot_vision_update_11809();
+    $this->assertSame(1, $queue->numberOfItems());
+    $item = $queue->claimItem();
+    $this->assertSame($item_id, $item->item_id);
+    $this->assertSame(['media_id' => 123], $item->data);
   }
 
   /**

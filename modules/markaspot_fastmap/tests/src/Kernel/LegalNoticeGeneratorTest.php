@@ -15,6 +15,7 @@ use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_fastmap\Service\LegalNoticeGenerator;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\Filesystem\Path;
 
 /**
  * Kernel tests for LegalNoticeGenerator.
@@ -169,14 +170,9 @@ class LegalNoticeGeneratorTest extends KernelTestBase {
   protected function buildGenerator(): LegalNoticeGenerator {
     $absModulePath = dirname(__DIR__, 3);
     $appRoot = $this->container->getParameter('app.root');
-    // Extension::__construct asserts that $pathname is relative to app.root,
-    // so derive the relative form here. realpath() collapses any symlinks
-    // before substr() so the prefix check holds for worktree copies.
-    $realRoot = \realpath($appRoot);
-    $realModule = \realpath($absModulePath);
-    $relativePath = \is_string($realRoot) && \is_string($realModule) && \str_starts_with($realModule, $realRoot . '/')
-      ? \substr($realModule, \strlen($realRoot) + 1)
-      : $absModulePath;
+    // Extensions require a relative path, including for worktrees outside
+    // app.root. An absolute fallback produces a duplicated application root.
+    $relativePath = Path::makeRelative($absModulePath, $appRoot);
     $twig = $this->container->get('twig');
     /** @var \Drupal\Core\Template\Loader\FilesystemLoader $filesystemLoader */
     $filesystemLoader = $this->container->get('twig.loader.filesystem');
