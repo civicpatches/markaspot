@@ -52,6 +52,11 @@ class TokenTrackingService {
   public const DEDICATED_CONNECTION_TARGET = 'markaspot_ai_usage';
 
   /**
+   * Operations charged exclusively to the optional vision budget.
+   */
+  public const VISION_OPERATIONS = ['vision', 'vision_screening'];
+
+  /**
    * Constructs a new TokenTrackingService.
    *
    * @param \Drupal\Core\Database\Connection $database
@@ -79,7 +84,7 @@ class TokenTrackingService {
    * @param string $model
    *   The model name used (e.g., 'gpt-4o', 'text-embedding-3-large').
    * @param string $operation
-   *   The operation type: 'chat', 'embed', or 'vision'.
+   *   The operation type, e.g. 'chat', 'embed', 'vision', 'vision_screening'.
    * @param int $inputTokens
    *   Number of input/prompt tokens used.
    * @param int $outputTokens
@@ -179,10 +184,13 @@ class TokenTrackingService {
   }
 
   /**
-   * Gets usage statistics for the current day.
+   * Gets today's usage statistics, across all operations by default.
    *
    * @param string|null $provider
    *   Optional provider to filter by. NULL returns all providers.
+   * @param bool|null $vision
+   *   NULL includes all operations (accounting totals); TRUE includes only
+   *   vision operations; FALSE excludes vision (the text daily budget).
    *
    * @return array
    *   Array containing:
@@ -192,7 +200,7 @@ class TokenTrackingService {
    *   - 'by_model': Breakdown by model.
    *   - 'by_operation': Breakdown by operation type.
    */
-  public function getDailyUsage(?string $provider = NULL): array {
+  public function getDailyUsage(?string $provider = NULL, ?bool $vision = NULL): array {
     $today_start = strtotime('today midnight');
 
     try {
@@ -202,6 +210,9 @@ class TokenTrackingService {
 
       if ($provider !== NULL) {
         $query->condition('t.provider', $provider);
+      }
+      if ($vision !== NULL) {
+        $query->condition('t.operation', self::VISION_OPERATIONS, $vision ? 'IN' : 'NOT IN');
       }
 
       // Get totals.
@@ -219,6 +230,9 @@ class TokenTrackingService {
       if ($provider !== NULL) {
         $model_query->condition('t.provider', $provider);
       }
+      if ($vision !== NULL) {
+        $model_query->condition('t.operation', self::VISION_OPERATIONS, $vision ? 'IN' : 'NOT IN');
+      }
 
       $model_query->addExpression('SUM(t.input_tokens)', 'input_tokens');
       $model_query->addExpression('SUM(t.output_tokens)', 'output_tokens');
@@ -234,6 +248,9 @@ class TokenTrackingService {
 
       if ($provider !== NULL) {
         $operation_query->condition('t.provider', $provider);
+      }
+      if ($vision !== NULL) {
+        $operation_query->condition('t.operation', self::VISION_OPERATIONS, $vision ? 'IN' : 'NOT IN');
       }
 
       $operation_query->addExpression('SUM(t.input_tokens)', 'input_tokens');
@@ -383,12 +400,39 @@ class TokenTrackingService {
   }
 
   /**
-   * Checks if the daily token limit has been exceeded.
+   * Checks the text daily_limit, excluding all vision operations.
+   *
+   * Tracking disabled or a non-positive limit allows requests. Vision callers
+   * must use checkVisionLimit() instead; both checks read already booked usage.
    *
    * @return bool
    *   TRUE if under the limit, FALSE if limit exceeded.
    */
   public function checkLimit(): bool {
+    return $this->checkDailyLimit(FALSE);
+  }
+
+  /**
+   * Checks vision_daily_limit against vision and vision_screening usage only.
+   *
+   * @return bool
+   *   TRUE if tracking is disabled, the limit is missing/non-positive, or
+   *   today's booked vision usage is below the limit; FALSE otherwise.
+   */
+  public function checkVisionLimit(): bool {
+    return $this->checkDailyLimit(TRUE);
+  }
+
+  /**
+   * Checks the selected budget without reserving tokens for in-flight requests.
+   *
+   * @param bool $vision
+   *   TRUE for the vision budget, FALSE for the text budget.
+   *
+   * @return bool
+   *   Whether another request is allowed.
+   */
+  protected function checkDailyLimit(bool $vision): bool {
     $config = $this->configFactory->get('markaspot_ai.settings');
 
     // If tracking is disabled, always allow.
@@ -396,18 +440,19 @@ class TokenTrackingService {
       return TRUE;
     }
 
-    $daily_limit = (int) $config->get('token_tracking.daily_limit');
+    $daily_limit = (int) $config->get($vision ? 'token_tracking.vision_daily_limit' : 'token_tracking.daily_limit');
 
     // If no limit configured, always allow.
     if ($daily_limit <= 0) {
       return TRUE;
     }
 
-    $usage = $this->getDailyUsage();
+    $usage = $this->getDailyUsage(NULL, $vision);
     $current_total = $usage['total_tokens'];
 
     if ($current_total >= $daily_limit) {
-      $this->logger->warning('Daily token limit reached: @current / @limit tokens', [
+      $this->logger->warning('Daily @budget token limit reached: @current / @limit tokens', [
+        '@budget' => $vision ? 'vision' : 'text',
         '@current' => $current_total,
         '@limit' => $daily_limit,
       ]);
@@ -418,7 +463,7 @@ class TokenTrackingService {
   }
 
   /**
-   * Gets the remaining tokens available for today.
+   * Gets the remaining text tokens for today, excluding vision operations.
    *
    * @return int
    *   Number of tokens remaining, or -1 if unlimited.
@@ -436,7 +481,7 @@ class TokenTrackingService {
       return -1;
     }
 
-    $usage = $this->getDailyUsage();
+    $usage = $this->getDailyUsage(NULL, FALSE);
     $remaining = $daily_limit - $usage['total_tokens'];
 
     return max(0, $remaining);

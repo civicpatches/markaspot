@@ -747,11 +747,11 @@ function markaspot_ai_requirements(string $phase): array {
     if ($config->get('token_tracking.enabled')) {
       /** @var \Drupal\markaspot_ai\Service\TokenTrackingService $tracking */
       $tracking = \Drupal::service('markaspot_ai.token_tracking');
-      $daily_usage = $tracking->getDailyUsage();
+      $daily_usage = $tracking->getDailyUsage(NULL, FALSE);
       $daily_limit = (int) $config->get('token_tracking.daily_limit');
 
       $requirements['markaspot_ai_usage'] = [
-        'title' => t('Mark-a-Spot AI Token Usage'),
+        'title' => t('Mark-a-Spot AI Text Token Usage'),
         'value' => t('@used / @limit tokens today', [
           '@used' => number_format($daily_usage['total_tokens']),
           '@limit' => $daily_limit > 0 ? number_format($daily_limit) : t('unlimited'),
@@ -761,7 +761,7 @@ function markaspot_ai_requirements(string $phase): array {
 
       if ($daily_limit > 0 && $daily_usage['total_tokens'] >= $daily_limit * 0.9) {
         $requirements['markaspot_ai_usage']['severity'] = REQUIREMENT_WARNING;
-        $requirements['markaspot_ai_usage']['description'] = t('Daily token limit is nearly reached.');
+        $requirements['markaspot_ai_usage']['description'] = t('Daily text token limit is nearly reached (vision excluded).');
       }
     }
   }

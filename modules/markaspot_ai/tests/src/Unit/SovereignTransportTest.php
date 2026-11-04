@@ -104,6 +104,7 @@ class SovereignTransportTest extends UnitTestCase {
   private function client(ClientInterface $http, ConfigFactoryInterface $factory): AiClientService {
     $tracking = $this->createMock(TokenTrackingService::class);
     $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     return new AiClientService($http, $factory, $this->loggerFactory(), $tracking);
   }
 
@@ -224,6 +225,7 @@ class SovereignTransportTest extends UnitTestCase {
     }
     $tracking = $this->createMock(TokenTrackingService::class);
     $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     (new \ReflectionProperty($vision, 'tokenTracking'))->setValue($vision, $tracking);
     (new \ReflectionProperty($vision, 'aiClient'))->setValue($vision, new AiClientService($http, $factory, $this->loggerFactory(), $tracking));
     return $vision;

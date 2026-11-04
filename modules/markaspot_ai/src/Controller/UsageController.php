@@ -67,8 +67,8 @@ class UsageController extends ControllerBase {
     $trackingEnabled = (bool) $config->get('token_tracking.enabled');
     $dailyLimit = (int) $config->get('token_tracking.daily_limit');
 
-    // Get usage data.
-    $dailyUsage = $this->tokenTrackingService->getDailyUsage($provider);
+    // Daily budget displays exclude vision; period totals keep all accounting.
+    $dailyUsage = $this->tokenTrackingService->getDailyUsage($provider, FALSE);
     $totalUsage = $this->tokenTrackingService->getTotalUsage($period);
     $remainingTokens = $this->tokenTrackingService->getRemainingTokens();
 
@@ -81,6 +81,7 @@ class UsageController extends ControllerBase {
     $response = new CacheableJsonResponse([
       'tracking_enabled' => $trackingEnabled,
       'daily' => [
+        'scope' => 'text',
         'input_tokens' => $dailyUsage['total_input_tokens'],
         'output_tokens' => $dailyUsage['total_output_tokens'],
         'total_tokens' => $dailyUsage['total_tokens'],
@@ -91,7 +92,9 @@ class UsageController extends ControllerBase {
         'by_model' => $dailyUsage['by_model'],
         'by_operation' => $dailyUsage['by_operation'],
       ],
+      'vision_daily' => $this->getVisionDailyUsage(),
       'period' => [
+        'scope' => 'all',
         'days' => $period,
         'input_tokens' => $totalUsage['total_input_tokens'],
         'output_tokens' => $totalUsage['total_output_tokens'],
@@ -127,7 +130,7 @@ class UsageController extends ControllerBase {
     $trackingEnabled = (bool) $config->get('token_tracking.enabled');
     $dailyLimit = (int) $config->get('token_tracking.daily_limit');
 
-    $dailyUsage = $this->tokenTrackingService->getDailyUsage();
+    $dailyUsage = $this->tokenTrackingService->getDailyUsage(NULL, FALSE);
     $remainingTokens = $this->tokenTrackingService->getRemainingTokens();
 
     // Calculate status.
@@ -149,7 +152,9 @@ class UsageController extends ControllerBase {
     $response = new CacheableJsonResponse([
       'status' => $status,
       'tracking_enabled' => $trackingEnabled,
+      'vision_today' => $this->getVisionDailyUsage(),
       'today' => [
+        'scope' => 'text',
         'tokens_used' => $dailyUsage['total_tokens'],
         'tokens_remaining' => $remainingTokens >= 0 ? $remainingTokens : NULL,
         'tokens_limit' => $dailyLimit > 0 ? $dailyLimit : NULL,
@@ -166,6 +171,33 @@ class UsageController extends ControllerBase {
     $response->addCacheableDependency($cacheMetadata);
 
     return $response;
+  }
+
+  /**
+   * Reports vision usage against its own optional budget, never daily_limit.
+   *
+   * All metrics are site-wide because the vision budget spans providers.
+   *
+   * @return array
+   *   Vision accounting totals, breakdowns and budget information.
+   */
+  protected function getVisionDailyUsage(): array {
+    $usage = $this->tokenTrackingService->getDailyUsage(NULL, TRUE);
+    $config = $this->config('markaspot_ai.settings');
+    $limit = (int) $config->get('token_tracking.vision_daily_limit');
+    return [
+      'scope' => 'vision',
+      'provider_filter' => NULL,
+      'input_tokens' => $usage['total_input_tokens'],
+      'output_tokens' => $usage['total_output_tokens'],
+      'total_tokens' => $usage['total_tokens'],
+      'request_count' => $usage['request_count'],
+      'limit' => $limit > 0 ? $limit : NULL,
+      'remaining' => $config->get('token_tracking.enabled') && $limit > 0 ? max(0, $limit - $usage['total_tokens']) : NULL,
+      'usage_percent' => $limit > 0 ? round(($usage['total_tokens'] / $limit) * 100, 2) : NULL,
+      'by_model' => $usage['by_model'],
+      'by_operation' => $usage['by_operation'],
+    ];
   }
 
 }

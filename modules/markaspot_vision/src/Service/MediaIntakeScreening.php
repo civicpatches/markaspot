@@ -424,8 +424,8 @@ class MediaIntakeScreening {
       return 'tenant_disabled';
     }
     $jid = $group instanceof GroupInterface ? (int) $group->id() : NULL;
-    if ($this->tokenTracking && !$this->tokenTracking->checkLimit()) {
-      $this->loggerFactory->get('markaspot_vision')->warning('Skipping imported media @mid AI analysis: daily token limit exceeded.', ['@mid' => $media->id()]);
+    if ($this->tokenTracking && !$this->tokenTracking->checkVisionLimit()) {
+      $this->loggerFactory->get('markaspot_vision')->warning('Skipping imported media @mid AI analysis: daily vision token limit exceeded.', ['@mid' => $media->id()]);
       return 'budget_exhausted';
     }
     if ($this->tierConfig) {

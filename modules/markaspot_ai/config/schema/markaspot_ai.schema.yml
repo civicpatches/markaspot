@@ -194,7 +194,10 @@ markaspot_ai.settings:
           label: 'Enable Token Tracking'
         daily_limit:
           type: integer
-          label: 'Daily Token Limit'
+          label: 'Daily Text Token Limit'
+        vision_daily_limit:
+          type: integer
+          label: 'Daily Vision Token Limit (0 means unlimited)'
         alert_threshold:
           type: float
           label: 'Alert Threshold'

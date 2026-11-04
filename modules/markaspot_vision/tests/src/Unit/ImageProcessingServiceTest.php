@@ -176,7 +176,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
     $fileUsage->method('listUsage')->willReturnCallback(fn () => $this->fileUsageList);
 
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     return new ImageProcessingService(
       $httpClient,
       $configFactory,

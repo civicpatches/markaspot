@@ -183,7 +183,7 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
     $this->features = $this->createMock(FeatureScopeResolver::class);
     $this->budget = $this->createMock(TierConfigService::class);
     $this->tokens = $this->createMock(TokenTrackingService::class);
-    $this->tokens->method('checkLimit')->willReturnCallback(fn() => $this->tokenBudgetAvailable);
+    $this->tokens->method('checkVisionLimit')->willReturnCallback(fn() => $this->tokenBudgetAvailable);
     $this->screening = new MediaIntakeScreening(
       $c->get('queue'), $c->get('keyvalue'), $c->get('lock'), $c->get('entity_type.manager'),
       $c->get('config.factory'), $clock, $this->images, $this->createMock(OriginalImageStore::class),

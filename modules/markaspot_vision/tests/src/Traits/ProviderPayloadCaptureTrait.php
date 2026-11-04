@@ -157,7 +157,7 @@ trait ProviderPayloadCaptureTrait {
       ];
       $arguments[] = $moduleHandler;
       $tracking = $this->createMock(TokenTrackingService::class);
-      $tracking->method('checkLimit')->willReturn(TRUE);
+      $tracking->method('checkVisionLimit')->willReturn(TRUE);
       $arguments[] = new AiClientService($arguments[0], $configFactory, $loggerFactory, $tracking);
       $arguments[] = $tracking;
       $service = new ImageProcessingService(...$arguments);

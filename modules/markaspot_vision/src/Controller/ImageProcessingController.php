@@ -332,7 +332,7 @@ class ImageProcessingController extends ControllerBase {
       // Reject before a non-refundable SaaS reservation or any provider call.
       // No blur checkpoint is created: unscreened uploads remain unpublished
       // under the required-blur publication policy, including legacy mode.
-      if ($this->tokenTracking && !$this->tokenTracking->checkLimit()) {
+      if ($this->tokenTracking && !$this->tokenTracking->checkVisionLimit()) {
         $this->logger->notice('Skipping vision analysis: daily token limit exceeded.');
         return new JsonResponse([
           'status' => 'budget_exhausted',

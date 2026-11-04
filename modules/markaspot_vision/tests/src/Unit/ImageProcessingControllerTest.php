@@ -381,7 +381,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
     putenv('MARKASPOT_BLUR_REQUIRED=' . (int) $required);
     try {
       $tracking = $this->createMock(TokenTrackingService::class);
-      $tracking->expects($this->once())->method('checkLimit')->willReturn(FALSE);
+      $tracking->expects($this->once())->method('checkVisionLimit')->willReturn(FALSE);
       (new \ReflectionProperty($this->controller, 'tokenTracking'))->setValue($this->controller, $tracking);
       $tier = $this->createMock(TierConfigService::class);
       $tier->expects($this->never())->method('recordAIAnalysis');

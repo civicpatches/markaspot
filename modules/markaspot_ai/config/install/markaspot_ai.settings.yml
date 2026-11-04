@@ -38,6 +38,7 @@ duplicate_detection:
 token_tracking:
   enabled: true
   daily_limit: 100000
+  vision_daily_limit: 0
   alert_threshold: 0.9
 sentiment_analysis:
   enabled: false

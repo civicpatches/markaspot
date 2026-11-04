@@ -94,7 +94,7 @@ class ModelPolicyTest extends UnitTestCase {
     $logger = $this->createMock(LoggerChannelFactoryInterface::class);
     $logger->method('get')->willReturn($log ?? new NullLogger());
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     return $this->getMockBuilder(ImageProcessingService::class)->setConstructorArgs([
       new Client(['handler' => $stack]), $factory,
       $this->createMock(EntityTypeManagerInterface::class),

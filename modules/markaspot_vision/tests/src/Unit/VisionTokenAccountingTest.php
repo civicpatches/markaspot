@@ -107,7 +107,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   public function testCheckBeforeRequestAndEffectiveModel(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
     $history = [];
-    $tracking->expects($this->once())->method('checkLimit')->willReturnCallback(function () use (&$history): bool {
+    $tracking->expects($this->once())->method('checkVisionLimit')->willReturnCallback(function () use (&$history): bool {
       self::assertCount(0, $history);
       return TRUE;
     });
@@ -126,7 +126,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testInputOutputCountersAndModelFallback(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     $tracking->expects($this->once())->method('logUsage')
       ->with('azure', 'configured-deployment', 'vision', 12, 3, NULL, NULL);
     $history = [];
@@ -142,7 +142,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   #[DataProvider('providerModels')]
   public function testBoundedProviderModel(string $reported, string $expected): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     $tracking->expects($this->once())->method('logUsage')
       ->with('azure', $expected, 'vision', 41, 9, NULL, NULL);
     $history = [];
@@ -166,7 +166,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testScreeningOperationAndScopeReset(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->exactly(2))->method('checkLimit')->willReturn(TRUE);
+    $tracking->expects($this->exactly(2))->method('checkVisionLimit')->willReturn(TRUE);
     $bookings = [];
     $tracking->expects($this->exactly(2))->method('logUsage')->willReturnCallback(
       static function (...$args) use (&$bookings): void {
@@ -185,7 +185,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testOverLimitScreening(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->once())->method('checkLimit')->willReturn(FALSE);
+    $tracking->expects($this->once())->method('checkVisionLimit')->willReturn(FALSE);
     $tracking->expects($this->never())->method('logUsage');
     $history = [];
     $service = $this->service($tracking, [], $history);
@@ -278,12 +278,43 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   }
 
   /**
+   * Unlimited vision still sends and books even with a tiny text budget.
+   */
+  #[DataProvider('unlimitedVisionLimits')]
+  public function testUnlimitedVisionStillBooks(?int $limit): void {
+    $database = $this->createMock(Connection::class);
+    $database->expects($this->never())->method('select');
+    $logger = $this->createMock(LoggerChannelFactoryInterface::class);
+    $logger->method('get')->willReturn(new NullLogger());
+    $tracking = $this->getMockBuilder(TokenTrackingService::class)->setConstructorArgs([
+      $database,
+      $this->getConfigFactoryStub(['markaspot_ai.settings' => ['token_tracking' => [
+        'enabled' => TRUE, 'daily_limit' => 1, 'vision_daily_limit' => $limit,
+      ]]]),
+      $logger,
+    ])->onlyMethods(['logUsage'])->getMock();
+    $tracking->expects($this->once())->method('logUsage')->with('azure', 'effective-model-2026', 'vision', 41, 9);
+    $history = [];
+    $service = $this->service($tracking, [$this->response()], $history);
+    $result = $this->send($service);
+    self::assertSame('{"privacy_flag":false}', $result['choices'][0]['message']['content']);
+    self::assertCount(1, $history);
+  }
+
+  /**
+   * Both legacy missing configuration and explicit zero disable vision limits.
+   */
+  public static function unlimitedVisionLimits(): array {
+    return ['missing' => [NULL], 'zero' => [0]];
+  }
+
+  /**
    * Interactive media attribution keeps retries; the queue opts out explicitly.
    */
   #[DataProvider('retryPolicies')]
   public function testScreenedRetryPolicy(bool $interactive, int $attempts): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->exactly($attempts))->method('checkLimit')->willReturn(TRUE);
+    $tracking->expects($this->exactly($attempts))->method('checkVisionLimit')->willReturn(TRUE);
     $tracking->expects($this->exactly($attempts))->method('logUsage')
       ->with('azure', 'effective-model-2026', 'vision', 41, 9, 'media', 73);
     $history = [];
@@ -322,7 +353,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
     $tracking = $this->createMock(TokenTrackingService::class);
     $history = [];
     $checks = 0;
-    $tracking->expects($this->exactly(2))->method('checkLimit')->willReturnCallback(function () use (&$history, &$checks): bool {
+    $tracking->expects($this->exactly(2))->method('checkVisionLimit')->willReturnCallback(function () use (&$history, &$checks): bool {
       self::assertCount($checks++, $history);
       return TRUE;
     });
@@ -338,7 +369,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testUnconsumedRetryAndParameterRepair(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->exactly(3))->method('checkLimit')->willReturn(TRUE);
+    $tracking->expects($this->exactly(3))->method('checkVisionLimit')->willReturn(TRUE);
     $tracking->expects($this->once())->method('logUsage');
     $history = [];
     $service = $this->service($tracking, [
@@ -356,7 +387,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testRetryStopsWhenBudgetIsExhausted(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->exactly(2))->method('checkLimit')->willReturnOnConsecutiveCalls(TRUE, FALSE);
+    $tracking->expects($this->exactly(2))->method('checkVisionLimit')->willReturnOnConsecutiveCalls(TRUE, FALSE);
     $tracking->expects($this->once())->method('logUsage');
     $history = [];
     $service = $this->service($tracking, [$this->response([], 503)], $history);
@@ -375,7 +406,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public function testInvalidContentIsBooked(): void {
     $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->method('checkVisionLimit')->willReturn(TRUE);
     $tracking->expects($this->once())->method('logUsage');
     $history = [];
     $service = $this->service($tracking, [$this->response(['choices' => []])], $history);

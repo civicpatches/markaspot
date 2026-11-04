@@ -1092,8 +1092,8 @@ class ImageProcessingService {
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {
       try {
-        if ($accountingAvailable && !$this->tokenTracking->checkLimit()) {
-          $this->logger->warning('Skipping @operation: daily token limit exceeded.', [
+        if ($accountingAvailable && !$this->tokenTracking->checkVisionLimit()) {
+          $this->logger->warning('Skipping @operation: daily vision token limit exceeded.', [
             '@operation' => $this->accountingOptions['operation'] ?? 'vision',
           ]);
           throw new \RuntimeException('Vision request blocked by daily token limit.');

@@ -657,8 +657,8 @@ class MarkaspotAiSettingsForm extends ConfigFormBase {
 
     $form['token_tracking']['daily_limit'] = [
       '#type' => 'number',
-      '#title' => $this->t('Daily Token Limit'),
-      '#description' => $this->t('Maximum tokens to use per day. Set to 0 for unlimited. API calls will be blocked when limit is reached.'),
+      '#title' => $this->t('Daily Text Token Limit'),
+      '#description' => $this->t('Maximum tokens for non-vision AI operations per day. Set to 0 for unlimited. Vision uses its separate optional budget.'),
       '#default_value' => $config->get('token_tracking.daily_limit') ?? 100000,
       '#min' => 0,
       '#max' => 10000000,
@@ -688,10 +688,10 @@ class MarkaspotAiSettingsForm extends ConfigFormBase {
     // Add current usage summary if tracking is enabled.
     if ($config->get('token_tracking.enabled')) {
       try {
-        $usage = $this->tokenTracking->getDailyUsage();
+        $usage = $this->tokenTracking->getDailyUsage(NULL, FALSE);
         $dailyLimit = (int) $config->get('token_tracking.daily_limit');
 
-        $usage_text = $this->t('Today: @total tokens used (@input input, @output output) from @count requests.', [
+        $usage_text = $this->t('Today, excluding vision: @total tokens used (@input input, @output output) from @count requests.', [
           '@total' => number_format($usage['total_tokens']),
           '@input' => number_format($usage['total_input_tokens']),
           '@output' => number_format($usage['total_output_tokens']),
