@@ -127,6 +127,31 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   }
 
   /**
+   * Untrusted model names cannot overflow the usage column or contain controls.
+   */
+  #[DataProvider('providerModels')]
+  public function testBoundedProviderModel(string $reported, string $expected): void {
+    $tracking = $this->createMock(TokenTrackingService::class);
+    $tracking->method('checkLimit')->willReturn(TRUE);
+    $tracking->expects($this->once())->method('logUsage')
+      ->with('azure', $expected, 'vision', 41, 9, NULL, NULL);
+    $history = [];
+    $this->send($this->service($tracking, [$this->response(['model' => $reported])], $history));
+    self::assertCount(1, $history);
+  }
+
+  /**
+   * Long, mixed and entirely non-ASCII provider deployment names.
+   */
+  public static function providerModels(): array {
+    return [
+      'long' => [str_repeat('x', 200), str_repeat('x', 64)],
+      'mixed' => ["déploiement 模型\n\t name", 'dploiementname'],
+      'non-ASCII' => ['模型ä', 'configured-deployment'],
+    ];
+  }
+
+  /**
    * Screening has its own operation; scoped attribution cannot leak.
    */
   public function testScreeningOperationAndScopeReset(): void {

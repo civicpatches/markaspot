@@ -1105,8 +1105,13 @@ class ImageProcessingService {
         // Book each consumed attempt before parameter repair, retry or content
         // validation. An HTTP error without usage has nothing to book.
         if ($accountingAvailable && is_array($decoded) && ($status === 200 || !empty($decoded['usage']))) {
-          $model = is_string($decoded['model'] ?? NULL) && trim($decoded['model']) !== ''
-            ? $decoded['model'] : ($api_config['model'] ?? $this->configFactory->get('markaspot_vision.settings')->get('ai_model') ?? '');
+          // Provider deployment names are untrusted and the usage column is
+          // varchar(64). Apply the same bound to the configured fallback.
+          $model = substr(preg_replace('/[^\x21-\x7E]/', '', is_string($decoded['model'] ?? NULL) ? $decoded['model'] : ''), 0, 64);
+          if ($model === '') {
+            $configuredModel = $api_config['model'] ?? $this->configFactory->get('markaspot_vision.settings')->get('ai_model') ?? '';
+            $model = substr(preg_replace('/[^\x21-\x7E]/', '', $configuredModel), 0, 64);
+          }
           $host = strtolower((string) parse_url($api_config['url'], PHP_URL_HOST));
           $provider = SovereignPolicy::provider(match (TRUE) {
             str_ends_with($host, '.openai.azure.com'), str_contains($api_config['url'], '/openai/deployments/') => 'azure',
