@@ -53,7 +53,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   /**
    * Creates the real accounting client with an observed token tracker.
    */
-  private function service(?TokenTrackingService $tracking, array $responses, array &$history, ?LoggerInterface $channel = NULL, array $methods = ['wait']): ImageProcessingService {
+  private function service(?TokenTrackingService $tracking, array $responses, array &$history, ?LoggerInterface $channel = NULL, array $methods = ['wait'], ?StateInterface $state = NULL, ?TimeInterface $time = NULL): ImageProcessingService {
     $history = [];
     $stack = HandlerStack::create(new MockHandler($responses));
     $stack->push(Middleware::history($history));
@@ -64,11 +64,21 @@ final class VisionTokenAccountingTest extends UnitTestCase {
     ]]);
     $logger = $this->createMock(LoggerChannelFactoryInterface::class);
     $logger->method('get')->willReturn($channel ?? new NullLogger());
+    if ($state === NULL) {
+      $values = [];
+      $state = $this->createMock(StateInterface::class);
+      $state->method('get')->willReturnCallback(static function ($key) use (&$values) {
+        return $values[$key] ?? NULL;
+      });
+      $state->method('set')->willReturnCallback(static function ($key, $value) use (&$values): void {
+        $values[$key] = $value;
+      });
+    }
     return $this->getMockBuilder(ImageProcessingService::class)->setConstructorArgs([
       $client, $factory,
       $this->createMock(EntityTypeManagerInterface::class),
       $this->createMock(FileSystemInterface::class), $logger,
-      $this->createMock(StateInterface::class), $this->createMock(TimeInterface::class),
+      $state, $time ?? $this->createMock(TimeInterface::class),
       NULL, NULL, NULL, $tracking ? new AiClientService($client, $factory, $logger, $tracking) : NULL, $tracking,
     ])->onlyMethods($methods)->getMock();
   }
@@ -184,7 +194,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   }
 
   /**
-   * Missing accounting permits analysis and screening, warning once per call.
+   * Missing accounting permits analysis and screening, warning once per day.
    */
   public function testUnavailableAccounting(): void {
     $history = [];
@@ -200,7 +210,44 @@ final class VisionTokenAccountingTest extends UnitTestCase {
     self::assertSame('{"privacy_flag":false}', $result['choices'][0]['message']['content']);
     self::assertSame(['privacy_flag' => FALSE, 'privacy_issues' => []], $service->screenPrivacy(self::validImage(), 'image/png'));
     self::assertCount(3, $history);
-    self::assertSame(['vision', 'vision_screening'], $warnings, 'Retries do not repeat the accounting warning.');
+    self::assertSame(['vision'], $warnings, 'Retries and screening share the daily accounting warning.');
+  }
+
+  /**
+   * Separate service instances share a site warning and renew it the next day.
+   */
+  public function testAccountingWarningOncePerSiteDay(): void {
+    $now = strtotime('2026-11-04 12:00:00 UTC');
+    $time = $this->createMock(TimeInterface::class);
+    $time->method('getCurrentTime')->willReturnCallback(static function () use (&$now): int {
+      return $now;
+    });
+    $date = NULL;
+    $state = $this->createMock(StateInterface::class);
+    $state->method('get')->with('markaspot_vision.unaccounted_usage_warning_date')->willReturnCallback(static function () use (&$date) {
+      return $date;
+    });
+    $state->expects($this->exactly(2))->method('set')->with('markaspot_vision.unaccounted_usage_warning_date', $this->anything())->willReturnCallback(static function ($key, $value) use (&$date): void {
+      $date = $value;
+    });
+    $warnings = [];
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->method('warning')->willReturnCallback(static function ($message) use (&$warnings): void {
+      if (str_contains($message, 'without token accounting')) {
+        $warnings[] = $message;
+      }
+    });
+    for ($request = 0; $request < 3; $request++) {
+      if ($request === 2) {
+        $now += 86400;
+      }
+      $history = [];
+      $service = $this->service(NULL, [$this->response()], $history, $logger, ['wait'], $state, $time);
+      $this->send($service);
+      self::assertCount(1, $history);
+      self::assertCount($request === 2 ? 2 : 1, $warnings);
+    }
+    self::assertSame('2026-11-05', $date);
   }
 
   /**

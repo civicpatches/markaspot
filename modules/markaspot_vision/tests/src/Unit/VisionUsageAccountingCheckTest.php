@@ -49,13 +49,13 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
    * Optional services and configuration determine warning versus info.
    */
   #[DataProvider('accountingStates')]
-  public function testAccountingState(bool $installed, bool $tracker, bool $client, ?bool $enabled, string $severity, string $message): void {
+  public function testAccountingState(bool $installed, bool $tracker, bool $client, ?bool $enabled, string $severity, string $message, ?int $dailyLimit = 1000): void {
     $container = new ContainerBuilder();
     $modules = $this->createMock(ModuleHandlerInterface::class);
     $modules->method('moduleExists')->with('markaspot_ai')->willReturn($installed);
     $container->set('module_handler', $modules);
     $container->set('config.factory', $this->getConfigFactoryStub([
-      'markaspot_ai.settings' => ['token_tracking' => ['enabled' => $enabled]],
+      'markaspot_ai.settings' => ['token_tracking' => ['enabled' => $enabled, 'daily_limit' => $dailyLimit]],
     ]));
     if ($tracker) {
       $container->set('markaspot_ai.token_tracking', new \stdClass());
@@ -83,6 +83,9 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
       'client missing' => [TRUE, TRUE, FALSE, TRUE, 'warning', 'services are unavailable'],
       'tracking disabled' => [TRUE, TRUE, TRUE, FALSE, 'warning', 'disabled or unset'],
       'tracking unset' => [TRUE, TRUE, TRUE, NULL, 'warning', 'disabled or unset'],
+      'no limit' => [TRUE, TRUE, TRUE, TRUE, 'warning', 'accounted but no daily limit', 0],
+      'negative limit' => [TRUE, TRUE, TRUE, TRUE, 'warning', 'accounted but no daily limit', -1],
+      'unset limit' => [TRUE, TRUE, TRUE, TRUE, 'warning', 'accounted but no daily limit', NULL],
       'accounted' => [TRUE, TRUE, TRUE, TRUE, 'info', 'usage is accounted for'],
     ];
   }

@@ -1080,9 +1080,14 @@ class ImageProcessingService {
     }
     $accountingAvailable = $this->tokenTracking !== NULL && $this->aiClient !== NULL;
     if (!$accountingAvailable) {
-      $this->logger->warning('Proceeding with @operation without token accounting: markaspot_ai accounting services are unavailable. No usage is booked and no daily token limit is enforced.', [
-        '@operation' => $this->accountingOptions['operation'] ?? 'vision',
-      ]);
+      $today = gmdate('Y-m-d', $this->time->getCurrentTime());
+      $warningKey = 'markaspot_vision.unaccounted_usage_warning_date';
+      if ($this->state->get($warningKey) !== $today) {
+        $this->state->set($warningKey, $today);
+        $this->logger->warning('Proceeding with @operation without token accounting: markaspot_ai accounting services are unavailable. No usage is booked and no daily token limit is enforced.', [
+          '@operation' => $this->accountingOptions['operation'] ?? 'vision',
+        ]);
+      }
     }
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {

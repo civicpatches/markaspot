@@ -20,7 +20,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  *   label = @Translation("Vision token accounting"),
  *   severity = "info",
  *   description = @Translation("Reports whether vision usage is accounted for by markaspot_ai."),
- *   fix_hint = @Translation("For vision usage accounting and daily token limits, install markaspot_ai and enable token_tracking.enabled in markaspot_ai.settings."),
+ *   fix_hint = @Translation("For vision usage accounting and daily token limits, install markaspot_ai and enable token_tracking.enabled and set a positive token_tracking.daily_limit in markaspot_ai.settings."),
  * )
  */
 final class VisionUsageAccountingCheck extends HealthCheckPluginBase {
@@ -65,6 +65,9 @@ final class VisionUsageAccountingCheck extends HealthCheckPluginBase {
     }
     if (!$this->configFactory->get('markaspot_ai.settings')->get('token_tracking.enabled')) {
       return $this->failWithSeverity('warning', 1, 'Vision is enabled but markaspot_ai token_tracking.enabled is disabled or unset. Analysis continues without usage accounting or daily token limits.');
+    }
+    if ((int) $this->configFactory->get('markaspot_ai.settings')->get('token_tracking.daily_limit') <= 0) {
+      return $this->failWithSeverity('warning', 1, 'Vision usage is accounted but no daily limit is configured. Set a positive token_tracking.daily_limit in markaspot_ai.settings.');
     }
     return $this->pass('Vision usage is accounted for by markaspot_ai; configured daily token limits apply.');
   }
