@@ -72,13 +72,13 @@ final class ImportedImageTokenAccountingKernelTest extends KernelTestBase {
     $images = new class(
       $http, $c->get('config.factory'), $this->createMock(EntityTypeManagerInterface::class),
       $c->get('file_system'), $c->get('logger.factory'), $c->get('state'), $c->get('datetime.time'),
-      NULL, NULL, NULL, $client,
+      NULL, NULL, NULL, $client, $tracking,
     ) extends ImageProcessingService {
 
       /**
        * Supplies a prepared payload; keeps the real transport and accounting.
        */
-      public function processImages(array $file_uris, ?string $langcode = NULL, ?int $jurisdictionId = NULL): ?array {
+      public function processImages(array $file_uris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?int $mediaId = NULL): ?array {
         return $this->sendRequestWithRetry([
           'url' => 'https://vision.test/chat', 'model' => 'vision-deployment', 'headers' => [],
         ], [
@@ -125,7 +125,11 @@ final class ImportedImageTokenAccountingKernelTest extends KernelTestBase {
     }
     $images->processImages([]);
     $this->assertSame(0, $handler->count());
-    $this->assertSame(1, (int) $database->select('markaspot_ai_token_usage')->countQuery()->execute()->fetchField());
+    $this->assertSame(2, (int) $database->select('markaspot_ai_token_usage')->countQuery()->execute()->fetchField());
+    $unattributed = $database->select('markaspot_ai_token_usage', 't')->fields('t')
+      ->isNull('entity_id')->execute()->fetchAll(FetchAs::Associative);
+    $this->assertCount(1, $unattributed);
+    $this->assertNull($unattributed[0]['entity_type']);
   }
 
   /**

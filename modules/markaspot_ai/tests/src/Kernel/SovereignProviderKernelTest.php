@@ -269,6 +269,8 @@ class SovereignProviderKernelTest extends KernelTestBase {
       $images = new ImageProcessingService(
         $this->http, $c->get('config.factory'), $entities, $c->get('file_system'),
         $c->get('logger.factory'), $c->get('state'), $c->get('datetime.time'),
+        aiClient: $this->client,
+        tokenTracking: new TokenTrackingService($c->get('database'), $c->get('config.factory'), $c->get('logger.factory')),
       );
       $this->handler->append(new Response($blurStatus, [
         'X-Image-Blurred' => 'true', 'Location' => 'https://openai.invalid/capture',

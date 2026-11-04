@@ -21,6 +21,8 @@ use Drupal\markaspot_fastmap\Service\TierConfigService;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\markaspot_vision\Controller\ImageProcessingController;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\markaspot_vision\Service\MediaTenantScopeResolver;
 use Drupal\markaspot_vision\Service\StaffAnalysisAccess;
@@ -814,6 +816,8 @@ final class MediaTenantBindingKernelTest extends KernelTestBase {
     $methods = array_diff(get_class_methods(ImageProcessingService::class), ['__construct', 'processScreenedImages']);
     $provider = $this->getMockBuilder(ImageProcessingService::class)
       ->disableOriginalConstructor()->onlyMethods($methods)->getMock();
+    (new \ReflectionProperty($provider, 'aiClient'))->setValue($provider, $this->createMock(AiClientService::class));
+    (new \ReflectionProperty($provider, 'tokenTracking'))->setValue($provider, $this->createMock(TokenTrackingService::class));
     $provider->method('processImages')->willReturnCallback(function (array $uris, ?string $langcode, ?int $jurisdiction): array {
       $this->providerCalls[] = $jurisdiction;
       if ($this->duringAnalysis) {

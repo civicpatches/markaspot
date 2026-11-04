@@ -19,6 +19,8 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\image\ImageStyleInterface;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\taxonomy\TermInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Promise\FulfilledPromise;
@@ -153,9 +155,11 @@ trait ProviderPayloadCaptureTrait {
         $this->createMock(FileUsageInterface::class),
         $case['preset'] === NULL ? NULL : new CitizenWordingResolver(),
       ];
-      if ($moduleHandler !== NULL) {
-        $arguments[] = $moduleHandler;
-      }
+      $arguments[] = $moduleHandler;
+      $tracking = $this->createMock(TokenTrackingService::class);
+      $tracking->method('checkLimit')->willReturn(TRUE);
+      $arguments[] = new AiClientService($arguments[0], $configFactory, $loggerFactory, $tracking);
+      $arguments[] = $tracking;
       $service = new ImageProcessingService(...$arguments);
       $result = $service->processImages(array_fill(0, $case['images'], $image), $case['langcode'], $case['jurisdiction_id']);
       $this->assertNotNull($result, 'The analysis must reach the provider.');

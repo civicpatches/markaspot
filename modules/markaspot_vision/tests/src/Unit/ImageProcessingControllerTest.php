@@ -860,6 +860,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
         }),
         $this->anything(),
         $this->anything(),
+        1,
       )
       ->willReturn([
         'ai_result' => json_encode([

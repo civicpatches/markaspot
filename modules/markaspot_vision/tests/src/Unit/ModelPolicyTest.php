@@ -13,6 +13,8 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\Tests\UnitTestCase;
 use Drupal\Core\State\StateInterface;
 use Drupal\Component\Datetime\TimeInterface;
@@ -84,11 +86,15 @@ class ModelPolicyTest extends UnitTestCase {
     ]]);
     $logger = $this->createMock(LoggerChannelFactoryInterface::class);
     $logger->method('get')->willReturn($log ?? new NullLogger());
+    $tracking = $this->createMock(TokenTrackingService::class);
+    $tracking->method('checkLimit')->willReturn(TRUE);
     return $this->getMockBuilder(ImageProcessingService::class)->setConstructorArgs([
       new Client(['handler' => $stack]), $factory,
       $this->createMock(EntityTypeManagerInterface::class),
       $this->createMock(FileSystemInterface::class), $logger,
       $this->createMock(StateInterface::class), $this->createMock(TimeInterface::class),
+      NULL, NULL, NULL,
+      new AiClientService(new Client(), $factory, $logger, $tracking), $tracking,
     ])->onlyMethods(['wait', 'getAllCategoriesHierarchical'])->getMock();
   }
 

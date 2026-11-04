@@ -25,6 +25,7 @@ use Drupal\Core\State\StateInterface;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\markaspot_ai\Utility\ProviderError;
 use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 
 // These standalone utilities are shared within the profile, including when
 // markaspot_ai is disabled and Drupal has not registered its namespace.
@@ -102,12 +103,12 @@ class ImageProcessingService {
    *   The normal vision result.
    */
   public function processScreenedImages(array $screenedUris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?array $fileUris = NULL, ?int $mediaId = NULL): ?array {
-    if ($mediaId !== NULL && $this->aiClient === NULL) {
+    if ($mediaId !== NULL && ($this->aiClient === NULL || $this->tokenTracking === NULL)) {
       throw new \RuntimeException('Central token accounting is required for imported image analysis.');
     }
     $this->screenedUris = $screenedUris;
     $this->accountingOptions = $mediaId !== NULL ? [
-      'operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId,
+      'operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId, 'max_attempts' => 1,
     ] : [];
     try {
       return $this->processImages($fileUris ?? array_keys($screenedUris), $langcode, $jurisdictionId);
@@ -247,6 +248,8 @@ class ImageProcessingService {
    *   keeps its defaults.
    * @param \Drupal\markaspot_ai\Service\AiClientService|null $aiClient
    *   Central token accounting, when the AI module is installed.
+   * @param \Drupal\markaspot_ai\Service\TokenTrackingService|null $tokenTracking
+   *   Daily limit guard; provider requests fail closed without accounting.
    */
   public function __construct(
     ClientInterface $http_client,
@@ -260,6 +263,7 @@ class ImageProcessingService {
     protected ?CitizenWordingResolver $wordingResolver = NULL,
     protected ?ModuleHandlerInterface $moduleHandler = NULL,
     protected ?AiClientService $aiClient = NULL,
+    protected ?TokenTrackingService $tokenTracking = NULL,
   ) {
     $this->httpClient = $http_client;
     $this->configFactory = $config_factory;
@@ -585,11 +589,17 @@ class ImageProcessingService {
    *   Optional language code for the response.
    * @param int|null $jurisdictionId
    *   Optional jurisdiction group ID to filter categories.
+   * @param int|null $mediaId
+   *   The media item to attribute this provider call to, when known.
    *
    * @return array|null
    *   The AI processing result or NULL on failure.
    */
-  public function processImages(array $file_uris, ?string $langcode = NULL, ?int $jurisdictionId = NULL): ?array {
+  public function processImages(array $file_uris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?int $mediaId = NULL): ?array {
+    $previousOptions = $this->accountingOptions;
+    if ($mediaId !== NULL) {
+      $this->accountingOptions = ['entity_type' => 'media', 'entity_id' => $mediaId];
+    }
     $config = $this->configFactory->get('markaspot_vision.settings');
     $prompt_template = $config->get('image_prompt');
 
@@ -803,13 +813,16 @@ class ImageProcessingService {
         'blur_results' => $blur_results,
         'skipped_uris' => $skipped_uris,
         'usage' => $ai_data['usage'] ?? [],
-        'model' => $api_config['model'],
+        'model' => $ai_data['model'] ?? $api_config['model'],
       ];
 
     }
     catch (\Exception $e) {
       $this->logger->error('Error processing image set: @message', ['@message' => mb_substr($e->getMessage(), 0, 300)]);
       return NULL;
+    }
+    finally {
+      $this->accountingOptions = $previousOptions;
     }
   }
 
@@ -825,12 +838,16 @@ class ImageProcessingService {
    *   The MIME type of the image.
    * @param array $reportedIssues
    *   What the first analysis still saw; the check asks about exactly that.
+   * @param int|null $mediaId
+   *   The media item being screened, when known.
    *
    * @return array|null
    *   ['privacy_flag' => bool, 'privacy_issues' => string[]], or NULL when the
    *   check could not run; callers must treat NULL as "still visible".
    */
-  public function screenPrivacy(string $contents, string $mimeType, array $reportedIssues = []): ?array {
+  public function screenPrivacy(string $contents, string $mimeType, array $reportedIssues = [], ?int $mediaId = NULL): ?array {
+    $previousOptions = $this->accountingOptions;
+    $this->accountingOptions = ['operation' => 'vision_screening', 'entity_type' => 'media', 'entity_id' => $mediaId];
     $config = $this->configFactory->get('markaspot_vision.settings');
     // The first analysis's own wording, flattened and bounded: it only
     // steers the question, never the verdict format.
@@ -890,6 +907,9 @@ class ImageProcessingService {
     catch (\Exception $e) {
       $this->logger->error('Privacy re-check after an escalated blur failed: @message', ['@message' => mb_substr($e->getMessage(), 0, 300)]);
       return NULL;
+    }
+    finally {
+      $this->accountingOptions = $previousOptions;
     }
   }
 
@@ -1051,12 +1071,18 @@ class ImageProcessingService {
   protected function sendRequestWithRetry(array $api_config, array $request_payload, int $max_retries = 3): array {
     SovereignPolicy::assertEndpoint($api_config['url'], $this->logger);
     // Imported enrichment must not repeat an uncertain submission.
-    if ($this->accountingOptions !== []) {
+    if (($this->accountingOptions['max_attempts'] ?? NULL) === 1) {
       $max_retries = 1;
     }
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {
       try {
+        if ($this->tokenTracking === NULL || $this->aiClient === NULL || !$this->tokenTracking->checkLimit()) {
+          $this->logger->warning('Skipping @operation: daily token limit exceeded or central accounting unavailable.', [
+            '@operation' => $this->accountingOptions['operation'] ?? 'vision',
+          ]);
+          throw new \RuntimeException('Vision request blocked by daily token limit or unavailable accounting.');
+        }
         $request_options = [
           'headers' => $api_config['headers'],
           'json' => $request_payload,
@@ -1068,6 +1094,20 @@ class ImageProcessingService {
         $response = $this->httpClient->post($api_config['url'], $request_options);
         $status = $response->getStatusCode();
         $body = (string) $response->getBody();
+        $decoded = json_decode($body, TRUE);
+        // Book each consumed attempt before parameter repair, retry or content
+        // validation. An HTTP error without usage has nothing to book.
+        if (is_array($decoded) && ($status === 200 || !empty($decoded['usage']))) {
+          $model = is_string($decoded['model'] ?? NULL) && trim($decoded['model']) !== ''
+            ? $decoded['model'] : ($api_config['model'] ?? $this->configFactory->get('markaspot_vision.settings')->get('ai_model') ?? '');
+          $host = strtolower((string) parse_url($api_config['url'], PHP_URL_HOST));
+          $provider = SovereignPolicy::provider(match (TRUE) {
+            str_ends_with($host, '.openai.azure.com'), str_contains($api_config['url'], '/openai/deployments/') => 'azure',
+            $host === 'api.openai.com' => 'openai',
+            default => 'vision',
+          });
+          $this->aiClient->accountChatResponse($provider, $model, $this->accountingOptions + ['operation' => 'vision'], $decoded, $request_payload);
+        }
         if ($status === 400 && !$adapted && $this->adaptRejectedParameter($request_payload, (array) json_decode($body, TRUE), $api_config)) {
           $adapted = TRUE;
           $attempt--;
@@ -1077,11 +1117,6 @@ class ImageProcessingService {
           throw new \RuntimeException(ProviderError::message($body, $status), $status);
         }
         $decoded = json_decode($body, TRUE, 512, JSON_THROW_ON_ERROR);
-        if ($this->accountingOptions && $this->aiClient) {
-          // A successful provider answer consumed tokens even if validation
-          // below rejects it. HTTP failures and parameter repairs book nothing.
-          $this->aiClient->accountChatResponse('vision', $api_config['model'], $this->accountingOptions, $decoded, $request_payload);
-        }
         $content = $decoded['choices'][0]['message']['content'] ?? '';
         if ((!is_string($content) || trim($content) === '') && ($decoded['choices'][0]['finish_reason'] ?? '') === 'length') {
           $this->logger->error('Vision token budget exhausted; increase markaspot_vision.settings.max_tokens.');

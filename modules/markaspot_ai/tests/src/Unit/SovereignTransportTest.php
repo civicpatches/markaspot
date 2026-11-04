@@ -215,6 +215,10 @@ class SovereignTransportTest extends UnitTestCase {
     foreach (['httpClient' => $http, 'configFactory' => $factory, 'logger' => $this->createMock(LoggerInterface::class)] as $property => $value) {
       (new \ReflectionProperty($vision, $property))->setValue($vision, $value);
     }
+    $tracking = $this->createMock(TokenTrackingService::class);
+    $tracking->method('checkLimit')->willReturn(TRUE);
+    (new \ReflectionProperty($vision, 'tokenTracking'))->setValue($vision, $tracking);
+    (new \ReflectionProperty($vision, 'aiClient'))->setValue($vision, new AiClientService($http, $factory, $this->loggerFactory(), $tracking));
     return $vision;
   }
 

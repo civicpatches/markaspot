@@ -426,6 +426,7 @@ class MediaIntakeScreening {
       return 'accounting_unavailable';
     }
     if (!$this->tokenTracking->checkLimit()) {
+      $this->loggerFactory->get('markaspot_vision')->warning('Skipping imported media @mid AI analysis: daily token limit exceeded.', ['@mid' => $media->id()]);
       return 'budget_exhausted';
     }
     if ($this->tierConfig) {

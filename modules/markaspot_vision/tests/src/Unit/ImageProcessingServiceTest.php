@@ -23,6 +23,8 @@ use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\markaspot_ai\Service\NodeAnalysisService;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\media\MediaInterface;
 use Drupal\Tests\UnitTestCase;
 use Drupal\Core\State\StateInterface;
@@ -158,7 +160,6 @@ class ImageProcessingServiceTest extends UnitTestCase {
 
     $loggerFactory = $this->createMock(LoggerChannelFactoryInterface::class);
     $loggerFactory->method('get')
-      ->with('markaspot_vision')
       ->willReturn($this->logger);
 
     $time = $this->createMock(TimeInterface::class);
@@ -167,6 +168,8 @@ class ImageProcessingServiceTest extends UnitTestCase {
     $fileUsage = $this->createMock(FileUsageInterface::class);
     $fileUsage->method('listUsage')->willReturnCallback(fn () => $this->fileUsageList);
 
+    $tracking = $this->createMock(TokenTrackingService::class);
+    $tracking->method('checkLimit')->willReturn(TRUE);
     return new ImageProcessingService(
       $httpClient,
       $configFactory,
@@ -176,6 +179,8 @@ class ImageProcessingServiceTest extends UnitTestCase {
       $this->createMock(StateInterface::class),
       $time,
       $fileUsage,
+      aiClient: new AiClientService($httpClient, $configFactory, $loggerFactory, $tracking),
+      tokenTracking: $tracking,
     );
   }
 
@@ -186,6 +191,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
     $http = $this->createMock(ClientInterface::class);
     $http->expects($this->never())->method('request');
     $service = $this->createService(httpClient: $http);
+    (new \ReflectionProperty($service, 'tokenTracking'))->setValue($service, NULL);
     $this->expectException(\RuntimeException::class);
     $this->expectExceptionMessage('Central token accounting is required');
     $service->processScreenedImages([], mediaId: 73);

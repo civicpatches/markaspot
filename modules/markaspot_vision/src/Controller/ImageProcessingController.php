@@ -376,9 +376,12 @@ class ImageProcessingController extends ControllerBase {
           $screened_uris[$uri] = $metadata['intake_screening'];
         }
       }
+      // A multi-photo request is one provider call, attributed to its first
+      // media item. Per-photo privacy rechecks carry their own media ID.
+      $analysisMediaId = (int) reset($media_entities)->id();
       $ai_result = $screened_uris
-        ? $this->imageProcessingService->processScreenedImages($screened_uris, $langcode, $jurisdictionId, $file_uris)
-        : $this->imageProcessingService->processImages($file_uris, $langcode, $jurisdictionId);
+        ? $this->imageProcessingService->processScreenedImages($screened_uris, $langcode, $jurisdictionId, $file_uris, $analysisMediaId)
+        : $this->imageProcessingService->processImages($file_uris, $langcode, $jurisdictionId, $analysisMediaId);
       if (!$ai_result) {
         throw new \Exception('Failed to process images using the AI service.');
       }
@@ -988,7 +991,7 @@ class ImageProcessingController extends ControllerBase {
             && (!$needs['regions'] || (($strong['faces'] ?? 0) + ($strong['plates'] ?? 0)) > 0);
           if ($covered) {
             $rechecks++;
-            $check = $this->imageProcessingService->screenPrivacy($strong['contents'], $mime, $media_issues);
+            $check = $this->imageProcessingService->screenPrivacy($strong['contents'], $mime, $media_issues, (int) $media->id());
             if ($check !== NULL && !$check['privacy_flag']) {
               $escalated = $strong['contents'];
               $mode = ImageProcessingService::BLUR_MODE_STRONG;
