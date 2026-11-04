@@ -373,6 +373,7 @@ final class TenantDemoContentKernelTest extends KernelTestBase {
       $this->assertSame('Synthetic private attachment.', file_get_contents($node->get('field_service_provider_files')->entity->getFileUri()));
       $this->assertSame(1, (int) $node->get('field_service_provider_files')->entity->getOwnerId());
       $this->assertNotNull($node->get('field_request_media')->entity->get('field_media_image')->entity);
+      $this->assertTrue($node->get('field_request_media')->entity->isPublished());
       $repeat = $command->seed($assets . '/fixture.json', $options)->getArrayCopy()[0];
       $this->assertSame('unchanged', $repeat['action']);
       $this->assertFalse($repeat['applied']);

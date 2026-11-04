@@ -2,6 +2,8 @@
 
 namespace Drupal\Tests\markaspot_vision\Unit;
 
+use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+use Drupal\node\NodeInterface;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\State\StateInterface;
@@ -152,6 +154,11 @@ class ImageProcessingControllerTest extends UnitTestCase {
   protected array $manualPublicationMarks = [];
 
   /**
+   * Reports already using the analysed upload.
+   */
+  protected array $parentReports = [];
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
@@ -175,9 +182,9 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $nodeQuery = $this->createMock(QueryInterface::class);
     $nodeQuery->method('accessCheck')->willReturnSelf();
     $nodeQuery->method('condition')->willReturnSelf();
-    $nodeQuery->method('execute')->willReturn([]);
+    $nodeQuery->method('execute')->willReturnCallback(fn () => array_keys($this->parentReports));
     $this->nodeStorage->method('getQuery')->willReturn($nodeQuery);
-    $this->nodeStorage->method('loadMultiple')->willReturn([]);
+    $this->nodeStorage->method('loadMultiple')->willReturnCallback(fn () => $this->parentReports);
 
     $loggerFactory = $this->createMock(LoggerChannelFactoryInterface::class);
     $loggerFactory->method('get')
@@ -988,8 +995,9 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $this->imageProcessingService->method('processImages')
       ->willReturn(['ai_result' => json_encode($expectedResult)]);
 
-    // Safe media (privacy_flag=FALSE) must be published immediately.
-    $media->expects($this->once())->method('setPublished');
+    // A safe unattached upload must remain unpublished until report save.
+    $media->expects($this->once())->method('setUnpublished');
+    $media->expects($this->never())->method('setPublished');
 
     $request = $this->createJsonRequest(['media_ids' => ['uuid-1']]);
     $response = $this->controller->getAIResults($request);
@@ -1087,9 +1095,9 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ->method('saveBlurredImage')
       ->with($media, 'blurred-bytes', 'public://test.jpg');
 
-    // Successful anonymisation publishes the media even when the AI still
-    // describes the blurred region as a privacy concern.
-    $media->expects($this->once())->method('setPublished');
+    // Successful anonymisation clears the hold even when the AI still
+    // describes the blurred region as a privacy concern. Publication waits.
+    $media->expects($this->never())->method('setPublished');
 
     // Capture what gets persisted to the JSON:API-exposed field_ai_metadata.
     $capturedMetadata = NULL;
@@ -1322,7 +1330,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
   }
 
   /**
-   * Media skipped from AI analysis is held while analyzed media can publish.
+   * Skipped media stay held; safe analysed uploads also await report save.
    */
   public function testSkippedMediaHeldWhileAnalyzedMediaCanPublish(): void {
     $this->flood->method('isAllowed')->willReturn(TRUE);
@@ -1352,7 +1360,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ]);
 
     $skippedMedia->expects($this->never())->method('setPublished');
-    $analyzedMedia->expects($this->once())->method('setPublished');
+    $analyzedMedia->expects($this->never())->method('setPublished');
 
     $capturedSkippedFlag = NULL;
     $capturedSkippedIssues = NULL;
@@ -1613,7 +1621,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
   }
 
   /**
-   * A successfully blurred media publishes when the AI clears privacy_flag.
+   * A blurred upload stays private when the AI clears privacy_flag.
    *
    * The smoke showed the model inconsistently sets privacy_flag=false on a
    * blurred face. A successful blur overwrite means the exported/public media
@@ -1655,8 +1663,8 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ->method('saveBlurredImage')
       ->with($media, 'blurred-bytes', 'public://test.jpg');
 
-    // Successful anonymisation plus no residual privacy finding publishes.
-    $media->expects($this->once())->method('setPublished');
+    // Successful anonymisation alone does not publish an unattached upload.
+    $media->expects($this->never())->method('setPublished');
 
     // Capture the persisted moderation flag. This is the field the node hook
     // reads, so it must not fold in successful blur without a residual privacy
@@ -1676,7 +1684,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
 
     $this->assertEquals(200, $response->getStatusCode());
     $data = json_decode($response->getContent(), TRUE);
-    // Citizen notice suppressed (blur ran); media published (asserted).
+    // The citizen notice is suppressed; the unattached upload stays private.
     $this->assertTrue($data['privacy_handled_by_blur']);
     // field_ai_privacy_flag follows the AI verdict, not the blur fact.
     $this->assertFalse($capturedPrivacyFlag);
@@ -1692,6 +1700,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
    * privacy, a re-analysis must not flip the state back (WBD #131).
    */
   public function testManualPublicationDecisionSurvivesReanalysis(): void {
+    $this->attachToPublishedReport();
     $this->flood->method('isAllowed')->willReturn(TRUE);
 
     $media = $this->createMockMedia(1);
@@ -1724,7 +1733,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
   }
 
   /**
-   * Mixed batch: successfully anonymised and clean media both publish.
+   * Mixed batch: successfully anonymised and clean uploads both stay private.
    *
    * Locks the grain distinction: the publish guard is per media and follows
    * residual privacy findings, not the batch-level blur signal.
@@ -1768,8 +1777,8 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ]);
 
     // Both media are safe after analysis; blur alone is not a hold.
-    $blurredMedia->expects($this->once())->method('setPublished');
-    $cleanMedia->expects($this->once())->method('setPublished');
+    $blurredMedia->expects($this->never())->method('setPublished');
+    $cleanMedia->expects($this->never())->method('setPublished');
 
     $request = $this->createJsonRequest(['media_ids' => ['uuid-1', 'uuid-2']]);
     $response = $this->controller->getAIResults($request);
@@ -1874,7 +1883,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ->willReturn(['privacy_flag' => FALSE, 'privacy_issues' => []]);
     $this->imageProcessingService->expects($this->once())->method('saveBlurredImage')
       ->with($media, 'strong-bytes', 'public://test.jpg');
-    $media->expects($this->once())->method('setPublished');
+    $media->expects($this->never())->method('setPublished');
 
     $data = json_decode($this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]))->getContent(), TRUE);
 
@@ -1889,6 +1898,36 @@ class ImageProcessingControllerTest extends UnitTestCase {
     $metadata = json_decode($captured['field_ai_metadata'], TRUE);
     $this->assertSame(['mode' => 'strong', 'reason' => 'attribution_invalid'], $metadata['markaspot_privacy_escalation']);
     $this->assertTrue($metadata['privacy_flag'], 'The raw model verdict stays in the audit blob.');
+  }
+
+  /**
+   * Reanalysis still releases a safe image already attached to a report.
+   */
+  public function testSafeAttachedMediaIsPublished(): void {
+    $this->residualHandling = 'reblur';
+    [$media] = $this->residualAddressScenario();
+    $this->imageProcessingService->method('blurSensitiveAreas')->willReturn([
+      'contents' => 'strong-bytes', 'blurred' => TRUE, 'texts' => 2,
+    ]);
+    $this->imageProcessingService->method('screenPrivacy')->willReturn([
+      'privacy_flag' => FALSE, 'privacy_issues' => [],
+    ]);
+    $this->attachToPublishedReport();
+    $media->expects($this->once())->method('setPublished');
+    $response = $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]));
+    $this->assertSame(200, $response->getStatusCode());
+  }
+
+  /**
+   * Associates the test upload with a published report.
+   */
+  protected function attachToPublishedReport(): void {
+    $parent = $this->createMock(NodeInterface::class);
+    $parent->method('isPublished')->willReturn(TRUE);
+    $references = $this->createMock(EntityReferenceFieldItemListInterface::class);
+    $references->method('referencedEntities')->willReturn([]);
+    $parent->method('get')->with('field_request_media')->willReturn($references);
+    $this->parentReports = [42 => $parent];
   }
 
   /**
@@ -1908,7 +1947,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       ->willReturn(['privacy_flag' => TRUE, 'privacy_issues' => ['address still readable']]);
     $this->imageProcessingService->expects($this->once())->method('saveBlurredImage')
       ->with($media, 'full-bytes', 'public://test.jpg');
-    $media->expects($this->once())->method('setPublished');
+    $media->expects($this->never())->method('setPublished');
 
     $data = json_decode($this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]))->getContent(), TRUE);
 
@@ -2053,7 +2092,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       });
     $this->imageProcessingService->method('screenPrivacy')->willReturn(['privacy_flag' => FALSE, 'privacy_issues' => []]);
     $first->expects($this->never())->method('setPublished');
-    $second->expects($this->once())->method('setPublished');
+    $second->expects($this->never())->method('setPublished');
 
     $data = json_decode($this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1', 'uuid-2']]))->getContent(), TRUE);
 
@@ -2099,7 +2138,7 @@ class ImageProcessingControllerTest extends UnitTestCase {
       });
       $held = $id === $skipped || $missing || $failed
         || ($handling === 'hold' && in_array($id, $affected, TRUE));
-      $photo->expects($held ? $this->never() : $this->once())->method('setPublished');
+      $photo->expects($this->never())->method('setPublished');
       $photo->expects($this->once())->method('save');
       $escalated = $handling === 'reblur' && in_array($id, $affected, TRUE);
       if ($escalated) {
@@ -2301,8 +2340,8 @@ class ImageProcessingControllerTest extends UnitTestCase {
         return $clean;
       },
     );
-    $media->expects($this->once())->method('setPublished');
-    $clean->expects($this->once())->method('setPublished');
+    $media->expects($this->never())->method('setPublished');
+    $clean->expects($this->never())->method('setPublished');
     $this->mediaStorage->method('loadByProperties')
       ->willReturn([1 => $media, 2 => $clean]);
     $this->imageProcessingService->method('processImages')->willReturn([
@@ -2378,8 +2417,8 @@ class ImageProcessingControllerTest extends UnitTestCase {
           return ['privacy_flag' => FALSE, 'privacy_issues' => []];
         },
       );
-    $first->expects($this->once())->method('setPublished');
-    $second->expects($this->once())->method('setPublished');
+    $first->expects($this->never())->method('setPublished');
+    $second->expects($this->never())->method('setPublished');
 
     $response = $this->controller->getAIResults(
       $this->createJsonRequest(['media_ids' => ['uuid-1', 'uuid-2']]),

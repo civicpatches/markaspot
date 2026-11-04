@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
+use Drupal\markaspot_vision\Service\OriginalImageStore;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Config\FileStorage;
 use Drupal\Core\Session\AccountInterface;
@@ -751,6 +752,24 @@ final class MediaTenantBindingKernelTest extends KernelTestBase {
       $this->assertStatus(200, $this->analyze($request, [$media], $this->tenantA->id()));
       $this->assertSame($published, Media::load($media->id())->isPublished());
     }
+  }
+
+  /**
+   * Analysis persists its verdict without publishing a citizen's unused upload.
+   */
+  public function testUnattachedAnalysisWaitsForReportPublication(): void {
+    $request = $this->anonymousUploadRequest('upload-without-report');
+    $media = $this->createUpload($request, NULL, (string) $this->tenantA->id());
+    $this->assertStatus(200, $this->analyze($request, [$media], $this->tenantA->id()));
+    $fresh = $this->container->get('entity_type.manager')->getStorage('media')->loadUnchanged($media->id());
+    $this->assertFalse($fresh->isPublished());
+    $this->assertNotEmpty($fresh->get('field_ai_metadata')->value);
+    $report = $this->createReport([$this->tenantA], [$media]);
+    $report->setPublished()->save();
+    require_once dirname(__DIR__, 3) . '/markaspot_vision.module';
+    $this->container->set('markaspot_vision.original_image_store', $this->createMock(OriginalImageStore::class));
+    markaspot_vision_node_insert($report);
+    $this->assertTrue(Media::load($media->id())->isPublished());
   }
 
   /**

@@ -707,6 +707,20 @@ final class DemoWorkspaceSeeder {
     $this->setIfField($node, 'field_status_notes', $notes);
     $this->setIfField($node, 'field_status', ['target_id' => $finalStatus]);
     $node->save();
+    // Seed photos have an explicit editorial decision, but only publish once
+    // their report exists. A failed report save leaves an unpublished upload.
+    if ($mediaId !== NULL) {
+      $stored = $nodeStorage->loadUnchanged($node->id());
+      $references = array_map('intval', array_column($stored->get('field_request_media')->getValue(), 'target_id'));
+      if (!in_array($mediaId, $references, TRUE)) {
+        throw new \RuntimeException('The seeded report did not retain its image reference.');
+      }
+      $photo = $this->entityTypeManager->getStorage('media')->loadUnchanged($mediaId);
+      if ($stored->isPublished()) {
+        $photo->setPublished();
+        $photo->save();
+      }
+    }
 
     // Creation hooks may force the jurisdiction's initial status and the
     // geocoder replaces the address of a new report; restore both once.
@@ -835,7 +849,7 @@ final class DemoWorkspaceSeeder {
       $media->get('field_media_image')->alt = $photo['alt'][$default];
     }
     $media->set('name', $report['title'][$default]);
-    $media->setPublished();
+    $media->setUnpublished();
     $media->save();
     $this->keyValueFactory->get(self::MANUAL_MEDIA_PUBLICATION)->set($media->id(), TRUE);
 

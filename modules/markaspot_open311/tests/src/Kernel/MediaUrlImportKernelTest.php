@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_open311\Kernel;
 
+use Drupal\node\Entity\Node;
 use Drupal\Core\StreamWrapper\PrivateStream;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
@@ -214,7 +215,7 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
   }
 
   /**
-   * Installs without Vision retain their original publication behavior.
+   * Installs without Vision release safe imports only after report creation.
    */
   public function testImportWithoutVisionPublishesUnlessFlagged(): void {
     $oldRequired = getenv('MARKASPOT_BLUR_REQUIRED');
@@ -227,7 +228,13 @@ final class MediaUrlImportKernelTest extends KernelTestBase {
       $handler = new \ReflectionMethod($processor, 'handleMediaUrls');
       $references = $handler->invoke($processor, ['media_url' => 'https://images.example.com/image.png']);
       $media = Media::load($references[0]['target_id']);
-      $this->assertTrue($media->isPublished());
+      $this->assertFalse($media->isPublished(), 'The upload alone must stay private.');
+      Node::create([
+        'type' => 'service_request', 'title' => 'Test report', 'status' => 1,
+        'field_request_media' => $media->id(),
+      ])->save();
+      $processor->commitImportedMedia();
+      $this->assertTrue(Media::load($media->id())->isPublished());
       $this->assertSame([], $this->queuedMedia);
       $file = File::load($media->get('field_media_image')->target_id);
       $flagged = (new \ReflectionMethod($processor, 'createMediaEntity'))->invoke($processor, 'request_image', $file, TRUE);

@@ -431,7 +431,7 @@ final class TenantDemoContent {
         'bundle' => 'request_image',
         'name' => '[DEMO] ' . $name,
         'uid' => 0,
-        'status' => 1,
+        'status' => 0,
         'field_media_image' => $image,
       ]);
       $this->validate($plan['media']);
@@ -521,6 +521,7 @@ final class TenantDemoContent {
       'field_status',
       'field_organisation',
       'field_assignee',
+      'field_request_media',
     ] as $field) {
       if ($node->hasField($field)) {
         $expectedReferences[$field] = array_map('strval', array_column($node->get($field)->getValue(), 'target_id'));
@@ -549,6 +550,15 @@ final class TenantDemoContent {
     foreach ($expectedReferences as $field => $ids) {
       if (array_map('strval', array_column($saved->get($field)->getValue(), 'target_id')) !== $ids) {
         throw new \RuntimeException('A normal entity hook changed requested scoped references; fixture creation stopped.');
+      }
+    }
+    // These explicitly reviewed synthetic fixtures are published only after
+    // the report and its references have been persisted successfully.
+    foreach ($plan['files'] as $item) {
+      if (isset($item['media']) && $saved->isPublished()) {
+        $media = $this->entities->getStorage('media')->loadUnchanged($item['media']->id());
+        $media->setPublished();
+        $media->save();
       }
     }
     $created[] = $saved;

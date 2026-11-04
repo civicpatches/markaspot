@@ -67,6 +67,16 @@ function markaspot_vision_media_presave(MediaInterface $media): void {
   if ($media->bundle() !== 'request_image') {
     return;
   }
+  // The bundle default, direct API writes and seed/import code must obey the
+  // same rule as analysis: a stored report must exist before publication.
+  if ($media->isPublished()) {
+    $parents = $media->isNew() ? [] : \Drupal::entityTypeManager()->getStorage('node')
+      ->getQuery()->accessCheck(FALSE)->condition('type', 'service_request')
+      ->condition('field_request_media.target_id', $media->id())->range(0, 1)->execute();
+    if (!$parents) {
+      $media->setUnpublished();
+    }
+  }
   $store = \Drupal::keyValue(MediaIntakeScreening::STORE);
   $entry = $store->get($media->id());
   if (!$entry) {

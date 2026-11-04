@@ -4250,7 +4250,26 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
   public function commitImportedMedia(): void {
     foreach ($this->importedMedia as $entity) {
       if ($entity instanceof MediaInterface) {
-        $this->intakeScreening?->enqueue($entity);
+        if ($this->intakeScreening !== NULL) {
+          $this->intakeScreening->enqueue($entity);
+        }
+        elseif (!BlurPolicy::isRequired($this->logger ?? new NullLogger())
+          && (!$entity->hasField('field_ai_privacy_flag') || !$entity->get('field_ai_privacy_flag')->value)) {
+          // Legacy imports without Vision retain their publication policy,
+          // but only after a published report actually references the image.
+          $parents = $this->entityTypeManager->getStorage('node');
+          $ids = $parents->getQuery()->accessCheck(FALSE)->condition('type', 'service_request')
+            ->condition('field_request_media.target_id', $entity->id())->execute();
+          $reports = $parents->loadMultiple($ids);
+          $publish = !empty($reports);
+          foreach ($reports as $report) {
+            $publish = $publish && $report->isPublished();
+          }
+          if ($publish) {
+            $entity->setPublished();
+            $entity->save();
+          }
+        }
       }
     }
     $this->importedMedia = [];
@@ -4313,12 +4332,7 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     if (!class_exists(BlurPolicy::class)) {
       require_once __DIR__ . '/../../../markaspot_ai/src/Utility/BlurPolicy.php';
     }
-    if ($this->intakeScreening !== NULL || $privacyFlagged || BlurPolicy::isRequired($this->logger ?? new NullLogger())) {
-      $media->setUnpublished();
-    }
-    else {
-      $media->setPublished();
-    }
+    $media->setUnpublished();
 
     // Media::save() does not validate, so the extension, size and image
     // checks of field_media_image would never run for files created here.

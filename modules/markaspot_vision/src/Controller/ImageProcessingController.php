@@ -245,10 +245,6 @@ class ImageProcessingController extends ControllerBase {
         throw new \Exception('No valid media entities found for the provided media_ids.');
       }
 
-      // ControllerBase::keyValue() caches only its first collection. Use the
-      // factory to keep intake and editorial-publication state separate.
-      $intake_store = $this->keyValueFactory->get(MediaIntakeScreening::STORE);
-
       // Tenant scope follows the media, not the caller: the jurisdiction of a
       // report already referencing them or the binding made at upload (see
       // MediaTenantScopeResolver for the transitional first-analysis binding).
@@ -276,14 +272,14 @@ class ImageProcessingController extends ControllerBase {
         ], 403);
       }
 
-      // The queue and interactive analysis must never transform an imported
-      // image concurrently. Order locks consistently for multi-image batches.
+      // Serialize analysis with intake and orphan collection for every upload.
+      // Order locks consistently for multi-image batches.
       ksort($media_entities, SORT_NUMERIC);
       foreach ($media_entities as $mid => $media) {
-        if ($this->operationLock && $intake_store->has($mid)) {
+        if ($this->operationLock) {
           $name = MediaIntakeScreening::QUEUE . ':' . $mid;
           if (!$this->operationLock->acquire($name, 900)) {
-            return new JsonResponse(['error' => 'Imported image screening is already running. Please retry.'], 409);
+            return new JsonResponse(['error' => 'Image processing is already running. Please retry.'], 409);
           }
           $intake_locks[] = $name;
           $media_entities[$mid] = $media_storage->loadUnchanged($mid);
@@ -606,18 +602,10 @@ class ImageProcessingController extends ControllerBase {
             }
           }
 
-          // Publish media immediately after successful AI screening if safe.
-          // This must happen here (not only in hook_node_insert) because entity
-          // reference validation rejects unpublished media for anonymous users.
-          // $privacy_held is the same predicate markaspot_vision's node hook
-          // applies on later saves. Successful blur clears the persisted hold
-          // above, so anonymised media can stay published.
-          //
-          // Skip when the publication is under explicit editorial control via
-          // the GeoReport media publication API: a trusted consumer's decision
-          // wins over (re-)screening, so a re-analysis must not flip the state
-          // back. Fresh uploads have no such mark, so first-screen publishing
-          // is unaffected.
+          // Screening records a verdict, but an upload alone is not consent
+          // to publish. Only images already used by published reports may be
+          // released here. New uploads are released by the report save hook.
+          // Explicit editorial decisions remain authoritative.
           $publication_lock_name = 'markaspot_open311.media_publication.' . $media->id();
           if ($this->operationLock && !$this->operationLock->acquire($publication_lock_name, 30)) {
             throw new \RuntimeException('Media publication is being edited. Please retry analysis.');
@@ -643,16 +631,14 @@ class ImageProcessingController extends ControllerBase {
             }
             $manual_publication = $this->keyValueFactory->get('markaspot_open311.media_publication_manual');
             if (!$manual_publication->get($media->id())) {
-              $can_publish = TRUE;
-              if ($intake_store->has($media->id())) {
-                $parents = $this->entityTypeManager()->getStorage('node');
-                $ids = $parents->getQuery()->accessCheck(FALSE)
-                  ->condition('type', 'service_request')
-                  ->condition('field_request_media', $media->id())->execute();
-                $can_publish = !empty($ids);
-                foreach ($parents->loadMultiple($ids) as $parent) {
-                  $can_publish = $can_publish && $parent->isPublished();
-                }
+              $parents = $this->entityTypeManager()->getStorage('node');
+              $ids = $parents->getQuery()->accessCheck(FALSE)
+                ->condition('type', 'service_request')
+                ->condition('field_request_media', $media->id())->execute();
+              $reports = $parents->loadMultiple($ids);
+              $can_publish = !empty($reports);
+              foreach ($reports as $parent) {
+                $can_publish = $can_publish && $parent->isPublished();
               }
               if (!$can_publish || $privacy_held) {
                 $media->setUnpublished();

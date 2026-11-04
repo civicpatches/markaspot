@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_vision\Unit;
 
+use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\Cache\Context\CacheContextsManager;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Entity\EntityStorageInterface;
@@ -136,10 +137,20 @@ final class MediaPublicationRuleTest extends UnitTestCase {
       $store->get(MediaIntakeScreening::STORE)->set(42, ['status' => $status]);
       $container->set('keyvalue', $store);
       $logger = $this->createMock(LoggerChannelInterface::class);
-      $logger->expects($blocked ? $this->once() : $this->never())->method('warning');
+      $logger->expects($blocked && !$new ? $this->once() : $this->never())->method('warning');
       $loggers = $this->createMock(LoggerChannelFactoryInterface::class);
       $loggers->method('get')->willReturn($logger);
       $container->set('logger.factory', $loggers);
+      $query = $this->createMock(QueryInterface::class);
+      $query->method('accessCheck')->willReturnSelf();
+      $query->method('condition')->willReturnSelf();
+      $query->method('range')->willReturnSelf();
+      $query->method('execute')->willReturn([1]);
+      $parents = $this->createMock(EntityStorageInterface::class);
+      $parents->method('getQuery')->willReturn($query);
+      $manager = $this->createMock(EntityTypeManagerInterface::class);
+      $manager->method('getStorage')->with('node')->willReturn($parents);
+      $container->set('entity_type.manager', $manager);
       \Drupal::setContainer($container);
       $file = $this->createMock(FileInterface::class);
       $file->method('getFileUri')->willReturn($source);
@@ -158,12 +169,19 @@ final class MediaPublicationRuleTest extends UnitTestCase {
       $media->method('id')->willReturn(42);
       $media->method('isNew')->willReturn($new);
       $media->method('bundle')->willReturn('request_image');
-      $media->method('isPublished')->willReturn(TRUE);
+      $published = TRUE;
+      $media->method('isPublished')->willReturnCallback(static function () use (&$published): bool {
+        return $published;
+      });
       $media->method('getOriginal')->willReturn($new ? NULL : $original);
       $media->method('get')->willReturnMap([
         ['field_media_image', $image], ['field_ai_metadata', $metadata],
       ]);
-      $media->expects($blocked ? $this->once() : $this->never())->method('setUnpublished');
+      $media->expects($blocked || $new ? $this->once() : $this->never())->method('setUnpublished')
+        ->willReturnCallback(static function () use (&$published, $media) {
+          $published = FALSE;
+          return $media;
+        });
       markaspot_vision_media_presave($media);
     }
     finally {
