@@ -16,6 +16,7 @@ use Drupal\Core\Database\Connection;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
 use Drupal\markaspot_ai\Privacy\RetainedPiiOriginal;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Utility\ImagePixelGuard;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
 use Drupal\paragraphs\ParagraphInterface;
 use Drupal\Core\State\StateInterface;
@@ -1957,6 +1958,7 @@ class AttributeFillingService {
    *   When the required image style is not found.
    */
   protected function getStyledImagePath(string $uri): string {
+    ImagePixelGuard::assertSafePath($uri);
     $style = $this->entityTypeManager->getStorage('image_style')->load('wide');
     if (!$style) {
       throw new \Exception('The "wide" image style was not found. Please ensure it exists.');

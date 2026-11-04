@@ -36,6 +36,13 @@ use Psr\Log\NullLogger;
 class ModelPolicyTest extends UnitTestCase {
 
   /**
+   * A real 1x1 PNG for header validation at the transport boundary.
+   */
+  private static function validImage(): string {
+    return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=');
+  }
+
+  /**
    * HTTP history and saved environment.
    */
   private array $history = [];
@@ -255,8 +262,8 @@ class ModelPolicyTest extends UnitTestCase {
    * The OSS default never contacts blur.
    */
   public function testOssDefault(): void {
-    $result = $this->service()->blurSensitiveAreas('original', 'image/png');
-    self::assertSame('original', $result['contents']);
+    $result = $this->service()->blurSensitiveAreas(self::validImage(), 'image/png');
+    self::assertSame(self::validImage(), $result['contents']);
     self::assertFalse($result['processed']);
     self::assertCount(0, $this->history);
   }
@@ -355,7 +362,7 @@ class ModelPolicyTest extends UnitTestCase {
     putenv('MARKASPOT_BLUR_API_KEY=' . $key);
     putenv('MARKASPOT_BLUR_URL=https://blur.example/blur');
     $this->expectExceptionMessage('MARKASPOT_BLUR_REQUIRED');
-    $this->service()->blurSensitiveAreas('original', 'image/png');
+    $this->service()->blurSensitiveAreas(self::validImage(), 'image/png');
   }
 
   /**
@@ -478,14 +485,14 @@ class ModelPolicyTest extends UnitTestCase {
     putenv('MARKASPOT_BLUR_API_KEY=test');
     $service = $this->service([], [new Response(200, [], 'not-an-image')]);
     try {
-      $service->blurSensitiveAreas('synthetic', 'image/png');
+      $service->blurSensitiveAreas(self::validImage(), 'image/png');
       self::fail('Missing header must fail.');
     }
     catch (\RuntimeException $e) {
       self::assertStringContainsString('X-Image-Blurred', $e->getPrevious()->getMessage());
     }
     putenv('MARKASPOT_BLUR_REQUIRED=0');
-    $result = $this->service(['enable_blur_preprocessing' => TRUE], [new Response(200, [], 'scanned')])->blurSensitiveAreas('synthetic', 'image/png');
+    $result = $this->service(['enable_blur_preprocessing' => TRUE], [new Response(200, [], 'scanned')])->blurSensitiveAreas(self::validImage(), 'image/png');
     self::assertTrue($result['processed']);
   }
 
@@ -536,7 +543,7 @@ class ModelPolicyTest extends UnitTestCase {
    * OSS images are unchanged; Vision and chat share the daily advisory budget.
    */
   public function testOssRequestAndDailyAdvisory(): void {
-    $root = vfsStream::setup('images', NULL, ['synthetic.png' => 'synthetic original']);
+    $root = vfsStream::setup('images', NULL, ['synthetic.png' => self::validImage()]);
     $uri = $root->url() . '/synthetic.png';
     $response = new Response(200, [], json_encode(['choices' => [['message' => ['content' => $this->validJson()]]]]));
     $logger = $this->createMock(LoggerInterface::class);
@@ -570,7 +577,8 @@ class ModelPolicyTest extends UnitTestCase {
     self::assertCount(2, $this->history);
     foreach ($this->history as $request) {
       self::assertSame('vision.example', $request['request']->getUri()->getHost());
-      self::assertStringContainsString(base64_encode('synthetic original'), (string) $request['request']->getBody());
+      $payload = json_decode((string) $request['request']->getBody(), TRUE, 512, JSON_THROW_ON_ERROR);
+      self::assertSame('data:image/png;base64,' . base64_encode(self::validImage()), $payload['messages'][1]['content'][1]['image_url']['url']);
     }
     // Another module/logger uses the same persisted timestamp.
     BlurAdvisory::warn($state, $logger, 100100, 'auto-unprotected', FALSE);
@@ -585,7 +593,7 @@ class ModelPolicyTest extends UnitTestCase {
     $logger->expects($this->never())->method('warning');
     $service = $this->service(['enable_blur_preprocessing' => TRUE], [new Response(200, [], 'processed')], $logger);
     self::assertSame('auto-unprotected', $service->getBlurMode());
-    self::assertTrue($service->blurSensitiveAreas('original', 'image/png')['processed']);
+    self::assertTrue($service->blurSensitiveAreas(self::validImage(), 'image/png')['processed']);
     self::assertTrue($this->history[0]['options']['allow_redirects'] !== FALSE);
     $state = $this->createMock(StateInterface::class);
     $state->expects($this->never())->method('set');
@@ -594,7 +602,7 @@ class ModelPolicyTest extends UnitTestCase {
     putenv('MARKASPOT_BLUR_URL=https://hosted.example/blur');
     $off = $this->service([], [], $logger);
     self::assertSame('off', $off->getBlurMode());
-    self::assertFalse($off->blurSensitiveAreas('original', 'image/png')['processed']);
+    self::assertFalse($off->blurSensitiveAreas(self::validImage(), 'image/png')['processed']);
     BlurAdvisory::warn($state, $logger, 100000, 'off', FALSE);
     self::assertCount(1, $this->history);
   }

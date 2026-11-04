@@ -28,6 +28,13 @@ use Psr\Log\LoggerInterface;
 class SovereignTransportTest extends UnitTestCase {
 
   /**
+   * A real 1x1 PNG for header validation at the transport boundary.
+   */
+  private static function validImage(): string {
+    return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=');
+  }
+
+  /**
    * Saved process environment.
    */
   private array $environment = [];
@@ -236,18 +243,18 @@ class SovereignTransportTest extends UnitTestCase {
       if (count($calls) === 1) {
         $this->assertSame('http://self-hosted-blur:8200/blur', $url);
         $this->assertSame('Bearer blur-key', $options['headers']['Authorization']);
-        $this->assertSame('synthetic original', $options['multipart'][0]['contents']);
-        return new Response(200, ['X-Image-Blurred' => 'true'], 'synthetic blurred');
+        $this->assertSame(self::validImage(), $options['multipart'][0]['contents']);
+        return new Response(200, ['X-Image-Blurred' => 'true'], self::validImage() . 'synthetic-blurred');
       }
       $this->assertSame(SovereignPolicy::API_URL . '/chat/completions', $url);
       $this->assertSame('Bearer ionos-key', $options['headers']['Authorization']);
       $this->assertSame('ionos-vision', $options['json']['model']);
-      $this->assertSame('data:image/png;base64,' . base64_encode('synthetic blurred'), $options['json']['messages'][1]['content'][1]['image_url']['url']);
+      $this->assertSame('data:image/png;base64,' . base64_encode(self::validImage() . 'synthetic-blurred'), $options['json']['messages'][1]['content'][1]['image_url']['url']);
       return new Response(200, [], json_encode(['choices' => [['message' => ['content' => '{"privacy_flag":false,"privacy_issues":[]}']]]]));
     });
     $http->expects($this->never())->method('request');
     $vision = $this->vision($http, $this->factory());
-    $blur = $vision->blurSensitiveAreas('synthetic original', 'image/png');
+    $blur = $vision->blurSensitiveAreas(self::validImage(), 'image/png');
     $this->assertTrue($blur['processed']);
     $this->assertSame(['privacy_flag' => FALSE, 'privacy_issues' => []], $vision->screenPrivacy($blur['contents'], 'image/png'));
     $this->assertSame(['http://self-hosted-blur:8200/blur', SovereignPolicy::API_URL . '/chat/completions'], $calls);

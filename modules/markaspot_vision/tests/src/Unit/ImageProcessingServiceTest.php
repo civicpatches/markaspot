@@ -43,6 +43,13 @@ use Psr\Log\LoggerInterface;
 class ImageProcessingServiceTest extends UnitTestCase {
 
   /**
+   * A real 1x1 PNG for header validation at the transport boundary.
+   */
+  private static function validImage(): string {
+    return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=');
+  }
+
+  /**
    * The mocked logger.
    *
    * @var \Psr\Log\LoggerInterface|\PHPUnit\Framework\MockObject\MockObject
@@ -202,7 +209,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
    */
   public function testRequiredBlurRejectsFallbackMarkersBeforeProvider(): void {
     $image = tempnam(sys_get_temp_dir(), 'vision-marker-');
-    file_put_contents($image, 'Fictional unblurred source');
+    file_put_contents($image, self::validImage());
     try {
       putenv('MARKASPOT_BLUR_REQUIRED=1');
       $style = $this->createMock(ImageStyleInterface::class);
@@ -241,7 +248,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
   #[DataProvider('projectContexts')]
   public function testProjectContextReachesProviderPayload(string $tenantPrompt, string $globalPrompt, string $expected, bool $alreadyScreened = FALSE): void {
     $image = tempnam(sys_get_temp_dir(), 'vision-context-');
-    file_put_contents($image, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII='));
+    file_put_contents($image, self::validImage());
     try {
       $style = $this->createMock(ImageStyleInterface::class);
       $style->method('buildUri')->willReturn($image);
@@ -772,9 +779,9 @@ class ImageProcessingServiceTest extends UnitTestCase {
       'enable_blur_preprocessing' => FALSE,
     ]);
 
-    $result = $service->blurSensitiveAreas('image-bytes', 'image/jpeg');
+    $result = $service->blurSensitiveAreas(self::validImage(), 'image/jpeg');
 
-    $this->assertSame('image-bytes', $result['contents']);
+    $this->assertSame(self::validImage(), $result['contents']);
     $this->assertFalse($result['blurred']);
   }
 
@@ -790,7 +797,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
     ]);
 
     $this->expectException(\RuntimeException::class);
-    $service->blurSensitiveAreas('image-bytes', 'image/jpeg');
+    $service->blurSensitiveAreas(self::validImage(), 'image/jpeg');
   }
 
   /**
@@ -1074,7 +1081,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
   public function testNormalBlurRequestCarriesNoModeField(): void {
     $service = $this->createAnsweringService(new Response(200, ['X-Image-Blurred' => 'false'], 'bytes'), $sent, self::BLUR_ON);
 
-    $result = $service->blurSensitiveAreas('image-bytes', 'image/jpeg');
+    $result = $service->blurSensitiveAreas(self::validImage(), 'image/jpeg');
 
     $this->assertStringNotContainsString('name="mode"', $sent);
     $this->assertSame(ImageProcessingService::BLUR_MODE_NORMAL, $result['mode']);
@@ -1090,7 +1097,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
       'X-Detections-Text' => '3',
     ], 'strong-bytes'), $sent, self::BLUR_ON);
 
-    $result = $service->blurSensitiveAreas('image-bytes', 'image/jpeg', ImageProcessingService::BLUR_MODE_STRONG);
+    $result = $service->blurSensitiveAreas(self::validImage(), 'image/jpeg', ImageProcessingService::BLUR_MODE_STRONG);
 
     $this->assertMatchesRegularExpression('/name="mode"\r\n(?:[^\r\n]+\r\n)*\r\nstrong\r\n/', $sent);
     $this->assertSame('strong-bytes', $result['contents']);
@@ -1106,7 +1113,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
     $service = $this->createAnsweringService(new Response(200, ['X-Image-Blurred' => 'true'], 'normal-bytes'), $sent, self::BLUR_ON);
 
     try {
-      $service->blurSensitiveAreas('image-bytes', 'image/jpeg', ImageProcessingService::BLUR_MODE_FULL);
+      $service->blurSensitiveAreas(self::validImage(), 'image/jpeg', ImageProcessingService::BLUR_MODE_FULL);
       $this->fail('An unconfirmed escalation must not pass.');
     }
     catch (\RuntimeException $e) {
@@ -1125,9 +1132,10 @@ class ImageProcessingServiceTest extends UnitTestCase {
 
     $this->assertSame(
       ['privacy_flag' => TRUE, 'privacy_issues' => ['readable name on a letter']],
-      $service->screenPrivacy('escalated-bytes', 'image/jpeg', ["readable name\non a letter"]),
+      $service->screenPrivacy(self::validImage(), 'image/jpeg', ["readable name\non a letter"]),
     );
-    $this->assertStringContainsString(base64_encode('escalated-bytes'), $sent);
+    $payload = json_decode($sent, TRUE, 512, JSON_THROW_ON_ERROR);
+    $this->assertSame('data:image/jpeg;base64,' . base64_encode(self::validImage()), $payload['messages'][1]['content'][1]['image_url']['url']);
     // The check names the earlier finding and claims nothing was blurred.
     $this->assertStringContainsString('An earlier check of this photo reported: readable name on a letter.', $sent);
     $this->assertStringNotContainsString('have already been blurred', $sent);
@@ -1139,7 +1147,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
   public function testScreenPrivacyReturnsNullWhenTheCheckCannotRun(): void {
     $service = $this->createAnsweringService(new Response(403, [], '{"error":{"message":"denied"}}'), $sent);
 
-    $this->assertNull($service->screenPrivacy('escalated-bytes', 'image/jpeg'));
+    $this->assertNull($service->screenPrivacy(self::validImage(), 'image/jpeg'));
   }
 
 }

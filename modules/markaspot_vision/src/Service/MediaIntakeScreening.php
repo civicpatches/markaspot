@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_vision\Service;
 
+use Drupal\markaspot_ai\Utility\ImagePixelGuard;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
@@ -226,6 +227,7 @@ class MediaIntakeScreening {
       if (!$uri) {
         throw new \RuntimeException('Imported image has no source file.');
       }
+      ImagePixelGuard::assertSafePath($uri);
       $hash = hash_file('sha256', $uri);
       if ($hash === FALSE) {
         throw new \RuntimeException('Imported image is unreadable.');

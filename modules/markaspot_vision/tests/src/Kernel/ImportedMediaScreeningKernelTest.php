@@ -310,6 +310,35 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
   }
 
   /**
+   * Oversized imports stay held through retries without reaching any decoder.
+   */
+  public function testOversizedImageStaysHeld(): void {
+    $this->images->expects($this->never())->method('blurSensitiveAreas');
+    $this->images->expects($this->never())->method('processScreenedImages');
+    [$media, $node, $uri] = $this->fixture();
+    $ihdr = 'IHDR' . pack('NNCCCCC', 10000, 10000, 8, 2, 0, 0, 0);
+    file_put_contents($uri, "\x89PNG\r\n\x1a\n" . pack('N', 13) . $ihdr . pack('N', crc32($ihdr)));
+    $mid = (int) $media->id();
+    foreach ([60, 120, 240, 480, 960] as $attempt => $delay) {
+      try {
+        $this->screening->process($mid);
+        $this->assertSame(4, $attempt);
+      }
+      catch (DelayedRequeueException $e) {
+        $this->assertSame($delay, $e->getDelay());
+      }
+      _markaspot_vision_publish_safe_media(Node::load($node->id()));
+      $fresh = $this->container->get('entity_type.manager')->getStorage('media')->loadUnchanged($mid);
+      $this->assertFalse($fresh->isPublished());
+      $this->assertNotEmpty($fresh->get('field_ai_privacy_issues')->value);
+      $this->now += $delay;
+    }
+    $entry = $this->container->get('keyvalue')->get(MediaIntakeScreening::STORE)->get($mid);
+    $this->assertSame('failed', $entry['status']);
+    $this->assertEmpty($entry['privacy_screened'] ?? FALSE);
+  }
+
+  /**
    * A failed attempt can recover without bypassing its retry timestamp.
    */
   public function testRetryAndInterruptedOverwriteDoNotBlurTwice(): void {

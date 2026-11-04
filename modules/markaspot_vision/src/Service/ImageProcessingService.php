@@ -19,6 +19,7 @@ use Drupal\media\MediaInterface;
 use GuzzleHttp\ClientInterface;
 use Psr\Log\LoggerInterface;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Utility\ImagePixelGuard;
 use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\markaspot_ai\Utility\BlurAdvisory;
 use Drupal\Core\State\StateInterface;
@@ -35,6 +36,7 @@ if (!class_exists(BlurPolicy::class) && is_file(dirname(__DIR__, 3) . '/markaspo
 if (!class_exists(BlurAdvisory::class) && is_file(dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/BlurAdvisory.php')) {
   require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/BlurAdvisory.php';
 }
+require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/ImagePixelGuard.php';
 require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/ProviderError.php';
 require_once dirname(__DIR__, 3) . '/markaspot_ai/src/Utility/SovereignPolicy.php';
 
@@ -311,6 +313,7 @@ class ImageProcessingService {
    *   - 'mode': The blur mode the service applied.
    */
   public function blurSensitiveAreas(string $contents, string $mimeType, string $mode = self::BLUR_MODE_NORMAL): array {
+    ImagePixelGuard::assertSafeBytes($contents);
     if (!class_exists(BlurPolicy::class)) {
       $this->getBlurMode();
       throw new \RuntimeException('Blur policy unavailable; refusing to forward images.');
@@ -859,6 +862,7 @@ class ImageProcessingService {
       ? 'An earlier check of this photo reported: ' . implode('; ', $reported) . '. '
       : 'An earlier check of this photo reported personal data. ';
     try {
+      ImagePixelGuard::assertSafeBytes($contents);
       $api_config = $this->getApiConfig($config);
       $messages = [
         [
@@ -1711,6 +1715,7 @@ class ImageProcessingService {
    *   When the required image style is not found.
    */
   private function getStyledImagePath(string $uri): string {
+    ImagePixelGuard::assertSafePath($uri);
     $style = $this->entityTypeManager->getStorage('image_style')->load('ai_analysis');
     if (!$style) {
       throw new \Exception('The "ai_analysis" image style was not found. Please ensure it exists.');

@@ -32,6 +32,13 @@ use Psr\Log\NullLogger;
 final class VisionTokenAccountingTest extends UnitTestCase {
 
   /**
+   * A real 1x1 PNG for header validation at the transport boundary.
+   */
+  private static function validImage(): string {
+    return base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=');
+  }
+
+  /**
    * API configuration without credentials.
    */
   private const API = [
@@ -129,7 +136,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
       });
     $history = [];
     $service = $this->service($tracking, [$this->response(), $this->response()], $history);
-    self::assertSame(['privacy_flag' => FALSE, 'privacy_issues' => []], $service->screenPrivacy('image', 'image/png', [], 73));
+    self::assertSame(['privacy_flag' => FALSE, 'privacy_issues' => []], $service->screenPrivacy(self::validImage(), 'image/png', [], 73));
     $this->send($service);
     self::assertSame(['azure', 'effective-model-2026', 'vision_screening', 41, 9, 'media', 73], $bookings[0]);
     self::assertSame(['azure', 'effective-model-2026', 'vision', 41, 9, NULL, NULL], $bookings[1]);
@@ -144,7 +151,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
     $tracking->expects($this->never())->method('logUsage');
     $history = [];
     $service = $this->service($tracking, [], $history);
-    self::assertNull($service->screenPrivacy('image', 'image/png'));
+    self::assertNull($service->screenPrivacy(self::validImage(), 'image/png'));
     self::assertSame([], $history);
   }
 
@@ -157,7 +164,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
     $history = [];
     $service = $this->service($tracking, [], $history);
     (new \ReflectionProperty($service, 'tokenTracking'))->setValue($service, NULL);
-    self::assertNull($service->screenPrivacy('image', 'image/png'));
+    self::assertNull($service->screenPrivacy(self::validImage(), 'image/png'));
     self::assertSame([], $history);
   }
 
