@@ -5,6 +5,7 @@
  * Contains markaspot_vision.module.
  */
 
+use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
@@ -406,6 +407,7 @@ function markaspot_vision_file_download(string $uri): array|int|null {
  * Implements hook_cron().
  */
 function markaspot_vision_cron(): void {
+  \Drupal::service('markaspot_vision.orphan_upload_purger')->purge();
   \Drupal::service('markaspot_vision.media_intake')->recoverPending();
   \Drupal::service('markaspot_vision.original_image_store')->purgeExpired();
 }
@@ -414,6 +416,7 @@ function markaspot_vision_cron(): void {
  * Implements hook_media_delete().
  */
 function markaspot_vision_media_delete(MediaInterface $media): void {
+  \Drupal::service('keyvalue.expirable')->get(MediaAnalysisAccessGuard::STORE)->delete($media->uuid());
   \Drupal::keyValue(MediaIntakeScreening::STORE)->delete($media->id());
   \Drupal::keyValue('markaspot_vision.report_media_hold')->delete($media->id());
   \Drupal::service('markaspot_vision.original_image_store')->delete((int) $media->id());
@@ -430,4 +433,25 @@ function markaspot_vision_node_delete(NodeInterface $node): void {
   if ($node->bundle() === 'service_request') {
     \Drupal::service('markaspot_vision.original_image_store')->releaseOwnedBy((int) $node->id());
   }
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function markaspot_vision_entity_presave(EntityInterface $entity): void {
+  \Drupal::service('markaspot_vision.orphan_upload_purger')->protectReferences($entity);
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function markaspot_vision_entity_insert(EntityInterface $entity): void {
+  \Drupal::service('markaspot_vision.orphan_upload_purger')->releaseReferences($entity);
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function markaspot_vision_entity_update(EntityInterface $entity): void {
+  \Drupal::service('markaspot_vision.orphan_upload_purger')->releaseReferences($entity);
 }

@@ -80,3 +80,16 @@ services:
       - '@?markaspot_ai.token_tracking'
     tags:
       - { name: controller.service_arguments }
+  markaspot_vision.orphan_upload_purger:
+    class: Drupal\markaspot_vision\Service\OrphanUploadPurger
+    arguments:
+      - '@entity_type.manager'
+      - '@entity_field.manager'
+      - '@entity_field.deleted_fields_repository'
+      - '@database'
+      - '@keyvalue'
+      - '@file.usage'
+      - '@lock'
+      - '@state'
+      - '@datetime.time'
+      - '@logger.factory'

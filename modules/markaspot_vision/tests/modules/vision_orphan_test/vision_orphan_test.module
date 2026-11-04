@@ -1,0 +1,61 @@
+<?php
+
+/**
+ * @file
+ * Runs the production lifecycle hooks without the unrelated Nuxt dependencies.
+ */
+
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\media\MediaInterface;
+use Drupal\node\NodeInterface;
+
+require_once dirname(__DIR__, 3) . '/markaspot_vision.module';
+
+/**
+ * Implements hook_media_presave().
+ */
+function vision_orphan_test_media_presave(MediaInterface $media): void {
+  markaspot_vision_media_presave($media);
+}
+
+/**
+ * Implements hook_media_delete().
+ */
+function vision_orphan_test_media_delete(MediaInterface $media): void {
+  markaspot_vision_media_delete($media);
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function vision_orphan_test_node_insert(NodeInterface $node): void {
+  markaspot_vision_node_insert($node);
+}
+
+/**
+ * Implements hook_node_update().
+ */
+function vision_orphan_test_node_update(NodeInterface $node): void {
+  markaspot_vision_node_update($node);
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function vision_orphan_test_entity_presave(EntityInterface $entity): void {
+  markaspot_vision_entity_presave($entity);
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function vision_orphan_test_entity_insert(EntityInterface $entity): void {
+  markaspot_vision_entity_insert($entity);
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function vision_orphan_test_entity_update(EntityInterface $entity): void {
+  markaspot_vision_entity_update($entity);
+}
