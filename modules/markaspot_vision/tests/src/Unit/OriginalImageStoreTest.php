@@ -423,6 +423,7 @@ class OriginalImageStoreTest extends UnitTestCase {
   private function staff(): AccountInterface {
     $account = $this->createMock(AccountInterface::class);
     $account->method('isAnonymous')->willReturn(FALSE);
+    $account->method('hasPermission')->willReturnCallback(static fn (string $permission): bool => $permission === 'access dashboard notifications');
     return $account;
   }
 
@@ -434,7 +435,7 @@ class OriginalImageStoreTest extends UnitTestCase {
     $node->method('id')->willReturn($nid);
     $node->method('bundle')->willReturn('service_request');
     $node->method('access')->with('update')->willReturn($editable);
-    $node->method('hasField')->willReturn(TRUE);
+    $node->method('hasField')->willReturnCallback(static fn (string $field): bool => $field !== 'field_jurisdiction');
     $statusField = $this->createMock(EntityReferenceFieldItemListInterface::class);
     $statusField->method('isEmpty')->willReturn($status === NULL);
     $statusField->method('__get')->with('target_id')->willReturn($status);
@@ -574,6 +575,9 @@ class OriginalImageStoreTest extends UnitTestCase {
     $this->assertFalse($store->canView($this->media(8), $this->staff()), 'Editing another report showing the photo grants nothing.');
     $this->assertFalse($store->canView($this->media(9), $this->staff()), 'Not bound to any report yet.');
     $this->assertFalse($store->canView($this->media(7), $anonymous));
+    $citizen = $this->createMock(AccountInterface::class);
+    $citizen->method('isAnonymous')->willReturn(FALSE);
+    $this->assertFalse($store->canView($this->media(7), $citizen), 'Own-report edit access alone is not staff permission.');
     $this->assertFalse($this->store(TRUE)->canView($this->media(7), $this->staff()), 'External contractors never.');
   }
 

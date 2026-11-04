@@ -15,6 +15,7 @@ use Drupal\Core\State\StateInterface;
 use Drupal\Core\StreamWrapper\LocalStream;
 use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
 use Drupal\image\ImageDerivativeUtilities;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_open311\Service\StatusClassifier;
 use Drupal\media\MediaInterface;
 use Drupal\node\NodeInterface;
@@ -265,7 +266,7 @@ class OriginalImageStore {
   /**
    * Whether an account may see the original of a media.
    *
-   * Only accounts that may edit the report owning the original, and never
+   * Only staff who may edit the report owning the original, and never
    * external contractors: the original shows third parties unblurred.
    */
   public function canView(MediaInterface $media, AccountInterface $account): bool {
@@ -277,7 +278,29 @@ class OriginalImageStore {
       return FALSE;
     }
     $node = $this->entityTypeManager->getStorage('node')->load($original['nid']);
-    return $node instanceof NodeInterface && $node->access('update', $account);
+    return $node instanceof NodeInterface
+      && $this->hasStaffPermission($node, $account)
+      && $node->access('update', $account);
+  }
+
+  /**
+   * Requires editorial capability, independently of ownership-based editing.
+   */
+  protected function hasStaffPermission(NodeInterface $node, AccountInterface $account): bool {
+    if ($account->hasPermission('access dashboard notifications')
+      || $account->hasPermission('administer nodes')
+      || $account->hasPermission('edit any service_request content')) {
+      return TRUE;
+    }
+    if ($node->hasField('field_jurisdiction')) {
+      foreach ($node->get('field_jurisdiction')->referencedEntities() as $group) {
+        if ($group instanceof GroupInterface
+          && $group->hasPermission('view unpublished group_node:service_request entity', $account)) {
+          return TRUE;
+        }
+      }
+    }
+    return FALSE;
   }
 
   /**
