@@ -77,5 +77,6 @@ services:
       - '@?markaspot_fastmap.tier_config'
       - '@markaspot_vision.original_image_store'
       - '@lock'
+      - '@?markaspot_ai.token_tracking'
     tags:
       - { name: controller.service_arguments }

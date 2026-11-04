@@ -7,6 +7,8 @@ use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\image\ImageStyleInterface;
 use Drupal\markaspot_ai\Utility\SovereignPolicy;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
+use Drupal\markaspot_fastmap\Service\TierConfigService;
 use GuzzleHttp\Client;
 use GuzzleHttp\Psr7\Response;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
@@ -368,6 +370,48 @@ class ImageProcessingControllerTest extends UnitTestCase {
       });
 
     return $media;
+  }
+
+  /**
+   * Daily exhaustion returns the budget contract without reservations or blur.
+   */
+  #[DataProvider('dailyLimitBlurPolicy')]
+  public function testDailyTokenLimitBeforeReservation(bool $required): void {
+    $oldRequired = getenv('MARKASPOT_BLUR_REQUIRED');
+    putenv('MARKASPOT_BLUR_REQUIRED=' . (int) $required);
+    try {
+      $tracking = $this->createMock(TokenTrackingService::class);
+      $tracking->expects($this->once())->method('checkLimit')->willReturn(FALSE);
+      (new \ReflectionProperty($this->controller, 'tokenTracking'))->setValue($this->controller, $tracking);
+      $tier = $this->createMock(TierConfigService::class);
+      $tier->expects($this->never())->method('recordAIAnalysis');
+      $tier->expects($this->never())->method('isAIBudgetExhausted');
+      (new \ReflectionProperty($this->controller, 'tierConfig'))->setValue($this->controller, $tier);
+      $this->flood->method('isAllowed')->willReturn(TRUE);
+      $media = $this->createMockMedia(42);
+      $media->expects($this->never())->method('setPublished');
+      $media->expects($this->never())->method('save');
+      $this->mediaStorage->method('loadByProperties')->with(['uuid' => ['uuid-42']])->willReturn([42 => $media]);
+      $this->imageProcessingService->expects($this->never())->method('processImages');
+      $this->imageProcessingService->expects($this->never())->method('processScreenedImages');
+      $this->imageProcessingService->expects($this->never())->method('blurSensitiveAreas');
+      $response = $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-42']]));
+      self::assertSame(429, $response->getStatusCode());
+      self::assertSame([
+        'status' => 'budget_exhausted',
+        'message' => 'Daily AI token budget exhausted.',
+      ], json_decode($response->getContent(), TRUE));
+    }
+    finally {
+      putenv($oldRequired === FALSE ? 'MARKASPOT_BLUR_REQUIRED' : 'MARKASPOT_BLUR_REQUIRED=' . $oldRequired);
+    }
+  }
+
+  /**
+   * Both blur policies reject before processing and keep the upload held.
+   */
+  public static function dailyLimitBlurPolicy(): array {
+    return ['required' => [TRUE], 'optional' => [FALSE]];
   }
 
   /**

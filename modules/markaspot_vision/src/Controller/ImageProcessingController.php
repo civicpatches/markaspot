@@ -23,6 +23,7 @@ use Drupal\markaspot_vision\Service\StaffAnalysisAccess;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_vision\Service\ScreeningMarker;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
+use Drupal\markaspot_ai\Service\TokenTrackingService;
 
 /**
  * Controller for processing images with AI vision services.
@@ -113,6 +114,8 @@ class ImageProcessingController extends ControllerBase {
    *   The original image store (optional).
    * @param \Drupal\Core\Lock\LockBackendInterface|null $operationLock
    *   Shared publication and tenant-budget locks.
+   * @param \Drupal\markaspot_ai\Service\TokenTrackingService|null $tokenTracking
+   *   Optional daily token accounting.
    */
   public function __construct(
     ImageProcessingService $image_processing_service,
@@ -127,6 +130,7 @@ class ImageProcessingController extends ControllerBase {
     ?TierConfigService $tier_config = NULL,
     ?OriginalImageStore $original_image_store = NULL,
     protected ?LockBackendInterface $operationLock = NULL,
+    protected ?TokenTrackingService $tokenTracking = NULL,
   ) {
     $this->imageProcessingService = $image_processing_service;
     $this->logger = $logger_factory->get('markaspot_vision');
@@ -159,6 +163,7 @@ class ImageProcessingController extends ControllerBase {
         : NULL,
       $container->get('markaspot_vision.original_image_store'),
       $container->get('lock'),
+      $container->has('markaspot_ai.token_tracking') ? $container->get('markaspot_ai.token_tracking') : NULL,
     );
   }
 
@@ -322,6 +327,17 @@ class ImageProcessingController extends ControllerBase {
       }
       if (empty($file_uris)) {
         throw new \Exception('No valid file URIs found for the media entities.');
+      }
+
+      // Reject before a non-refundable SaaS reservation or any provider call.
+      // No blur checkpoint is created: unscreened uploads remain unpublished
+      // under the required-blur publication policy, including legacy mode.
+      if ($this->tokenTracking && !$this->tokenTracking->checkLimit()) {
+        $this->logger->notice('Skipping vision analysis: daily token limit exceeded.');
+        return new JsonResponse([
+          'status' => 'budget_exhausted',
+          'message' => 'Daily AI token budget exhausted.',
+        ], 429);
       }
 
       // AI budget check (only on SaaS with markaspot_fastmap installed).
