@@ -192,19 +192,6 @@ class ImageProcessingServiceTest extends UnitTestCase {
   }
 
   /**
-   * Imported analysis never bypasses an unavailable central accounting client.
-   */
-  public function testImportedAnalysisRequiresCentralAccounting(): void {
-    $http = $this->createMock(ClientInterface::class);
-    $http->expects($this->never())->method('request');
-    $service = $this->createService(httpClient: $http);
-    (new \ReflectionProperty($service, 'tokenTracking'))->setValue($service, NULL);
-    $this->expectException(\RuntimeException::class);
-    $this->expectExceptionMessage('Central token accounting is required');
-    $service->processScreenedImages([], mediaId: 73);
-  }
-
-  /**
    * Unprocessed or obsolete checkpoints never bypass mandatory blur before AI.
    */
   public function testRequiredBlurRejectsFallbackMarkersBeforeProvider(): void {
@@ -246,7 +233,7 @@ class ImageProcessingServiceTest extends UnitTestCase {
    * Provider requests carry tenant context and stable platform policy.
    */
   #[DataProvider('projectContexts')]
-  public function testProjectContextReachesProviderPayload(string $tenantPrompt, string $globalPrompt, string $expected, bool $alreadyScreened = FALSE): void {
+  public function testProjectContextReachesProviderPayload(string $tenantPrompt, string $globalPrompt, string $expected, bool $alreadyScreened = FALSE, bool $accountingAvailable = TRUE): void {
     $image = tempnam(sys_get_temp_dir(), 'vision-context-');
     file_put_contents($image, self::validImage());
     try {
@@ -298,6 +285,10 @@ class ImageProcessingServiceTest extends UnitTestCase {
       };
       $http = new Client(['handler' => $handler]);
       $service = $this->createService(['system_prompt' => $globalPrompt], $entities, $http);
+      if (!$accountingAvailable) {
+        (new \ReflectionProperty($service, 'tokenTracking'))->setValue($service, NULL);
+        (new \ReflectionProperty($service, 'aiClient'))->setValue($service, NULL);
+      }
       if ($alreadyScreened) {
         // Missing required blur credentials would fail a fresh image. Trusted
         // preprocessed bytes reach AI without a second blur HTTP request.
@@ -306,13 +297,15 @@ class ImageProcessingServiceTest extends UnitTestCase {
           'privacy_screened' => TRUE, 'processed' => TRUE, 'blur_required' => TRUE,
           'source_sha256' => hash_file('sha256', $image), 'blurred' => TRUE,
         ];
-        $result = $service->processScreenedImages([$image => $marker], 'fr', 42, [$image, $image]);
+        $result = $service->processScreenedImages([$image => $marker], 'fr', 42, [$image, $image], 73);
         $this->assertNotNull($result);
         $this->assertTrue($result['blur_results'][$image]['persisted']);
       }
       else {
-        $this->assertNotNull($service->processImages([$image, $image], 'fr', 42));
+        $result = $service->processImages([$image, $image], 'fr', 42);
+        $this->assertNotNull($result);
       }
+      $this->assertSame('Arbre sain', json_decode($result['ai_result'], TRUE)['description']);
       $system = $captured['messages'][0]['content'][0]['text'];
       $user = $captured['messages'][1]['content'];
       $this->assertSame('system', $captured['messages'][0]['role']);
@@ -343,6 +336,8 @@ class ImageProcessingServiceTest extends UnitTestCase {
    */
   public static function projectContexts(): array {
     return [
+      'no AI module' => ['', '', '', FALSE, FALSE],
+      'import without AI module' => ['', '', '', TRUE, FALSE],
       'tenant context' => ['Inventory healthy trees.', 'Municipal defects.', 'Inventory healthy trees.'],
       'already screened import' => ['Inventory healthy trees.', '', 'Inventory healthy trees.', TRUE],
       'global fallback' => ['', 'Record trail conditions.', 'Record trail conditions.'],

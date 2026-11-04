@@ -434,6 +434,23 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
   }
 
   /**
+   * Optional token accounting must not disable imported image analysis.
+   */
+  public function testAnalysisWithoutTokenAccounting(): void {
+    (new \ReflectionProperty($this->screening, 'tokenTracking'))->setValue($this->screening, NULL);
+    (new \ReflectionProperty($this->screening, 'tierConfig'))->setValue($this->screening, NULL);
+    $this->features->method('isEnabledEffective')->willReturn(TRUE);
+    $this->images->expects($this->once())->method('processScreenedImages')->willReturn([
+      'ai_result' => json_encode(['privacy_flag' => FALSE, 'privacy_issues' => []]),
+    ]);
+    [$media] = $this->fixture();
+    $this->screening->process((int) $media->id());
+    $fresh = Media::load($media->id());
+    $this->assertTrue($fresh->isPublished());
+    $this->assertSame('done', json_decode($fresh->get('field_ai_metadata')->value, TRUE)['intake_screening']['analysis']);
+  }
+
+  /**
    * Token limits and an explicit import opt-out block all model calls.
    */
   public function testTokenLimitAndImportOptOut(): void {

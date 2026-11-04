@@ -105,9 +105,6 @@ class ImageProcessingService {
    *   The normal vision result.
    */
   public function processScreenedImages(array $screenedUris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?array $fileUris = NULL, ?int $mediaId = NULL): ?array {
-    if ($mediaId !== NULL && ($this->aiClient === NULL || $this->tokenTracking === NULL)) {
-      throw new \RuntimeException('Central token accounting is required for imported image analysis.');
-    }
     $this->screenedUris = $screenedUris;
     $this->accountingOptions = $mediaId !== NULL ? [
       'operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId, 'max_attempts' => 1,
@@ -251,7 +248,7 @@ class ImageProcessingService {
    * @param \Drupal\markaspot_ai\Service\AiClientService|null $aiClient
    *   Central token accounting, when the AI module is installed.
    * @param \Drupal\markaspot_ai\Service\TokenTrackingService|null $tokenTracking
-   *   Daily limit guard; provider requests fail closed without accounting.
+   *   Optional daily limit guard supplied by markaspot_ai.
    */
   public function __construct(
     ClientInterface $http_client,
@@ -1078,14 +1075,20 @@ class ImageProcessingService {
     if (($this->accountingOptions['max_attempts'] ?? NULL) === 1) {
       $max_retries = 1;
     }
+    $accountingAvailable = $this->tokenTracking !== NULL && $this->aiClient !== NULL;
+    if (!$accountingAvailable) {
+      $this->logger->warning('Proceeding with @operation without token accounting: markaspot_ai accounting services are unavailable. No usage is booked and no daily token limit is enforced.', [
+        '@operation' => $this->accountingOptions['operation'] ?? 'vision',
+      ]);
+    }
     $adapted = FALSE;
     for ($attempt = 0;; $attempt++) {
       try {
-        if ($this->tokenTracking === NULL || $this->aiClient === NULL || !$this->tokenTracking->checkLimit()) {
-          $this->logger->warning('Skipping @operation: daily token limit exceeded or central accounting unavailable.', [
+        if ($accountingAvailable && !$this->tokenTracking->checkLimit()) {
+          $this->logger->warning('Skipping @operation: daily token limit exceeded.', [
             '@operation' => $this->accountingOptions['operation'] ?? 'vision',
           ]);
-          throw new \RuntimeException('Vision request blocked by daily token limit or unavailable accounting.');
+          throw new \RuntimeException('Vision request blocked by daily token limit.');
         }
         $request_options = [
           'headers' => $api_config['headers'],
@@ -1101,7 +1104,7 @@ class ImageProcessingService {
         $decoded = json_decode($body, TRUE);
         // Book each consumed attempt before parameter repair, retry or content
         // validation. An HTTP error without usage has nothing to book.
-        if (is_array($decoded) && ($status === 200 || !empty($decoded['usage']))) {
+        if ($accountingAvailable && is_array($decoded) && ($status === 200 || !empty($decoded['usage']))) {
           $model = is_string($decoded['model'] ?? NULL) && trim($decoded['model']) !== ''
             ? $decoded['model'] : ($api_config['model'] ?? $this->configFactory->get('markaspot_vision.settings')->get('ai_model') ?? '');
           $host = strtolower((string) parse_url($api_config['url'], PHP_URL_HOST));

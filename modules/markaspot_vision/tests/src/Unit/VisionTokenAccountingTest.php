@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_vision\Unit;
 
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Database\Connection;
 use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\State\StateInterface;
@@ -22,6 +23,8 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
@@ -50,7 +53,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   /**
    * Creates the real accounting client with an observed token tracker.
    */
-  private function service(TokenTrackingService $tracking, array $responses, array &$history): ImageProcessingService {
+  private function service(?TokenTrackingService $tracking, array $responses, array &$history, ?LoggerInterface $channel = NULL): ImageProcessingService {
     $history = [];
     $stack = HandlerStack::create(new MockHandler($responses));
     $stack->push(Middleware::history($history));
@@ -60,13 +63,13 @@ final class VisionTokenAccountingTest extends UnitTestCase {
       'ai_model' => self::API['model'],
     ]]);
     $logger = $this->createMock(LoggerChannelFactoryInterface::class);
-    $logger->method('get')->willReturn(new NullLogger());
+    $logger->method('get')->willReturn($channel ?? new NullLogger());
     return $this->getMockBuilder(ImageProcessingService::class)->setConstructorArgs([
       $client, $factory,
       $this->createMock(EntityTypeManagerInterface::class),
       $this->createMock(FileSystemInterface::class), $logger,
       $this->createMock(StateInterface::class), $this->createMock(TimeInterface::class),
-      NULL, NULL, NULL, new AiClientService($client, $factory, $logger, $tracking), $tracking,
+      NULL, NULL, NULL, $tracking ? new AiClientService($client, $factory, $logger, $tracking) : NULL, $tracking,
     ])->onlyMethods(['wait'])->getMock();
   }
 
@@ -156,16 +159,50 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   }
 
   /**
-   * Unavailable accounting also blocks the transport.
+   * Missing accounting permits analysis and screening, warning once per call.
    */
   public function testUnavailableAccounting(): void {
-    $tracking = $this->createMock(TokenTrackingService::class);
-    $tracking->expects($this->never())->method('logUsage');
     $history = [];
-    $service = $this->service($tracking, [], $history);
-    (new \ReflectionProperty($service, 'tokenTracking'))->setValue($service, NULL);
-    self::assertNull($service->screenPrivacy(self::validImage(), 'image/png'));
-    self::assertSame([], $history);
+    $warnings = [];
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->method('warning')->willReturnCallback(static function ($message, $context = []) use (&$warnings): void {
+      if (str_contains($message, 'markaspot_ai')) {
+        $warnings[] = $context['@operation'];
+      }
+    });
+    $service = $this->service(NULL, [$this->response([], 503), $this->response(), $this->response()], $history, $logger);
+    $result = $this->send($service);
+    self::assertSame('{"privacy_flag":false}', $result['choices'][0]['message']['content']);
+    self::assertSame(['privacy_flag' => FALSE, 'privacy_issues' => []], $service->screenPrivacy(self::validImage(), 'image/png'));
+    self::assertCount(3, $history);
+    self::assertSame(['vision', 'vision_screening'], $warnings, 'Retries do not repeat the accounting warning.');
+  }
+
+  /**
+   * The real tracker neither queries the limit nor writes usage when disabled.
+   */
+  #[DataProvider('disabledTracking')]
+  public function testDisabledTracking(?bool $enabled): void {
+    $database = $this->createMock(Connection::class);
+    $database->expects($this->never())->method('select');
+    $database->expects($this->never())->method('insert');
+    $logger = $this->createMock(LoggerChannelFactoryInterface::class);
+    $logger->method('get')->willReturn(new NullLogger());
+    $tracking = new TokenTrackingService($database, $this->getConfigFactoryStub([
+      'markaspot_ai.settings' => ['token_tracking' => ['enabled' => $enabled, 'daily_limit' => 1]],
+    ]), $logger);
+    $history = [];
+    $service = $this->service($tracking, [$this->response()], $history);
+    $result = $this->send($service);
+    self::assertSame('{"privacy_flag":false}', $result['choices'][0]['message']['content']);
+    self::assertCount(1, $history);
+  }
+
+  /**
+   * Explicitly disabled and legacy unset tracking both allow provider calls.
+   */
+  public static function disabledTracking(): array {
+    return ['disabled' => [FALSE], 'unset' => [NULL]];
   }
 
   /**
