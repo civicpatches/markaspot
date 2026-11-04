@@ -3,6 +3,8 @@
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
 use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Queue\DatabaseQueue;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\EntityStorageInterface;
@@ -16,6 +18,7 @@ use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\file\Entity\File;
 use Drupal\image\Entity\ImageStyle;
+use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
@@ -47,7 +50,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
    */
   protected static $modules = [
     'system', 'user', 'field', 'filter', 'text', 'file', 'image', 'node',
-    'media', 'vision_orphan_test',
+    'media', 'language', 'vision_orphan_test',
   ];
 
   /**
@@ -538,6 +541,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
     $this->assertLessThan(1, $sandbox['#finished']);
     $this->assertSame(50, $sandbox['processed']);
+    $this->assertSame(0, $sandbox['skipped_busy']);
     markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
     $this->assertSame(1, $sandbox['#finished']);
     $storage = $this->container->get('entity_type.manager')->getStorage('media');
@@ -552,6 +556,107 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       'field_request_media' => $media->id(),
     ])->save();
     $this->assertTrue($storage->loadUnchanged($media->id())->isPublished());
+  }
+
+  /**
+   * Busy candidates, including the final ID, cannot abort or stall an update.
+   */
+  public function testPostUpdateSkipsBusyLocksAndFinishes(): void {
+    require_once dirname(__DIR__, 3) . '/markaspot_vision.post_update.php';
+    $first = $this->upload();
+    $ready = $this->upload();
+    $last = $this->upload();
+    $c = $this->container;
+    $c->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    $manual = $c->get('keyvalue')->get('markaspot_open311.media_publication_manual');
+    foreach ([$first, $ready, $last] as $media) {
+      $manual->set($media->id(), TRUE);
+    }
+    $ready_lock = 'markaspot_open311.media_publication.' . $ready->id();
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->exactly(3))->method('acquire')
+      ->willReturnCallback(static fn (string $name): bool => $name === $ready_lock);
+    $lock->expects($this->never())->method('wait');
+    $lock->expects($this->once())->method('release')->with($ready_lock);
+    $logger = $this->createMock(LoggerChannelInterface::class);
+    $logger->expects($this->once())->method('warning')->with(
+      'Orphan image update skipped @count busy images; later lifecycle or purge runs can revisit them.',
+      ['@count' => 2],
+    );
+    $factory = $this->createMock(LoggerChannelFactoryInterface::class);
+    $factory->method('get')->with('markaspot_vision')->willReturn($logger);
+    $purger = new OrphanUploadPurger(
+      $c->get('entity_type.manager'), $c->get('entity_field.manager'),
+      $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
+      $c->get('keyvalue'), $c->get('file.usage'), $lock,
+      $c->get('state'), $this->clock, $factory, $this->createMock(FeatureScopeResolver::class),
+    );
+    $c->set('markaspot_vision.orphan_upload_purger', $purger);
+    $sandbox = [];
+    markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
+    $this->assertSame(1, $sandbox['#finished']);
+    $this->assertSame(3, $sandbox['processed']);
+    $this->assertSame(2, $sandbox['skipped_busy']);
+    $this->assertSame((int) $last->id(), $sandbox['last_mid']);
+    $storage = $c->get('entity_type.manager')->getStorage('media');
+    foreach ([$first, $last] as $media) {
+      $this->assertTrue($storage->loadUnchanged($media->id())->isPublished());
+      $this->assertTrue($manual->has($media->id()));
+    }
+    $this->assertFalse($storage->loadUnchanged($ready->id())->isPublished());
+    $this->assertFalse($manual->has($ready->id()));
+    // A regular lifecycle pass can handle the skipped images once unlocked.
+    $c->set('markaspot_vision.orphan_upload_purger', $this->purger);
+    foreach ([$first, $last] as $media) {
+      $this->purger->unpublishIfUnreferenced((int) $media->id());
+      $this->assertFalse($storage->loadUnchanged($media->id())->isPublished());
+      $this->assertFalse($manual->has($media->id()));
+    }
+  }
+
+  /**
+   * Batch queries retain translated/alternate links, but not old revisions.
+   */
+  public function testPostUpdateUsesAllCurrentReportMediaFields(): void {
+    require_once dirname(__DIR__, 3) . '/markaspot_vision.post_update.php';
+    ConfigurableLanguage::createFromLangcode('de')->save();
+    FieldConfig::loadByName('node', 'service_request', 'field_other_media')->setTranslatable(TRUE)->save();
+    $images = [];
+    foreach (['current', 'other', 'translated', 'historical', 'pending'] as $case) {
+      $images[$case] = $this->upload();
+      $field = in_array($case, ['other', 'translated'], TRUE) ? 'field_other_media' : 'field_request_media';
+      $node = Node::create([
+        'type' => 'service_request', 'title' => 'Test', 'langcode' => 'en',
+        $field => $case === 'translated' ? [] : $images[$case]->id(), 'status' => 0,
+      ]);
+      if ($case === 'translated') {
+        $node->addTranslation('de', ['title' => 'Test', $field => $images[$case]->id()]);
+      }
+      $node->save();
+      if (in_array($case, ['historical', 'pending'], TRUE)) {
+        $node->setNewRevision(TRUE);
+        $node->set($field, [])->save();
+        if ($case === 'pending') {
+          $node->setNewRevision(TRUE);
+          $node->isDefaultRevision(FALSE);
+          $node->set($field, $images[$case]->id())->save();
+        }
+      }
+    }
+    $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    $manual = $this->container->get('keyvalue')->get('markaspot_open311.media_publication_manual');
+    foreach ($images as $media) {
+      $manual->set($media->id(), TRUE);
+    }
+    $sandbox = [];
+    markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
+    $this->assertSame(1, $sandbox['#finished']);
+    $storage = $this->container->get('entity_type.manager')->getStorage('media');
+    foreach ($images as $case => $media) {
+      $expected = in_array($case, ['current', 'other', 'translated'], TRUE);
+      $this->assertSame($expected, $storage->loadUnchanged($media->id())->isPublished(), $case);
+      $this->assertSame($expected, $manual->has($media->id()), $case);
+    }
   }
 
   /**

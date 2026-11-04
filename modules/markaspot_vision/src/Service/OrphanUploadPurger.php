@@ -270,6 +270,78 @@ class OrphanUploadPurger {
   }
 
   /**
+   * Unpublishes one update batch without waiting for busy publication locks.
+   *
+   * @param int[] $ids
+   *   At most 50 candidate media IDs selected by the post-update sandbox.
+   *
+   * @return int
+   *   Number of busy candidates skipped for later lifecycle/collector runs.
+   */
+  public function unpublishBatch(array $ids): int {
+    $acquired = [];
+    $ready = [];
+    $skipped = 0;
+    $storage = $this->entityTypeManager->getStorage('media');
+    sort($ids, SORT_NUMERIC);
+    try {
+      foreach (array_unique($ids) as $id) {
+        $name = 'markaspot_open311.media_publication.' . $id;
+        if (!$this->holdsPublicationLock((int) $id)) {
+          if (!$this->lock->acquire($name, 900)) {
+            $skipped++;
+            continue;
+          }
+          $acquired[] = $name;
+        }
+        $ready[] = $id;
+      }
+      if ($ready) {
+        // Read only after acquiring all locks. Aggregate each current media
+        // field once per batch, with at most one result per candidate. Entity
+        // queries include translations but exclude historical revisions.
+        $referenced = [];
+        $nodes = $this->entityTypeManager->getStorage('node');
+        foreach ($this->entityFieldManager->getFieldStorageDefinitions('node') as $field) {
+          if ($field->getSetting('target_type') === 'media') {
+            $target = $field->getName() . '.target_id';
+            $rows = $nodes->getAggregateQuery()->accessCheck(FALSE)
+              ->condition('type', 'service_request')
+              ->condition($target, $ready, 'IN')->groupBy($target)->execute();
+            foreach ($rows as $row) {
+              $referenced[(int) reset($row)] = TRUE;
+            }
+          }
+        }
+        $storage->resetCache($ready);
+        $orphans = [];
+        foreach ($storage->loadMultiple($ready) as $id => $media) {
+          if ($media instanceof MediaInterface && $media->bundle() === 'request_image' && !isset($referenced[$id])) {
+            $orphans[$id] = $media;
+          }
+        }
+        $this->keyValue->get('markaspot_open311.media_publication_manual')->deleteMultiple(array_keys($orphans));
+        $this->keyValue->get('markaspot_vision.report_media_hold')->deleteMultiple(array_keys($orphans));
+        foreach ($orphans as $media) {
+          if ($media->isPublished()) {
+            $media->setUnpublished()->save();
+          }
+        }
+      }
+    }
+    finally {
+      $storage->resetCache($ready);
+      foreach ($acquired as $name) {
+        $this->lock->release($name);
+      }
+    }
+    if ($skipped) {
+      $this->loggerFactory->get('markaspot_vision')->warning('Orphan image update skipped @count busy images; later lifecycle or purge runs can revisit them.', ['@count' => $skipped]);
+    }
+    return $skipped;
+  }
+
+  /**
    * Whether an upload can already be selected by this collector.
    */
   protected function isPurgeCandidate(MediaInterface $media): bool {
