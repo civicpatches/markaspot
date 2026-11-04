@@ -134,7 +134,7 @@ class OrphanUploadPurger {
       $current_ids = $this->reportMediaIds($entity);
       $original_ids = $original instanceof NodeInterface ? $this->reportMediaIds($original) : [];
       $changed_ids = array_merge(array_diff($current_ids, $original_ids), array_diff($original_ids, $current_ids));
-      $this->protectPublicationReferences($entity, $changed_ids);
+      $this->protectPublicationReferences($entity, $changed_ids, array_diff($current_ids, $original_ids));
     }
     foreach ($ids as $type => $targets) {
       foreach ($targets as $id) {
@@ -167,11 +167,18 @@ class OrphanUploadPurger {
   /**
    * Holds changed image associations through commit on every lock backend.
    */
-  protected function protectPublicationReferences(NodeInterface $report, array $ids): void {
+  protected function protectPublicationReferences(NodeInterface $report, array $ids, array $added = []): void {
     sort($ids, SORT_NUMERIC);
     foreach (array_unique($ids) as $id) {
       $media = $this->entityTypeManager->getStorage('media')->loadUnchanged($id);
       if ($media instanceof MediaInterface && $media->bundle() === 'request_image') {
+        // Do not block an in-flight citizen analysis from saving its metadata.
+        // A new unpublished attachment gets a transactional publication retry
+        // instead. Detachments and existing editorial/public states serialize.
+        if (in_array($id, $added, TRUE) && !$media->isPublished()
+          && !$this->keyValue->get('markaspot_open311.media_publication_manual')->has($id)) {
+          continue;
+        }
         $this->holdReferenceLock($report, 'markaspot_open311.media_publication.' . $id);
       }
     }

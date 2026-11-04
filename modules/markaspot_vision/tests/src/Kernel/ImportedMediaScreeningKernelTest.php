@@ -244,7 +244,9 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
     _markaspot_vision_publish_safe_media($node);
     $this->assertFalse(Media::load($media->id())->isPublished());
     $this->screening->enqueue($media);
-    $this->assertSame(1, $this->container->get('queue')->get(MediaIntakeScreening::QUEUE)->numberOfItems());
+    // Intake plus the report-transaction retry: the earlier item can run
+    // before a report commits and cannot replace that post-commit guarantee.
+    $this->assertSame(2, $this->container->get('queue')->get(MediaIntakeScreening::QUEUE)->numberOfItems());
     $worker = MediaIntakeScreeningWorker::create($this->container, [], MediaIntakeScreening::QUEUE, []);
     $worker->processItem(['media_id' => (int) $media->id()]);
     $worker->processItem(['media_id' => (int) $media->id()]);

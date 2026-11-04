@@ -3,6 +3,9 @@
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
 use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Entity\EntityStorageInterface;
+use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\StreamWrapper\StreamWrapperInterface;
 use Drupal\Core\StreamWrapper\PrivateStream;
 use Drupal\Component\Datetime\TimeInterface;
@@ -15,6 +18,7 @@ use Drupal\image\Entity\ImageStyle;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
+use Drupal\markaspot_vision\Service\ImageProcessingService;
 use Drupal\markaspot_vision\Service\MediaTenantScopeResolver;
 use Drupal\markaspot_vision\Service\OriginalImageStore;
 use Drupal\markaspot_vision\Service\OrphanUploadPurger;
@@ -327,8 +331,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $young->setCreatedTime($this->now)->save();
     $c = $this->container;
     $lock = $this->createMock(LockBackendInterface::class);
-    $lock->expects($this->once())->method('acquire')->with('markaspot_open311.media_publication.' . $young->id(), 900)->willReturn(TRUE);
-    $lock->expects($this->once())->method('release')->with('markaspot_open311.media_publication.' . $young->id());
+    $lock->expects($this->never())->method('acquire');
+    $lock->expects($this->never())->method('release');
     $purger = new OrphanUploadPurger(
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
@@ -569,6 +573,158 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $this->assertFalse($purger->holdsPublicationLock((int) $media->id()));
       $c->set('markaspot_vision.orphan_upload_purger', $this->purger);
     }
+  }
+
+  /**
+   * A delayed analysis result is republished by the post-commit queue worker.
+   */
+  public function testAnalysisFinishingBeforeReportCommitIsRetried(): void {
+    $this->publicationRace(TRUE, FALSE);
+  }
+
+  /**
+   * Optional screening must still retain a late positive privacy verdict.
+   */
+  public function testLegacyPublicationRaceRetainsPrivacyVerdict(): void {
+    $this->publicationRace(FALSE, TRUE);
+  }
+
+  /**
+   * Exercises the ordered race with strict or legacy publication policy.
+   */
+  protected function publicationRace(bool $strict, bool $privacy): void {
+    $this->config('markaspot_vision.settings')->set('require_ai_screening', $strict)->save();
+    $media = $this->upload();
+    $media->setCreatedTime($this->now)->set('field_ai_metadata', [])->save();
+    $c = $this->container;
+    $queue = $c->get('queue')->get(MediaIntakeScreening::QUEUE);
+    $queue->createQueue();
+    $controller_lock = $c->get('lock');
+    $report_lock = $this->createMock(LockBackendInterface::class);
+    $report_lock->expects($this->never())->method('acquire');
+    $report_lock->expects($this->never())->method('release');
+    $c->set('lock', $report_lock);
+    $transaction = $c->get('database')->startTransaction();
+    $node = Node::create([
+      'type' => 'service_request', 'title' => 'Race', 'status' => 1,
+      'field_request_media' => $media->id(),
+    ]);
+    $node->save();
+    $c->set('lock', $controller_lock);
+    $this->assertSame(1, $queue->numberOfItems());
+    $this->assertFalse(Media::load($media->id())->isPublished());
+    // Model the controller's late result: it observed no committed parent,
+    // recorded safe metadata, and consequently left the upload unpublished.
+    $publication_lock = 'markaspot_open311.media_publication.' . $media->id();
+    $this->assertFalse($this->purger->holdsPublicationLock((int) $media->id()));
+    $this->assertTrue($c->get('lock')->lockMayBeAvailable($publication_lock));
+    // Exercise the controller's actual lock acquisition before its metadata
+    // write; a commit-held publication guard would discard this late result.
+    $this->assertTrue($c->get('lock')->acquire($publication_lock, 30));
+    $media->set('field_ai_metadata', '{"description":"Analysed scene"}')
+      ->set('field_ai_privacy_flag', $privacy)->setUnpublished()->save();
+    $c->get('lock')->release($publication_lock);
+    unset($transaction);
+    $this->assertFalse(Media::load($media->id())->isPublished());
+    $item = $queue->claimItem();
+    $this->assertSame(['media_id' => (int) $media->id()], $item->data);
+    $images = $this->createMock(ImageProcessingService::class);
+    $images->expects($this->never())->method('processImages');
+    $worker = new MediaIntakeScreening(
+      $c->get('queue'), $c->get('keyvalue'), $c->get('lock'),
+      $c->get('entity_type.manager'), $c->get('config.factory'), $this->clock,
+      $images, $this->originals, $c->get('markaspot_vision.media_tenant_scope'),
+      $this->createMock(FeatureScopeResolver::class), $c->get('logger.factory'),
+    );
+    $worker->process($item->data['media_id']);
+    $queue->deleteItem($item);
+    $this->assertSame(!$privacy, Media::load($media->id())->isPublished());
+    $this->assertSame(0, $queue->numberOfItems());
+
+    $this->config('markaspot_vision.settings')->set('require_ai_screening', TRUE)->save();
+    // An incomplete retry must not perpetually enqueue itself on each cron.
+    $media = Media::load($media->id());
+    $media->set('field_ai_metadata', [])->setUnpublished()->save();
+    $node->setTitle('Still awaiting analysis')->save();
+    $item = $queue->claimItem();
+    $this->assertNotFalse($item);
+    $worker->process($item->data['media_id']);
+    $queue->deleteItem($item);
+    $this->assertSame(0, $queue->numberOfItems());
+    $this->assertFalse(Media::load($media->id())->isPublished());
+  }
+
+  /**
+   * Pre-existing intake work cannot replace a retry in the report transaction.
+   */
+  public function testPreexistingIntakeItemCannotConsumeReportRetry(): void {
+    $this->config('markaspot_vision.settings')->set('imported_image_analysis', 'off')->save();
+    $media = $this->upload();
+    $media->setCreatedTime($this->now)->set('field_ai_metadata', [])->save();
+    $c = $this->container;
+    $queue = $c->get('queue')->get(MediaIntakeScreening::QUEUE);
+    $queue->createItem(['media_id' => (int) $media->id()]);
+    $store = $c->get('keyvalue')->get(MediaIntakeScreening::STORE);
+    $store->set($media->id(), ['status' => 'pending', 'queued' => TRUE, 'attempts' => 0]);
+    $visible = FALSE;
+    // Model a separate worker connection that cannot see the pending report.
+    $empty_query = $this->createMock(QueryInterface::class);
+    $empty_query->method('accessCheck')->willReturnSelf();
+    $empty_query->method('condition')->willReturnSelf();
+    $empty_query->method('execute')->willReturn([]);
+    $hidden_nodes = $this->createMock(EntityStorageInterface::class);
+    $hidden_nodes->method('getQuery')->willReturn($empty_query);
+    $hidden_nodes->method('loadMultiple')->willReturn([]);
+    $manager = $this->createMock(EntityTypeManagerInterface::class);
+    $manager->method('getStorage')->willReturnCallback(static function ($type) use (&$visible, $hidden_nodes, $c) {
+      return $type === 'node' && !$visible ? $hidden_nodes : $c->get('entity_type.manager')->getStorage($type);
+    });
+    $images = $this->createMock(ImageProcessingService::class);
+    $images->method('blurSensitiveAreas')->willReturn(['blurred' => FALSE, 'processed' => TRUE]);
+    $worker = new MediaIntakeScreening(
+      $c->get('queue'), $c->get('keyvalue'), $c->get('lock'), $manager,
+      $c->get('config.factory'), $this->clock, $images, $this->originals,
+      $c->get('markaspot_vision.media_tenant_scope'), $this->createMock(FeatureScopeResolver::class), $c->get('logger.factory'),
+    );
+    $transaction = $c->get('database')->startTransaction();
+    Node::create([
+      'type' => 'service_request', 'title' => 'Pending report', 'status' => 1,
+      'field_request_media' => $media->id(),
+    ])->save();
+    $this->assertSame(2, $queue->numberOfItems());
+    $first = $queue->claimItem();
+    $worker->process($first->data['media_id']);
+    $queue->deleteItem($first);
+    $this->assertSame('orphaned', $store->get($media->id())['status']);
+    unset($transaction);
+    $visible = TRUE;
+    $this->assertSame(1, $queue->numberOfItems());
+    $retry = $queue->claimItem();
+    $worker->process($retry->data['media_id']);
+    $queue->deleteItem($retry);
+    $this->assertSame('done', $store->get($media->id())['status']);
+    $this->assertTrue(Media::load($media->id())->isPublished());
+    $this->assertSame(0, $queue->numberOfItems());
+  }
+
+  /**
+   * Publication retry work rolls back together with the report insert.
+   */
+  public function testPublicationRetryRollsBackWithReport(): void {
+    $media = $this->upload();
+    $media->set('field_ai_metadata', [])->save();
+    $queue = $this->container->get('queue')->get(MediaIntakeScreening::QUEUE);
+    $queue->createQueue();
+    $transaction = $this->container->get('database')->startTransaction();
+    Node::create([
+      'type' => 'service_request', 'title' => 'Rollback', 'status' => 1,
+      'field_request_media' => $media->id(),
+    ])->save();
+    $this->assertSame(1, $queue->numberOfItems());
+    $transaction->rollBack();
+    unset($transaction);
+    $this->assertSame(0, $queue->numberOfItems());
+    $this->assertFalse($this->purger->holdsPublicationLock((int) $media->id()));
   }
 
   /**

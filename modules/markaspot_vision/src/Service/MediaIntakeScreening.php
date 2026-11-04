@@ -198,7 +198,7 @@ class MediaIntakeScreening {
     }
     if (!$entry || $entry['status'] === 'done') {
       foreach ($this->reports($mid) as $node) {
-        _markaspot_vision_publish_safe_media($node);
+        _markaspot_vision_publish_safe_media($node, FALSE);
       }
       return;
     }
@@ -380,7 +380,7 @@ class MediaIntakeScreening {
       throw $e;
     }
     foreach ($this->reports($mid) as $node) {
-      _markaspot_vision_publish_safe_media($node);
+      _markaspot_vision_publish_safe_media($node, FALSE);
     }
 
   }

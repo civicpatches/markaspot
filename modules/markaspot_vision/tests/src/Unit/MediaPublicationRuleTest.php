@@ -44,6 +44,11 @@ final class MediaPublicationRuleTest extends UnitTestCase {
     $container->set('config.factory', $this->getConfigFactoryStub(['markaspot_vision.settings' => ['require_ai_screening' => $strict]]));
     $keyValue = new KeyValueMemoryFactory();
     $container->set('keyvalue', $keyValue);
+    $queue = $this->createMock(QueueInterface::class);
+    $queue->method('createItem')->with(['media_id' => 42])->willReturn(1);
+    $queues = $this->createMock(QueueFactory::class);
+    $queues->method('get')->with(MediaIntakeScreening::QUEUE)->willReturn($queue);
+    $container->set('queue', $queues);
     $lock = new NullLockBackend();
     if ($busy) {
       $lock = $this->createMock(LockBackendInterface::class);
@@ -256,7 +261,7 @@ final class MediaPublicationRuleTest extends UnitTestCase {
       // NULL analysis leaves no AI metadata or privacy verdict on the upload.
       'legacy required blur NULL analysis' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, FALSE, FALSE, TRUE],
       'legacy required blur report restore' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE],
-      'legacy ordinary media' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, TRUE],
+      'legacy ordinary media waits for post-commit retry' => [TRUE, '', FALSE, '', NULL, FALSE, FALSE, FALSE],
       'busy publication lock' => [TRUE, '{}', FALSE, '', NULL, TRUE, FALSE, FALSE, TRUE],
     ];
   }

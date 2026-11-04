@@ -205,8 +205,14 @@ function markaspot_vision_node_update(NodeInterface $node): void {
  * When require_ai_screening is disabled and blur is optional, media is
  * published unless it has been explicitly flagged by AI. Imported images still
  * require their privacy checkpoint regardless of the analysis setting.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The report whose attached images may be published.
+ * @param bool $retry_incomplete
+ *   Defer incomplete images and queue a retry on report save. Workers pass
+ *   FALSE so an incomplete analysis does not perpetually enqueue itself.
  */
-function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
+function _markaspot_vision_publish_safe_media(NodeInterface $node, bool $retry_incomplete = TRUE): void {
   if ($node->bundle() !== 'service_request') {
     return;
   }
@@ -217,11 +223,43 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
 
   $require_screening = \Drupal::config('markaspot_vision.settings')->get('require_ai_screening') ?? TRUE;
 
+  $original_ids = [];
+  if ($original = $node->getOriginal()) {
+    foreach ($original->getTranslationLanguages() as $language) {
+      $translation = $original->getTranslation($language->getId());
+      if ($translation->hasField('field_request_media')) {
+        $original_ids = array_merge($original_ids, array_column($translation->get('field_request_media')->getValue(), 'target_id'));
+      }
+    }
+  }
+
   $manual_publication = \Drupal::keyValue('markaspot_open311.media_publication_manual');
 
+  $handled = [];
   foreach ($media_field->referencedEntities() as $media) {
+    if (isset($handled[$media->id()])) {
+      continue;
+    }
+    $handled[$media->id()] = TRUE;
     $lock = \Drupal::lock();
     $mid = (int) $media->id();
+    $new_reference = !in_array($mid, $original_ids);
+    if ($retry_incomplete && !$media->isPublished() && !$manual_publication->has($mid)) {
+      $pending = \Drupal::keyValue(MediaIntakeScreening::STORE)->get($mid);
+      $incomplete = empty($media->get('field_ai_metadata')->value)
+        || ($pending && ($pending['status'] !== 'done' || ($pending['analysis'] ?? '') === 'started'));
+      if ($incomplete) {
+        // Even acquire/release of a database semaphore inside this transaction
+        // can block the controller until commit. Let it finish recording its
+        // result and defer publication without touching that semaphore at all.
+        // An earlier intake item may run before this report commits and see
+        // no parent. This transaction needs its own guaranteed retry item.
+        if (!\Drupal::queue(MediaIntakeScreening::QUEUE)->createItem(['media_id' => $mid])) {
+          throw new \RuntimeException('Queue backend refused publication retry.');
+        }
+        continue;
+      }
+    }
     $lock_name = 'markaspot_open311.media_publication.' . $mid;
     $guarded = \Drupal::hasService('markaspot_vision.orphan_upload_purger')
       && \Drupal::service('markaspot_vision.orphan_upload_purger')->holdsPublicationLock($mid);
@@ -328,6 +366,18 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
         ? trim((string) $media->get('field_ai_privacy_issues')->value)
         : '';
       $has_privacy_hold = $has_privacy_flag || $privacy_issues !== '';
+
+      $new_unguarded_reference = !$guarded && $new_reference;
+      if ($retry_incomplete && (!$ai_completed || $intake_held || $new_unguarded_reference)) {
+        // The analysis transaction may finish while this report insert is
+        // still invisible to it. A database queue item written in the report
+        // transaction becomes visible with the report and retries publication.
+        // New unguarded links also need a check when a concurrent last-report
+        // removal unpublishes an already screened image before this commit.
+        if (!\Drupal::queue(MediaIntakeScreening::QUEUE)->createItem(['media_id' => (int) $media->id()])) {
+          throw new \RuntimeException('Queue backend refused publication retry.');
+        }
+      }
 
       $report_holds = \Drupal::keyValue('markaspot_vision.report_media_hold');
       if (!$node->isPublished() || $intake_held) {
