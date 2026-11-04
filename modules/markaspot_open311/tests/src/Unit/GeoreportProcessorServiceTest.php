@@ -25,6 +25,9 @@ use Drupal\file\FileInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\media\MediaInterface;
 use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
+use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\markaspot_vision\Service\OrphanUploadPurger;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Drupal\Core\Messenger\MessengerInterface;
 use Drupal\Core\Session\AccountSwitcherInterface;
 use Drupal\Core\Session\AccountProxyInterface;
@@ -1493,6 +1496,76 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
     $result = $this->processor->mapNodeToServiceRequest($node, 'manager', ['langcode' => 'en']);
 
     $this->assertSame('https://example.test/sites/default/files/private.jpg', $result['media_url']);
+  }
+
+  /**
+   * A stale report cannot authorize publication after waiting for its lock.
+   */
+  #[DataProvider('stalePublicationCases')]
+  public function testManualPublicationRevalidatesReportUnderLock(string $case): void {
+    $node = $this->buildNodeWithRequestMediaIds([10]);
+    $node->method('id')->willReturn(42);
+    $current = $case === 'deleted' ? NULL : $this->buildNodeWithRequestMediaIds($case === 'detached' ? [] : [10]);
+    if ($current) {
+      $current->method('bundle')->willReturn($case === 'wrong bundle' ? 'article' : 'service_request');
+    }
+    $acquired = FALSE;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->once())->method('acquire')->willReturnCallback(static function () use (&$acquired): bool {
+      $acquired = TRUE;
+      return TRUE;
+    });
+    $lock->expects($this->once())->method('release')->with('markaspot_open311.media_publication.10');
+    (new \ReflectionProperty($this->processor, 'mediaPublicationLock'))->setValue($this->processor, $lock);
+    $this->nodeStorage->expects($this->once())->method('loadUnchanged')->with(42)
+      ->willReturnCallback(function () use (&$acquired, $current) {
+        $this->assertTrue($acquired);
+        return $current;
+      });
+    $media = $this->createMock(MediaInterface::class);
+    $this->mediaStorage->method('load')->with(10)->willReturn($media);
+    $this->mediaStorage->expects($this->never())->method('loadUnchanged');
+    $media->expects($this->never())->method('save');
+    $this->currentUser->method('hasPermission')->willReturn(TRUE);
+    try {
+      $this->processor->updateMediaPublishedStatus([['target_id' => 10, 'status' => '1']], $node);
+      $this->fail('Stale authorization must be rejected.');
+    }
+    catch (GeoreportException $e) {
+      $this->assertSame(409, $e->getCode());
+      $this->assertFalse($this->keyValueFactory->get('markaspot_open311.media_publication_manual')->has(10));
+    }
+  }
+
+  /**
+   * Current scope failures observed only after lock acquisition.
+   */
+  public static function stalePublicationCases(): array {
+    return [['deleted'], ['detached'], ['wrong bundle']];
+  }
+
+  /**
+   * A nested manual decision borrows an outer report's publication lock.
+   */
+  public function testManualPublicationBorrowsReportLock(): void {
+    $node = $this->buildNodeWithRequestMediaIds([10]);
+    $node->method('id')->willReturn(42);
+    $node->method('bundle')->willReturn('service_request');
+    $this->nodeStorage->method('loadUnchanged')->with(42)->willReturn($node);
+    $guard = $this->createMock(OrphanUploadPurger::class);
+    $guard->method('holdsPublicationLock')->with(10)->willReturn(TRUE);
+    (new \ReflectionProperty($this->processor, 'orphanUploadPurger'))->setValue($this->processor, $guard);
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->never())->method('acquire');
+    $lock->expects($this->never())->method('release');
+    (new \ReflectionProperty($this->processor, 'mediaPublicationLock'))->setValue($this->processor, $lock);
+    $media = $this->createMock(MediaInterface::class);
+    $media->method('isPublished')->willReturn(TRUE);
+    $this->mediaStorage->method('load')->with(10)->willReturn($media);
+    $this->mediaStorage->method('loadUnchanged')->with(10)->willReturn($media);
+    $this->currentUser->method('hasPermission')->willReturn(TRUE);
+    $this->processor->updateMediaPublishedStatus([['target_id' => 10, 'status' => '1']], $node);
+    $this->assertTrue($this->keyValueFactory->get('markaspot_open311.media_publication_manual')->has(10));
   }
 
   /**

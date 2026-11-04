@@ -68,3 +68,17 @@ function vision_orphan_test_entity_predelete(EntityInterface $entity): void {
     throw new \RuntimeException('Synthetic deletion failure.');
   }
 }
+
+/**
+ * Implements hook_node_delete().
+ */
+function vision_orphan_test_node_delete(NodeInterface $node): void {
+  markaspot_vision_node_delete($node);
+}
+
+/**
+ * Implements hook_node_predelete().
+ */
+function vision_orphan_test_node_predelete(NodeInterface $node): void {
+  markaspot_vision_node_predelete($node);
+}

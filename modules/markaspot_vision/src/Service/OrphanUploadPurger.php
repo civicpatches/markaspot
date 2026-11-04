@@ -18,6 +18,7 @@ use Drupal\Core\State\StateInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Drupal\media\MediaInterface;
+use Drupal\node\NodeInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 
@@ -129,6 +130,12 @@ class OrphanUploadPurger {
     foreach ($candidates as $id) {
       $this->holdReferenceLock($entity, MediaIntakeScreening::QUEUE . ':' . $id);
     }
+    if ($entity instanceof NodeInterface && $entity->bundle() === 'service_request') {
+      $current_ids = $this->reportMediaIds($entity);
+      $original_ids = $original instanceof NodeInterface ? $this->reportMediaIds($original) : [];
+      $changed_ids = array_merge(array_diff($current_ids, $original_ids), array_diff($original_ids, $current_ids));
+      $this->protectPublicationReferences($entity, $changed_ids);
+    }
     foreach ($ids as $type => $targets) {
       foreach ($targets as $id) {
         if (!$this->entityTypeManager->getStorage($type)->loadUnchanged($id)) {
@@ -144,6 +151,113 @@ class OrphanUploadPurger {
           }
           throw new \RuntimeException('A referenced upload file no longer exists. Please upload it again.');
         }
+      }
+    }
+  }
+
+  /**
+   * Serializes report deletion with publication before references disappear.
+   */
+  public function protectReportDeletion(NodeInterface $report): void {
+    if ($report->bundle() === 'service_request') {
+      $this->protectPublicationReferences($report, $this->reportMediaIds($report));
+    }
+  }
+
+  /**
+   * Holds changed image associations through commit on every lock backend.
+   */
+  protected function protectPublicationReferences(NodeInterface $report, array $ids): void {
+    sort($ids, SORT_NUMERIC);
+    foreach (array_unique($ids) as $id) {
+      $media = $this->entityTypeManager->getStorage('media')->loadUnchanged($id);
+      if ($media instanceof MediaInterface && $media->bundle() === 'request_image') {
+        $this->holdReferenceLock($report, 'markaspot_open311.media_publication.' . $id);
+      }
+    }
+  }
+
+  /**
+   * Whether a nested publication helper must leave the guard's lock held.
+   */
+  public function holdsPublicationLock(int $id): bool {
+    return isset($this->heldLocks['markaspot_open311.media_publication.' . $id]);
+  }
+
+  /**
+   * Rechecks images from a report after removal or deletion of its references.
+   */
+  public function unpublishDetached(NodeInterface $report, ?NodeInterface $current = NULL): void {
+    if ($report->bundle() !== 'service_request') {
+      return;
+    }
+    $ids = array_diff($this->reportMediaIds($report), $current ? $this->reportMediaIds($current) : []);
+    foreach ($ids as $id) {
+      $this->unpublishIfUnreferenced($id);
+    }
+  }
+
+  /**
+   * Collects all current report media IDs, including translations.
+   */
+  protected function reportMediaIds(NodeInterface $report): array {
+    $ids = [];
+    foreach ($report->getTranslationLanguages() as $language) {
+      $translation = $report->getTranslation($language->getId());
+      foreach ($translation->getFieldDefinitions() as $name => $definition) {
+        if ($definition->getSetting('target_type') === 'media') {
+          foreach ($translation->get($name) as $item) {
+            if ($item->target_id) {
+              $ids[$item->target_id] = (int) $item->target_id;
+            }
+          }
+        }
+      }
+    }
+    return $ids;
+  }
+
+  /**
+   * Removes public access and stale manual decisions, but retains image bytes.
+   *
+   * Current report references across every media field/translation count here.
+   * Historical revisions still prevent deletion, but do not justify public
+   * access after the image was removed from the current report.
+   */
+  public function unpublishIfUnreferenced(int $id): void {
+    $name = 'markaspot_open311.media_publication.' . $id;
+    $guarded = $this->holdsPublicationLock($id);
+    if (!$guarded && !$this->lock->acquire($name, 30)) {
+      $this->lock->wait($name, 5);
+      if (!$this->lock->acquire($name, 30)) {
+        throw new \RuntimeException('Image publication is busy. Please retry saving.');
+      }
+    }
+    try {
+      $media = $this->entityTypeManager->getStorage('media')->loadUnchanged($id);
+      if (!$media instanceof MediaInterface || $media->bundle() !== 'request_image') {
+        return;
+      }
+      $query = $this->entityTypeManager->getStorage('node')->getQuery()->accessCheck(FALSE)
+        ->condition('type', 'service_request')->range(0, 1);
+      $references = $query->orConditionGroup();
+      foreach ($this->entityFieldManager->getFieldStorageDefinitions('node') as $field) {
+        if ($field->getSetting('target_type') === 'media') {
+          $references->condition($field->getName() . '.target_id', $id);
+        }
+      }
+      if ($references->count() && $query->condition($references)->execute()) {
+        return;
+      }
+      $this->keyValue->get('markaspot_open311.media_publication_manual')->delete($id);
+      $this->keyValue->get('markaspot_vision.report_media_hold')->delete($id);
+      if ($media->isPublished()) {
+        $media->setUnpublished()->save();
+      }
+    }
+    finally {
+      if (!$guarded) {
+        $this->lock->release($name);
       }
     }
   }

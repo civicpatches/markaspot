@@ -47,6 +47,7 @@ use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Image\RequestImageStyles;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
+use Drupal\markaspot_vision\Service\OrphanUploadPurger;
 use Drupal\markaspot_open311\Exception\GeoreportException;
 use Drupal\paragraphs\Entity\Paragraph;
 use Psr\Log\LoggerInterface;
@@ -425,6 +426,8 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
    *   Optional asynchronous privacy screening for imported images.
    * @param \Drupal\Core\Lock\LockBackendInterface|null $mediaPublicationLock
    *   Serializes editorial publication with background media writes.
+   * @param \Drupal\markaspot_vision\Service\OrphanUploadPurger|null $orphanUploadPurger
+   *   Shares publication locks held through a report transaction.
    */
   public function __construct(
     ConfigFactoryInterface $configFactory,
@@ -450,6 +453,7 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     ?RemoteImageFetcher $remoteImageFetcher = NULL,
     protected ?MediaIntakeScreening $intakeScreening = NULL,
     protected ?LockBackendInterface $mediaPublicationLock = NULL,
+    protected ?OrphanUploadPurger $orphanUploadPurger = NULL,
   ) {
     $this->remoteImageFetcher = $remoteImageFetcher ?? new RemoteImageFetcher($httpClient, $logger);
     $this->configFactory = $configFactory;
@@ -4476,12 +4480,21 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
 
       $publicationLock = $this->mediaPublicationLock ?? new NullLockBackend();
       $lockName = 'markaspot_open311.media_publication.' . $mid;
-      if (!$publicationLock->acquire($lockName, 30)) {
+      $guarded = $this->orphanUploadPurger?->holdsPublicationLock($mid) ?? FALSE;
+      if (!$guarded && !$publicationLock->acquire($lockName, 30)) {
         throw new GeoreportException('Media publication is being updated. Please retry.', 409);
       }
       try {
         if ($this->mediaPublicationLock) {
+          $current = $this->entityTypeManager->getStorage('node')->loadUnchanged($node->id());
+          if (!$current instanceof ContentEntityInterface || $current->bundle() !== 'service_request'
+            || !in_array($mid, $this->getRequestMediaIdsByDelta($current), TRUE)) {
+            throw new GeoreportException('The report no longer references this image. Please reload the report.', 409);
+          }
           $media = $this->entityTypeManager->getStorage('media')->loadUnchanged($mid);
+          if (!$media instanceof MediaInterface) {
+            throw new GeoreportException('The image no longer exists. Please reload the report.', 409);
+          }
         }
         if ($published) {
           $this->assertImportedMediaScreened($media);
@@ -4510,7 +4523,9 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
         $this->mediaPublicationState('markaspot_vision.report_media_hold')->delete($mid);
       }
       finally {
-        $publicationLock->release($lockName);
+        if (!$guarded) {
+          $publicationLock->release($lockName);
+        }
       }
     }
   }

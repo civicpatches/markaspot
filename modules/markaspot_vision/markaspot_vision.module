@@ -188,6 +188,9 @@ function markaspot_vision_node_update(NodeInterface $node): void {
 
   _markaspot_vision_publish_safe_media($node);
   \Drupal::service('markaspot_vision.original_image_store')->bind($node);
+  if ($original = $node->getOriginal()) {
+    \Drupal::service('markaspot_vision.orphan_upload_purger')->unpublishDetached($original, $node);
+  }
 }
 
 /**
@@ -218,8 +221,11 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
 
   foreach ($media_field->referencedEntities() as $media) {
     $lock = \Drupal::lock();
-    $lock_name = 'markaspot_open311.media_publication.' . $media->id();
-    if (!$lock->acquire($lock_name, 30)) {
+    $mid = (int) $media->id();
+    $lock_name = 'markaspot_open311.media_publication.' . $mid;
+    $guarded = \Drupal::hasService('markaspot_vision.orphan_upload_purger')
+      && \Drupal::service('markaspot_vision.orphan_upload_purger')->holdsPublicationLock($mid);
+    if (!$guarded && !$lock->acquire($lock_name, 30)) {
       $lock->wait($lock_name, 5);
       if (!$lock->acquire($lock_name, 30)) {
         // Do not publish or write over an editor while they own the lock.
@@ -366,7 +372,9 @@ function _markaspot_vision_publish_safe_media(NodeInterface $node): void {
       }
     }
     finally {
-      $lock->release($lock_name);
+      if (!$guarded) {
+        $lock->release($lock_name);
+      }
     }
   }
 }
@@ -419,8 +427,16 @@ function markaspot_vision_media_delete(MediaInterface $media): void {
   \Drupal::service('keyvalue.expirable')->get(MediaAnalysisAccessGuard::STORE)->delete($media->uuid());
   \Drupal::keyValue(MediaIntakeScreening::STORE)->delete($media->id());
   \Drupal::keyValue('markaspot_vision.report_media_hold')->delete($media->id());
+  \Drupal::keyValue('markaspot_open311.media_publication_manual')->delete($media->id());
   \Drupal::service('markaspot_vision.original_image_store')->delete((int) $media->id());
   \Drupal::service('markaspot_vision.media_tenant_scope')->forget($media);
+}
+
+/**
+ * Implements hook_node_predelete().
+ */
+function markaspot_vision_node_predelete(NodeInterface $node): void {
+  \Drupal::service('markaspot_vision.orphan_upload_purger')->protectReportDeletion($node);
 }
 
 /**
@@ -432,6 +448,8 @@ function markaspot_vision_media_delete(MediaInterface $media): void {
 function markaspot_vision_node_delete(NodeInterface $node): void {
   if ($node->bundle() === 'service_request') {
     \Drupal::service('markaspot_vision.original_image_store')->releaseOwnedBy((int) $node->id());
+    \Drupal::service('markaspot_vision.orphan_upload_purger')->unpublishDetached($node);
+    \Drupal::service('markaspot_vision.orphan_upload_purger')->releaseReferences($node);
   }
 }
 

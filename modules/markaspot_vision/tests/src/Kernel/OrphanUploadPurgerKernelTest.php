@@ -287,7 +287,11 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $c = $this->container;
     $releases = 0;
     $lock = $this->createMock(LockBackendInterface::class);
-    $lock->expects($this->once())->method('acquire')->with(MediaIntakeScreening::QUEUE . ':' . $media->id(), 900)->willReturn(TRUE);
+    $acquired = [];
+    $lock->expects($this->exactly(2))->method('acquire')->willReturnCallback(static function (string $name) use (&$acquired): bool {
+      $acquired[] = $name;
+      return TRUE;
+    });
     $lock->method('release')->willReturnCallback(static function () use (&$releases): void {
       $releases++;
     });
@@ -305,7 +309,11 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     Node::create(['type' => 'service_request', 'title' => 'Second', 'field_request_media' => $media->id()])->save();
     $this->assertSame(0, $releases);
     unset($transaction);
-    $this->assertSame(1, $releases);
+    $this->assertSame(2, $releases);
+    $this->assertSame([
+      MediaIntakeScreening::QUEUE . ':' . $media->id(),
+      'markaspot_open311.media_publication.' . $media->id(),
+    ], $acquired);
   }
 
   /**
@@ -319,8 +327,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $young->setCreatedTime($this->now)->save();
     $c = $this->container;
     $lock = $this->createMock(LockBackendInterface::class);
-    $lock->expects($this->never())->method('acquire');
-    $lock->expects($this->never())->method('release');
+    $lock->expects($this->once())->method('acquire')->with('markaspot_open311.media_publication.' . $young->id(), 900)->willReturn(TRUE);
+    $lock->expects($this->once())->method('release')->with('markaspot_open311.media_publication.' . $young->id());
     $purger = new OrphanUploadPurger(
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
@@ -447,6 +455,120 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $this->purger->purge();
     $this->assertFalse($pending->has($key));
     $this->assertNull(File::load($file->id()));
+  }
+
+  /**
+   * Only removal of the final current report unpublishes and clears decisions.
+   */
+  public function testLastReportRemovalAndDeletionUnpublish(): void {
+    $media = $this->upload();
+    $first = Node::create([
+      'type' => 'service_request', 'title' => 'First', 'status' => 1,
+      'field_request_media' => $media->id(),
+    ]);
+    $first->save();
+    $second = Node::create([
+      'type' => 'service_request', 'title' => 'Second', 'status' => 1,
+      'field_other_media' => $media->id(),
+    ]);
+    $second->save();
+    $manual = $this->container->get('keyvalue')->get('markaspot_open311.media_publication_manual');
+    $manual->set($media->id(), TRUE);
+    $first->setNewRevision(TRUE);
+    $first->set('field_request_media', [])->save();
+    $this->assertTrue(Media::load($media->id())->isPublished());
+    $this->assertTrue($manual->has($media->id()));
+    $second->delete();
+    $this->assertFalse(Media::load($media->id())->isPublished());
+    $this->assertFalse($manual->has($media->id()));
+    $this->assertSame(0, $this->purger->purge(), 'Historical references still retain bytes.');
+    $first->set('field_request_media', $media->id())->save();
+    $this->assertTrue(Media::load($media->id())->isPublished());
+    $first->set('field_request_media', [])->save();
+    $this->assertFalse(Media::load($media->id())->isPublished());
+  }
+
+  /**
+   * Post-update batches content without changing configuration or offline data.
+   */
+  public function testPostUpdateUnpublishesOrphansInBatches(): void {
+    require_once dirname(__DIR__, 3) . '/markaspot_vision.post_update.php';
+    $media = $this->upload();
+    $file = $media->get('field_media_image')->entity;
+    $ids = [$media->id()];
+    for ($i = 0; $i < 50; $i++) {
+      $ids[] = $this->upload($file)->id();
+    }
+    $attached = array_pop($ids);
+    Node::create([
+      'type' => 'service_request', 'title' => 'Kept', 'status' => 1,
+      'field_request_media' => $attached,
+    ])->save();
+    $manual = $this->container->get('keyvalue')->get('markaspot_open311.media_publication_manual');
+    $manual->set($media->id(), TRUE);
+    $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    $config = $this->container->get('config.storage');
+    $before = $config->readMultiple($config->listAll());
+    $sandbox = [];
+    markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
+    $this->assertLessThan(1, $sandbox['#finished']);
+    $this->assertSame(50, $sandbox['processed']);
+    markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
+    $this->assertSame(1, $sandbox['#finished']);
+    $storage = $this->container->get('entity_type.manager')->getStorage('media');
+    foreach ($ids as $id) {
+      $this->assertFalse($storage->loadUnchanged($id)->isPublished());
+    }
+    $this->assertTrue($storage->loadUnchanged($attached)->isPublished());
+    $this->assertFalse($manual->has($media->id()));
+    $this->assertSame($before, $config->readMultiple($config->listAll()));
+    Node::create([
+      'type' => 'service_request', 'title' => 'Later offline sync', 'status' => 1,
+      'field_request_media' => $media->id(),
+    ])->save();
+    $this->assertTrue($storage->loadUnchanged($media->id())->isPublished());
+  }
+
+  /**
+   * Reference removal and deletion hold publication through the outer commit.
+   */
+  public function testDetachedPublicationLockOutlivesReportTransaction(): void {
+    foreach (['remove', 'delete'] as $operation) {
+      $media = $this->upload();
+      $node = Node::create([
+        'type' => 'service_request', 'title' => 'Guard', 'status' => 1,
+        'field_request_media' => $media->id(),
+      ]);
+      $node->save();
+      $c = $this->container;
+      $released = [];
+      $lock = $this->createMock(LockBackendInterface::class);
+      $lock->expects($this->once())->method('acquire')->with('markaspot_open311.media_publication.' . $media->id(), 900)->willReturn(TRUE);
+      $lock->method('release')->willReturnCallback(static function (string $name) use (&$released): void {
+        $released[] = $name;
+      });
+      $purger = new OrphanUploadPurger(
+        $c->get('entity_type.manager'), $c->get('entity_field.manager'),
+        $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
+        $c->get('keyvalue'), $c->get('file.usage'), $lock,
+        $c->get('state'), $this->clock, $c->get('logger.factory'), $this->createMock(FeatureScopeResolver::class),
+      );
+      $c->set('markaspot_vision.orphan_upload_purger', $purger);
+      $transaction = $c->get('database')->startTransaction();
+      if ($operation === 'remove') {
+        $node->set('field_request_media', [])->save();
+      }
+      else {
+        $node->delete();
+      }
+      $this->assertTrue($purger->holdsPublicationLock((int) $media->id()));
+      $this->assertSame([], $released);
+      $this->assertFalse(Media::load($media->id())->isPublished());
+      unset($transaction);
+      $this->assertSame(['markaspot_open311.media_publication.' . $media->id()], $released);
+      $this->assertFalse($purger->holdsPublicationLock((int) $media->id()));
+      $c->set('markaspot_vision.orphan_upload_purger', $this->purger);
+    }
   }
 
   /**
