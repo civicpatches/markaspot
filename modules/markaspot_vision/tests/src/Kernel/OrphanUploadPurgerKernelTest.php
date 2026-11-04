@@ -21,6 +21,7 @@ use Drupal\markaspot_vision\Service\OrphanUploadPurger;
 use Drupal\media\Entity\Media;
 use Drupal\media\Entity\MediaType;
 use Drupal\node\Entity\Node;
+use Drupal\user\Entity\User;
 use Drupal\node\Entity\NodeType;
 use Drupal\Tests\image\Kernel\ImageFieldCreationTrait;
 use PHPUnit\Framework\Attributes\Group;
@@ -328,11 +329,59 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
   /**
    * A deleted upload cannot be attached from a stale dashboard form.
    */
-  public function testStaleReferenceIsRejected(): void {
+  public function testStaleReferenceIsDropped(): void {
     $media = $this->upload();
     $this->assertSame(1, $this->purger->purge());
-    $this->expectExceptionMessage('A referenced upload no longer exists');
-    Node::create(['type' => 'service_request', 'title' => 'Test', 'field_request_media' => $media->id()])->save();
+    $node = Node::create([
+      'type' => 'service_request', 'title' => 'Test',
+      'field_request_media' => $media->id(), 'field_other_media' => $media->id(),
+    ]);
+    $node->save();
+    $this->assertEquals($media->id(), $node->get('field_other_media')->target_id);
+    $this->assertTrue(Node::load($node->id())->get('field_request_media')->isEmpty());
+  }
+
+  /**
+   * Collection between the optimistic read and lock acquisition drops the link.
+   */
+  public function testPurgeDuringReferenceProtection(): void {
+    $media = $this->upload();
+    $c = $this->container;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(static function () use ($media): bool {
+      $media->delete();
+      return TRUE;
+    });
+    $purger = new OrphanUploadPurger(
+      $c->get('entity_type.manager'), $c->get('entity_field.manager'),
+      $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
+      $c->get('keyvalue'), $c->get('file.usage'), $lock,
+      $c->get('state'), $c->get('datetime.time'), $c->get('logger.factory'),
+    );
+    $c->set('markaspot_vision.orphan_upload_purger', $purger);
+    $node = Node::create(['type' => 'service_request', 'title' => 'Race', 'field_request_media' => $media->id()]);
+    $node->save();
+    $this->assertTrue($node->get('field_request_media')->isEmpty());
+  }
+
+  /**
+   * Deleting media before a dashboard save does not break existing reports.
+   */
+  public function testExistingDanglingReferenceCanBeSaved(): void {
+    $media = $this->upload();
+    $node = Node::create(['type' => 'service_request', 'title' => 'Before', 'field_request_media' => $media->id()]);
+    $node->save();
+    $media->delete();
+    $node = $this->container->get('entity_type.manager')->getStorage('node')->loadUnchanged($node->id());
+    $node->setTitle('After')->save();
+    $this->assertSame('After', Node::load($node->id())->label());
+    $this->assertEquals($media->id(), $node->get('field_request_media')->target_id);
+
+    $this->field('user', 'user', 'field_stale_media', 'entity_reference', ['target_type' => 'media']);
+    $user = User::create(['name' => 'Synthetic', 'field_stale_media' => $media->id()]);
+    $user->save();
+    $user->setUsername('Changed')->save();
+    $this->assertSame('Changed', $user->getAccountName());
   }
 
 }

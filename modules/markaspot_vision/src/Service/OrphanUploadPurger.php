@@ -58,23 +58,50 @@ class OrphanUploadPurger {
   /**
    * Serializes reference writes and collection, including nondefault revisions.
    *
-   * A stale dashboard/offline submission must fail validation, never save a
-   * reference to an upload collected between loading the form and saving it.
+   * Existing dangling links are tolerated. New report links to missing media
+   * are dropped; unrelated entities keep their normal validation contract.
    */
   public function protectReferences(EntityInterface $entity): void {
     if (!$entity instanceof ContentEntityInterface) {
       return;
     }
     $ids = [];
+    $original = $entity->getOriginal();
     foreach ($entity->getTranslationLanguages() as $language) {
       $translation = $entity->getTranslation($language->getId());
+      $previous = $original && $original->hasTranslation($language->getId())
+        ? $original->getTranslation($language->getId()) : NULL;
       foreach ($translation->getFieldDefinitions() as $name => $definition) {
-        if (in_array($definition->getSetting('target_type'), ['media', 'file'], TRUE)) {
-          foreach ($translation->get($name) as $item) {
-            if ($item->target_id) {
-              $ids[$definition->getSetting('target_type')][$item->target_id] = $item->target_id;
+        $type = $definition->getSetting('target_type');
+        if ($type !== 'media' && !($type === 'file' && $entity instanceof MediaInterface && $entity->bundle() === 'request_image')) {
+          continue;
+        }
+        $old_ids = $previous && $previous->hasField($name)
+          ? array_column($previous->get($name)->getValue(), 'target_id') : [];
+        $remove = [];
+        foreach ($translation->get($name) as $delta => $item) {
+          if (!$item->target_id || in_array($item->target_id, $old_ids)) {
+            continue;
+          }
+          $target = $this->entityTypeManager->getStorage($type)->loadUnchanged($item->target_id);
+          if ($type === 'media') {
+            if (!$target) {
+              // A stale online form may name an upload already collected. Keep
+              // the report save usable, but never store that new broken link.
+              // Unrelated entity types retain their own validation contract.
+              if ($entity->getEntityTypeId() === 'node' && $entity->bundle() === 'service_request' && $name === 'field_request_media') {
+                $remove[] = $delta;
+              }
+              continue;
+            }
+            if (!$target instanceof MediaInterface || $target->bundle() !== 'request_image') {
+              continue;
             }
           }
+          $ids[$type][$item->target_id] = $item->target_id;
+        }
+        foreach (array_reverse($remove) as $delta) {
+          $translation->get($name)->removeItem($delta);
         }
       }
     }
@@ -103,7 +130,17 @@ class OrphanUploadPurger {
     foreach ($ids as $type => $targets) {
       foreach ($targets as $id) {
         if (!$this->entityTypeManager->getStorage($type)->loadUnchanged($id)) {
-          throw new \RuntimeException('A referenced upload no longer exists. Please upload it again.');
+          if ($type === 'media') {
+            foreach ($entity->getTranslationLanguages() as $language) {
+              $translation = $entity->getTranslation($language->getId());
+              if ($entity->getEntityTypeId() === 'node' && $entity->bundle() === 'service_request' && $translation->hasField('field_request_media')) {
+                $values = array_filter($translation->get('field_request_media')->getValue(), static fn (array $value): bool => (string) $value['target_id'] !== (string) $id);
+                $translation->set('field_request_media', array_values($values));
+              }
+            }
+            continue;
+          }
+          throw new \RuntimeException('A referenced upload file no longer exists. Please upload it again.');
         }
       }
     }
