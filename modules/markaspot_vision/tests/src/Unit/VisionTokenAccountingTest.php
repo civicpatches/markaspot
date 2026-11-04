@@ -53,7 +53,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
   /**
    * Creates the real accounting client with an observed token tracker.
    */
-  private function service(?TokenTrackingService $tracking, array $responses, array &$history, ?LoggerInterface $channel = NULL): ImageProcessingService {
+  private function service(?TokenTrackingService $tracking, array $responses, array &$history, ?LoggerInterface $channel = NULL, array $methods = ['wait']): ImageProcessingService {
     $history = [];
     $stack = HandlerStack::create(new MockHandler($responses));
     $stack->push(Middleware::history($history));
@@ -70,7 +70,7 @@ final class VisionTokenAccountingTest extends UnitTestCase {
       $this->createMock(FileSystemInterface::class), $logger,
       $this->createMock(StateInterface::class), $this->createMock(TimeInterface::class),
       NULL, NULL, NULL, $tracking ? new AiClientService($client, $factory, $logger, $tracking) : NULL, $tracking,
-    ])->onlyMethods(['wait'])->getMock();
+    ])->onlyMethods($methods)->getMock();
   }
 
   /**
@@ -228,6 +228,44 @@ final class VisionTokenAccountingTest extends UnitTestCase {
    */
   public static function disabledTracking(): array {
     return ['disabled' => [FALSE], 'unset' => [NULL]];
+  }
+
+  /**
+   * Interactive media attribution keeps retries; the queue opts out explicitly.
+   */
+  #[DataProvider('retryPolicies')]
+  public function testScreenedRetryPolicy(bool $interactive, int $attempts): void {
+    $tracking = $this->createMock(TokenTrackingService::class);
+    $tracking->expects($this->exactly($attempts))->method('checkLimit')->willReturn(TRUE);
+    $tracking->expects($this->exactly($attempts))->method('logUsage')
+      ->with('azure', 'effective-model-2026', 'vision', 41, 9, 'media', 73);
+    $history = [];
+    $service = $this->service($tracking, [
+      $this->response([], 503), $this->response([], 503), $this->response(),
+    ], $history, NULL, ['wait', 'processImages']);
+    $service->method('processImages')->willReturnCallback(fn () => $this->send($service));
+    try {
+      if ($interactive) {
+        self::assertNotNull($service->processScreenedImages([], 'en', 41, NULL, 73));
+      }
+      else {
+        $service->processScreenedImages([], 'en', 41, NULL, 73, FALSE);
+        self::fail('Queue enrichment must not retry uncertain submissions.');
+      }
+    }
+    catch (\RuntimeException $e) {
+      self::assertFalse($interactive);
+      self::assertSame(503, $e->getCode());
+    }
+    self::assertCount($attempts, $history);
+    self::assertSame([], (new \ReflectionProperty(ImageProcessingService::class, 'accountingOptions'))->getValue($service));
+  }
+
+  /**
+   * Citizen and staff share the interactive path; intake explicitly opts out.
+   */
+  public static function retryPolicies(): array {
+    return ['interactive' => [TRUE, 3], 'queue' => [FALSE, 1]];
   }
 
   /**

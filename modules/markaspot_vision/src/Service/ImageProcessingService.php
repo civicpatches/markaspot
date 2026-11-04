@@ -58,7 +58,7 @@ class ImageProcessingService {
   private array $screenedUris = [];
 
   /**
-   * Usage attribution scoped to an imported image analysis.
+   * Usage attribution and retry policy scoped to an image analysis.
    *
    * @var array
    */
@@ -99,16 +99,19 @@ class ImageProcessingService {
    * @param array|null $fileUris
    *   All source URIs in a mixed batch, or NULL for only screened files.
    * @param int|null $mediaId
-   *   Imported media whose analysis is centrally accounted for, if any.
+   *   Media whose analysis is centrally accounted for, if any.
+   * @param bool $retryTransient
+   *   Whether to retry transient failures. Queue enrichment disables retries.
    *
    * @return array|null
    *   The normal vision result.
    */
-  public function processScreenedImages(array $screenedUris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?array $fileUris = NULL, ?int $mediaId = NULL): ?array {
+  public function processScreenedImages(array $screenedUris, ?string $langcode = NULL, ?int $jurisdictionId = NULL, ?array $fileUris = NULL, ?int $mediaId = NULL, bool $retryTransient = TRUE): ?array {
     $this->screenedUris = $screenedUris;
-    $this->accountingOptions = $mediaId !== NULL ? [
-      'operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId, 'max_attempts' => 1,
-    ] : [];
+    $this->accountingOptions = ['max_attempts' => $retryTransient ? 3 : 1];
+    if ($mediaId !== NULL) {
+      $this->accountingOptions += ['operation' => 'vision', 'entity_type' => 'media', 'entity_id' => $mediaId];
+    }
     try {
       return $this->processImages($fileUris ?? array_keys($screenedUris), $langcode, $jurisdictionId);
     }

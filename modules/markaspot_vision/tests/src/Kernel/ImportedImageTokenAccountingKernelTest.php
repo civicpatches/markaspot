@@ -96,7 +96,7 @@ final class ImportedImageTokenAccountingKernelTest extends KernelTestBase {
 
     };
     try {
-      $images->processScreenedImages([], 'en', 41, NULL, 73);
+      $images->processScreenedImages([], 'en', 41, NULL, 73, FALSE);
       $this->assertSame('{"privacy_flag":false}', $content);
     }
     catch (\RuntimeException $e) {

@@ -458,7 +458,7 @@ class MediaIntakeScreening {
       'blur_required' => $entry['blur_required'] ?? FALSE,
       'source_sha256' => $entry['prepared_hash'],
       'blurred' => $entry['blurred'] ?? FALSE,
-    ]], $node->language()->getId(), $jid, NULL, (int) $media->id());
+    ]], $node->language()->getId(), $jid, NULL, (int) $media->id(), FALSE);
     $decoded = json_decode((string) ($result['ai_result'] ?? ''), TRUE);
     if (!is_array($decoded) || !is_bool($decoded['privacy_flag'] ?? NULL)) {
       return 'failed';

@@ -403,7 +403,7 @@ final class ImportedMediaScreeningKernelTest extends KernelTestBase {
     $this->config('markaspot_vision.settings')->set('imported_image_analysis', 'always')->save();
     [$second, $report] = $this->fixture(TRUE, 'Keep this fictional citizen description');
     $this->images->expects($this->once())->method('processScreenedImages')
-      ->with($this->anything(), 'en', 41, NULL, (int) $second->id())->willReturn([
+      ->with($this->anything(), 'en', 41, NULL, (int) $second->id(), FALSE)->willReturn([
         'model' => 'fictional-model',
         'usage' => ['prompt_tokens' => 17, 'completion_tokens' => 9],
         'ai_result' => json_encode([
