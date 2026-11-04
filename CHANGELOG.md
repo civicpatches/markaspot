@@ -1,5 +1,22 @@
 # Changelog
 
+## [11.9.244](https://github.com/markaspot/markaspot/compare/11.9.243...11.9.244) (2026-11-04)
+
+### Features
+
+* expose the vision staff budget decision in the auth status ([6acd026](https://github.com/markaspot/markaspot/commit/6acd0268b40c4e6a21338b4ec4e7e2a413360c59))
+
+### Bug Fixes
+
+* allow every stored provider mailbox to receive the provider attachment ([3d52955](https://github.com/markaspot/markaspot/commit/3d52955c378adfd39772a7d519b82a542d30c4ba))
+* clarify citizen and staff vision rate limits ([a479682](https://github.com/markaspot/markaspot/commit/a479682c9b6213afe4f852ae18ad4226aed7b280))
+* restrict provider attachments to a single scoped recipient ([4161936](https://github.com/markaspot/markaspot/commit/41619364af7a1a29b8341ac5f2ed4cd75ee4f6ef))
+* scope spreadsheet mail attachments to the provider attachment field ([d725a73](https://github.com/markaspot/markaspot/commit/d725a7350030226b12333b79610b4f81d37165aa))
+
+### Documentation
+
+* explain the two-layer staff vision limit in the settings form ([9b8b225](https://github.com/markaspot/markaspot/commit/9b8b2254ce70f1ac631f8747b516609d546a88f6))
+
 ## [11.9.243](https://github.com/markaspot/markaspot/compare/11.9.242...11.9.243) (2026-11-03)
 
 ### Features
