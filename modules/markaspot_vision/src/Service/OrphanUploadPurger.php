@@ -25,19 +25,29 @@ use Drupal\media\MediaInterface;
 class OrphanUploadPurger {
 
   /**
-   * Serializes collection with media and file reference writes.
-   */
-  public const LOCK = 'markaspot_vision.orphan_upload_purge';
-
-  /**
    * Last candidate examined, including protected uploads.
    */
   public const CURSOR = 'markaspot_vision.orphan_upload_cursor';
 
   /**
-   * Saves holding the reference lock until their insert/update has completed.
+   * Journal of files whose media deletion may already have committed.
+   */
+  public const PENDING_FILES = 'markaspot_vision.orphan_upload_files';
+
+  /**
+   * Cursor prevents one failed file from starving the journal.
+   */
+  public const FILE_CURSOR = 'markaspot_vision.orphan_upload_file_cursor';
+
+  /**
+   * Saves holding reference locks until their insert/update has completed.
    */
   protected array $saves = [];
+
+  /**
+   * Number of saves sharing each lock owned by this guard.
+   */
+  protected array $heldLocks = [];
 
   /**
    * Constructs the bounded orphan collector.
@@ -66,6 +76,7 @@ class OrphanUploadPurger {
       return;
     }
     $ids = [];
+    $candidates = [];
     $original = $entity->getOriginal();
     foreach ($entity->getTranslationLanguages() as $language) {
       $translation = $entity->getTranslation($language->getId());
@@ -99,33 +110,21 @@ class OrphanUploadPurger {
             }
           }
           $ids[$type][$item->target_id] = $item->target_id;
+          $candidate = $type === 'media' ? $target : ($entity->isNew() ? NULL : $this->entityTypeManager->getStorage('media')->loadUnchanged($entity->id()));
+          if ($candidate instanceof MediaInterface && $this->isPurgeCandidate($candidate)) {
+            $candidates[(int) $candidate->id()] = (int) $candidate->id();
+          }
         }
         foreach (array_reverse($remove) as $delta) {
           $translation->get($name)->removeItem($delta);
         }
       }
     }
-    if (!$ids) {
-      return;
-    }
-    if (!$this->lock->acquire(self::LOCK, 900)) {
-      $this->lock->wait(self::LOCK, 5);
-      if (!$this->lock->acquire(self::LOCK, 900)) {
-        throw new \RuntimeException('Upload cleanup is running. Please retry saving.');
-      }
-    }
-    $key = spl_object_id($entity);
-    $this->saves[$key] = TRUE;
-    $transactions = $this->database->transactionManager();
-    if ($transactions->inTransaction()) {
-      // Redis and other non-SQL lock backends must stay locked until the SQL
-      // references are visible, including when an outer transaction rolls back.
-      $transactions->addPostTransactionCallback(function (bool $committed) use ($key): void {
-        unset($this->saves[$key]);
-        if (!$this->saves) {
-          $this->lock->release(self::LOCK);
-        }
-      });
+    // A stable order avoids opposite lock orders for multi-image saves. Young
+    // uploads and ordinary metadata/status saves never touch the worker lock.
+    sort($candidates, SORT_NUMERIC);
+    foreach ($candidates as $id) {
+      $this->holdReferenceLock($entity, MediaIntakeScreening::QUEUE . ':' . $id);
     }
     foreach ($ids as $type => $targets) {
       foreach ($targets as $id) {
@@ -147,15 +146,63 @@ class OrphanUploadPurger {
   }
 
   /**
-   * Releases the reference lock after the database write.
+   * Whether an upload can already be selected by this collector.
+   */
+  protected function isPurgeCandidate(MediaInterface $media): bool {
+    $ttl = Settings::get('markaspot_vision_orphan_upload_ttl', 86400);
+    return is_int($ttl) && $ttl > 0 && $media->bundle() === 'request_image'
+      && $media->getCreatedTime() < $this->time->getCurrentTime() - $ttl
+      && $media->getChangedTime() < $this->time->getCurrentTime() - $ttl;
+  }
+
+  /**
+   * Holds a guard-owned per-media lock through the outermost SQL transaction.
+   */
+  protected function holdReferenceLock(EntityInterface $entity, string $name): void {
+    $key = spl_object_id($entity);
+    if (isset($this->saves[$key][$name])) {
+      return;
+    }
+    if (!isset($this->heldLocks[$name])) {
+      if (!$this->lock->acquire($name, 900)) {
+        $this->lock->wait($name, 5);
+        if (!$this->lock->acquire($name, 900)) {
+          throw new \RuntimeException('Upload cleanup is running. Please retry saving.');
+        }
+      }
+      $this->heldLocks[$name] = 0;
+    }
+    $first = !isset($this->saves[$key]);
+    $this->saves[$key][$name] = TRUE;
+    $this->heldLocks[$name]++;
+    $transactions = $this->database->transactionManager();
+    if ($first && $transactions->inTransaction()) {
+      $transactions->addPostTransactionCallback(function (bool $committed) use ($key): void {
+        $this->releaseSaveLocks($key);
+      });
+    }
+  }
+
+  /**
+   * Releases locks after a write outside an explicit SQL transaction.
    */
   public function releaseReferences(EntityInterface $entity): void {
-    if (!$this->database->transactionManager()->inTransaction() && isset($this->saves[spl_object_id($entity)])) {
-      unset($this->saves[spl_object_id($entity)]);
-      if (!$this->saves) {
-        $this->lock->release(self::LOCK);
+    if (!$this->database->transactionManager()->inTransaction()) {
+      $this->releaseSaveLocks(spl_object_id($entity));
+    }
+  }
+
+  /**
+   * Releases only the final guard association, never a nested save's lock.
+   */
+  protected function releaseSaveLocks(int $key): void {
+    foreach ($this->saves[$key] ?? [] as $name => $held) {
+      if (--$this->heldLocks[$name] === 0) {
+        unset($this->heldLocks[$name]);
+        $this->lock->release($name);
       }
     }
+    unset($this->saves[$key]);
   }
 
   /**
@@ -163,7 +210,7 @@ class OrphanUploadPurger {
    */
   public function purge(): int {
     $ttl = Settings::get('markaspot_vision_orphan_upload_ttl', 86400);
-    if (!is_int($ttl) || $ttl <= 0 || !$this->lock->acquire(self::LOCK, 900)) {
+    if (!is_int($ttl) || $ttl <= 0) {
       return 0;
     }
     $deleted = 0;
@@ -177,6 +224,7 @@ class OrphanUploadPurger {
       }
       $media_references = $this->referenceColumns('media');
       $file_references = $this->referenceColumns('file');
+      $this->retryFiles($file_references);
       $storage = $this->entityTypeManager->getStorage('media');
       $cutoff = $this->time->getCurrentTime() - $ttl;
       $ids = $storage->getQuery()->accessCheck(FALSE)
@@ -190,10 +238,12 @@ class OrphanUploadPurger {
         // Same order as interactive analysis and the intake worker.
         $worker_lock = MediaIntakeScreening::QUEUE . ':' . $id;
         $publication_lock = 'markaspot_open311.media_publication.' . $id;
-        if (!$this->lock->acquire($worker_lock, 900)) {
-          continue;
-        }
+        $worker_acquired = FALSE;
         try {
+          $worker_acquired = $this->lock->acquire($worker_lock, 900);
+          if (!$worker_acquired) {
+            continue;
+          }
           if (!$this->lock->acquire($publication_lock, 30)) {
             continue;
           }
@@ -206,23 +256,29 @@ class OrphanUploadPurger {
               continue;
             }
             $files = $this->mediaFiles($media);
+            $pending = $this->keyValue->get(self::PENDING_FILES);
+            foreach ($files as $file) {
+              $pending->set($id . ':' . $file->id(), ['mid' => (int) $id, 'fid' => (int) $file->id()]);
+            }
             $media->delete();
             $deleted++;
             foreach ($files as $file) {
-              if ($this->fileUsage->listUsage($file) === []
-                && !$this->isReferenced($file_references, (int) $file->id())
-                && !$this->entityTypeManager->getStorage('file')->getQuery()->accessCheck(FALSE)
-                  ->condition('uri', $file->getFileUri())->condition('fid', $file->id(), '<>')->range(0, 1)->execute()) {
-                $file->delete();
-              }
+              $this->deleteUnusedFile($file, $file_references);
+              $pending->delete($id . ':' . $file->id());
             }
           }
           finally {
             $this->lock->release($publication_lock);
           }
         }
+        catch (\Throwable $e) {
+          $this->loggerFactory->get('markaspot_vision')->error('Orphan upload candidate could not be deleted safely (@type).', ['@type' => get_class($e)]);
+        }
         finally {
-          $this->lock->release($worker_lock);
+          if ($worker_acquired) {
+            $this->lock->release($worker_lock);
+          }
+          $this->state->set(self::CURSOR, (int) $id);
         }
       }
       $this->state->set(self::CURSOR, count($ids) < 50 ? 0 : (int) end($ids));
@@ -231,13 +287,64 @@ class OrphanUploadPurger {
       // Do not include exceptions: storage paths and entity labels can be PII.
       $this->loggerFactory->get('markaspot_vision')->error('Orphan upload cleanup stopped because storage could not be checked or deleted safely (@type).', ['@type' => get_class($e)]);
     }
-    finally {
-      $this->lock->release(self::LOCK);
-    }
     $this->loggerFactory->get('markaspot_vision')->notice('Orphan upload cleanup examined @examined media and deleted @deleted.', [
       '@examined' => $examined, '@deleted' => $deleted,
     ]);
     return $deleted;
+  }
+
+  /**
+   * Retries a bounded, rotating slice of journaled files on a later cron pass.
+   */
+  protected function retryFiles(array $references): void {
+    $pending = $this->keyValue->get(self::PENDING_FILES);
+    $entries = $pending->getAll();
+    ksort($entries, SORT_STRING);
+    $cursor = (string) $this->state->get(self::FILE_CURSOR, '');
+    $entries = array_slice(array_filter($entries, static fn ($key): bool => strcmp((string) $key, $cursor) > 0, ARRAY_FILTER_USE_KEY), 0, 50, TRUE);
+    foreach ($entries as $key => $entry) {
+      $name = MediaIntakeScreening::QUEUE . ':' . $entry['mid'];
+      $acquired = FALSE;
+      try {
+        // The journal becomes visible before its originating media deletion.
+        // A parallel collector must not clear it while that deletion is busy.
+        $acquired = $this->lock->acquire($name, 900);
+        if (!$acquired) {
+          continue;
+        }
+        if (!$this->entityTypeManager->getStorage('media')->loadUnchanged($entry['mid'])) {
+          $file = $this->entityTypeManager->getStorage('file')->loadUnchanged($entry['fid']);
+          if ($file instanceof FileInterface) {
+            $this->deleteUnusedFile($file, $references);
+          }
+        }
+        $pending->delete($key);
+      }
+      catch (\Throwable $e) {
+        $this->loggerFactory->get('markaspot_vision')->error('Orphan upload file cleanup deferred (@type).', ['@type' => get_class($e)]);
+      }
+      finally {
+        if ($acquired) {
+          $this->lock->release($name);
+        }
+        $this->state->set(self::FILE_CURSOR, (string) $key);
+      }
+    }
+    if (count($entries) < 50) {
+      $this->state->set(self::FILE_CURSOR, '');
+    }
+  }
+
+  /**
+   * Rechecks every file reference before deleting a journaled upload file.
+   */
+  protected function deleteUnusedFile(FileInterface $file, array $references): void {
+    if ($this->fileUsage->listUsage($file) === []
+      && !$this->isReferenced($references, (int) $file->id())
+      && !$this->entityTypeManager->getStorage('file')->getQuery()->accessCheck(FALSE)
+        ->condition('uri', $file->getFileUri())->condition('fid', $file->id(), '<>')->range(0, 1)->execute()) {
+      $file->delete();
+    }
   }
 
   /**

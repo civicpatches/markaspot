@@ -60,6 +60,11 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
   protected int $now;
 
   /**
+   * Clock shared by collector test doubles.
+   */
+  protected TimeInterface $clock;
+
+  /**
    * {@inheritdoc}
    */
   public function register(ContainerBuilder $container): void {
@@ -75,7 +80,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     parent::setUp();
     $c = $this->container;
     $this->now = time() + 200000;
-    $clock = $this->createMock(TimeInterface::class);
+    $clock = $this->clock = $this->createMock(TimeInterface::class);
     $clock->method('getCurrentTime')->willReturn($this->now);
     $clock->method('getRequestTime')->willReturn($this->now);
     $this->purger = new OrphanUploadPurger(
@@ -281,7 +286,7 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $c = $this->container;
     $releases = 0;
     $lock = $this->createMock(LockBackendInterface::class);
-    $lock->method('acquire')->willReturn(TRUE);
+    $lock->expects($this->once())->method('acquire')->with(MediaIntakeScreening::QUEUE . ':' . $media->id(), 900)->willReturn(TRUE);
     $lock->method('release')->willReturnCallback(static function () use (&$releases): void {
       $releases++;
     });
@@ -289,16 +294,42 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $c->get('datetime.time'), $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $purger);
     $transaction = $c->get('database')->startTransaction();
-    // Both the file reference on media and the report's media reference lock.
+    // Metadata-only saves must not acquire the worker lock.
     $media->save();
     Node::create(['type' => 'service_request', 'title' => 'Test', 'field_request_media' => $media->id()])->save();
+    Node::create(['type' => 'service_request', 'title' => 'Second', 'field_request_media' => $media->id()])->save();
     $this->assertSame(0, $releases);
     unset($transaction);
-    $this->assertGreaterThan(0, $releases);
+    $this->assertSame(1, $releases);
+  }
+
+  /**
+   * Young targets and unchanged references do not contend with screening.
+   */
+  public function testYoungAndUnchangedReferencesDoNotLock(): void {
+    $media = $this->upload();
+    $node = Node::create(['type' => 'service_request', 'title' => 'Old', 'field_request_media' => $media->id()]);
+    $node->save();
+    $young = $this->upload();
+    $young->setCreatedTime($this->now)->save();
+    $c = $this->container;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->expects($this->never())->method('acquire');
+    $lock->expects($this->never())->method('release');
+    $purger = new OrphanUploadPurger(
+      $c->get('entity_type.manager'), $c->get('entity_field.manager'),
+      $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
+      $c->get('keyvalue'), $c->get('file.usage'), $lock,
+      $c->get('state'), $this->clock, $c->get('logger.factory'),
+    );
+    $c->set('markaspot_vision.orphan_upload_purger', $purger);
+    $media->setUnpublished()->save();
+    $node->setTitle('Updated')->save();
+    Node::create(['type' => 'service_request', 'title' => 'Young', 'field_request_media' => $young->id()])->save();
   }
 
   /**
@@ -356,12 +387,65 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       $c->get('entity_type.manager'), $c->get('entity_field.manager'),
       $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
       $c->get('keyvalue'), $c->get('file.usage'), $lock,
-      $c->get('state'), $c->get('datetime.time'), $c->get('logger.factory'),
+      $c->get('state'), $this->clock, $c->get('logger.factory'),
     );
     $c->set('markaspot_vision.orphan_upload_purger', $purger);
     $node = Node::create(['type' => 'service_request', 'title' => 'Race', 'field_request_media' => $media->id()]);
     $node->save();
     $this->assertTrue($node->get('field_request_media')->isEmpty());
+  }
+
+  /**
+   * A permanently failing candidate cannot starve later media or file retries.
+   */
+  public function testFailuresDoNotBlockLaterCandidatesOrFileRetry(): void {
+    $broken = $this->upload();
+    $orphan = $this->upload();
+    $file = $orphan->get('field_media_image')->entity;
+    $state = $this->container->get('state');
+    $state->set('vision_orphan_test.fail_media', (int) $broken->id());
+    $state->set('vision_orphan_test.fail_file', (int) $file->id());
+    $this->assertSame(1, $this->purger->purge());
+    $this->assertNotNull(Media::load($broken->id()));
+    $this->assertNull(Media::load($orphan->id()));
+    $this->assertNotNull(File::load($file->id()));
+    $pending = $this->container->get('keyvalue')->get(OrphanUploadPurger::PENDING_FILES);
+    $this->assertTrue($pending->has($orphan->id() . ':' . $file->id()));
+    $state->delete('vision_orphan_test.fail_file');
+    $this->assertSame(0, $this->purger->purge());
+    $this->assertNull(File::load($file->id()));
+    $this->assertFalse($pending->has($orphan->id() . ':' . $file->id()));
+  }
+
+  /**
+   * A parallel cron cannot consume a journal whose media deletion is busy.
+   */
+  public function testFileRetryWaitsForOriginatingMediaDeletion(): void {
+    $media = $this->upload();
+    $file = $media->get('field_media_image')->entity;
+    $c = $this->container;
+    $pending = $c->get('keyvalue')->get(OrphanUploadPurger::PENDING_FILES);
+    $key = $media->id() . ':' . $file->id();
+    $pending->set($key, ['mid' => (int) $media->id(), 'fid' => (int) $file->id()]);
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->with(MediaIntakeScreening::QUEUE . ':' . $media->id(), 900)->willReturn(FALSE);
+    $lock->expects($this->never())->method('release');
+    $parallel = new OrphanUploadPurger(
+      $c->get('entity_type.manager'), $c->get('entity_field.manager'),
+      $c->get('entity_field.deleted_fields_repository'), $c->get('database'),
+      $c->get('keyvalue'), $c->get('file.usage'), $lock,
+      $c->get('state'), $this->clock, $c->get('logger.factory'),
+    );
+    $this->assertSame(0, $parallel->purge());
+    $this->assertTrue($pending->has($key));
+    $media->delete();
+    $c->get('state')->set('vision_orphan_test.fail_file', (int) $file->id());
+    $this->purger->purge();
+    $this->assertTrue($pending->has($key));
+    $c->get('state')->delete('vision_orphan_test.fail_file');
+    $this->purger->purge();
+    $this->assertFalse($pending->has($key));
+    $this->assertNull(File::load($file->id()));
   }
 
   /**

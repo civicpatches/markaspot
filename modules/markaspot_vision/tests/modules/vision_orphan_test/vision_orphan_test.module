@@ -59,3 +59,12 @@ function vision_orphan_test_entity_insert(EntityInterface $entity): void {
 function vision_orphan_test_entity_update(EntityInterface $entity): void {
   markaspot_vision_entity_update($entity);
 }
+
+/**
+ * Implements hook_entity_predelete().
+ */
+function vision_orphan_test_entity_predelete(EntityInterface $entity): void {
+  if ((int) \Drupal::state()->get('vision_orphan_test.fail_' . $entity->getEntityTypeId(), 0) === (int) $entity->id()) {
+    throw new \RuntimeException('Synthetic deletion failure.');
+  }
+}
