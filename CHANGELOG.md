@@ -1,5 +1,32 @@
 # Changelog
 
+## [11.9.245](https://github.com/markaspot/markaspot/compare/11.9.244...11.9.245) (2026-11-05)
+
+### Features
+
+* give vision analysis its own daily token budget, off by default ([d08b5da](https://github.com/markaspot/markaspot/commit/d08b5da5a1adcdc1cb38e619d98ae84aae643ae7))
+* purge request images that no report uses after a grace period ([afa0072](https://github.com/markaspot/markaspot/commit/afa0072b26094f4f67d2b7a226e406b2d6222ce0))
+
+### Bug Fixes
+
+* account for vision tokens and enforce daily limits ([9ad1687](https://github.com/markaspot/markaspot/commit/9ad16870bd122c66bba452fef19cc011de449481))
+* bound the booked vision model name to the usage column ([f6986ad](https://github.com/markaspot/markaspot/commit/f6986adb0aba5ee008dd8056d8ab2de8189864fa))
+* enforce strict publication whenever blur is required ([e828e97](https://github.com/markaspot/markaspot/commit/e828e971911a060d223de561834232df494c8b8d))
+* keep the orphan unpublish update running past busy locks ([2385c23](https://github.com/markaspot/markaspot/commit/2385c23576504ea3f500c03045fbfeadd81d2584))
+* keep transient retries for interactive vision analysis ([5a707e3](https://github.com/markaspot/markaspot/commit/5a707e327d5be9bcd4b6f7fe40b8accd0ab55fd9))
+* keep vision analysis working without token accounting and report the gap in health ([a211ffa](https://github.com/markaspot/markaspot/commit/a211ffa75dbc2e2275efcbb7eaa1e62b22fef8ea))
+* preserve vision budget locks and publication transactions ([18df4c5](https://github.com/markaspot/markaspot/commit/18df4c594880eab521b259bf7b80c54e9e69ad26))
+* publish request images only through the report that uses them ([e9cf7bb](https://github.com/markaspot/markaspot/commit/e9cf7bb7c3d089a3ac818860731f85a3251b658e))
+* reject oversized rasters before vision processing ([56fbdf9](https://github.com/markaspot/markaspot/commit/56fbdf90f70b10e2aa46259e3e1a41656689d9c0))
+* reject vision analysis early when the daily token limit is reached ([a5d72f9](https://github.com/markaspot/markaspot/commit/a5d72f9ab4e1ce345f4f51da869f28fac20f282b))
+* replace global orphan purge lock with per-media locks ([aa4edb1](https://github.com/markaspot/markaspot/commit/aa4edb100a432fa90b1290a5db40a9ff63e91032))
+* requeue publication when analysis finishes before report commit ([50edc7a](https://github.com/markaspot/markaspot/commit/50edc7af5d4010b32c9b9e2ba5409d10273be2a7))
+* restrict retained original images to staff ([134f803](https://github.com/markaspot/markaspot/commit/134f80369ba41b98567478792e655d02fd9a3c57))
+* scope orphan purge offline pause per jurisdiction ([bf3c6fe](https://github.com/markaspot/markaspot/commit/bf3c6fe0f0bb187c738bb6f94d15c74a191447db))
+* unpublish request images no report references ([355f040](https://github.com/markaspot/markaspot/commit/355f040c76e4a2ce28e9ccea89b908d746603175))
+* validate only newly added upload references before save ([7ab07cd](https://github.com/markaspot/markaspot/commit/7ab07cd2e303b12dd255eec6bb681166a3b6ea9e))
+* warn about missing vision limits once a day and in health ([4e774a3](https://github.com/markaspot/markaspot/commit/4e774a3281016d0c2cead67bdaa0a4b8e3c83c99))
+
 ## [11.9.244](https://github.com/markaspot/markaspot/compare/11.9.243...11.9.244) (2026-11-04)
 
 ### Features
