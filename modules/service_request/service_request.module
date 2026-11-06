@@ -73,6 +73,8 @@ function service_request_entity_field_access(string $operation, FieldDefinitionI
 /**
  * Implements hook_entity_bundle_field_info_alter().
  *
+ * Adds the per-status note requirement to field_status (see below).
+ *
  * Required citizen contact fields may become empty later through retention or
  * migration. Core's unconditional required constraint would then block every
  * unrelated update to those historical requests. Replace it with a
@@ -80,10 +82,19 @@ function service_request_entity_field_access(string $operation, FieldDefinitionI
  * as the public form contract.
  */
 function service_request_entity_bundle_field_info_alter(array &$fields, EntityTypeInterface $entity_type, string $bundle): void {
-  if ($entity_type->id() !== 'node'
-    || $bundle !== 'service_request'
-    || !isset($fields['field_e_mail'])
-    || !$fields['field_e_mail']->isRequired()) {
+  if ($entity_type->id() !== 'node' || $bundle !== 'service_request') {
+    return;
+  }
+
+  // A status whose term asks for a note ("Note required") may only be set
+  // together with a new status note. The constraint covers every writer that
+  // validates: JSON:API, GeoReport updates and the node form; see
+  // \Drupal\service_request\StatusNoteRequirement.
+  if (isset($fields['field_status'])) {
+    $fields['field_status']->addConstraint('ServiceRequestStatusNoteRequired');
+  }
+
+  if (!isset($fields['field_e_mail']) || !$fields['field_e_mail']->isRequired()) {
     return;
   }
 

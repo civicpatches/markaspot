@@ -3366,15 +3366,17 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     }
 
     // Resolve note text: explicit note > boilerplate > status term description > empty.
-    $noteText = $fields['note'] ?? '';
-    if (empty($noteText) && !empty($fields['boilerplate_id'])) {
+    // Only an empty note falls through: "0" is text, although empty("0") is
+    // TRUE in PHP.
+    $noteText = (string) ($fields['note'] ?? '');
+    if ($noteText === '' && !empty($fields['boilerplate_id'])) {
       $noteText = $this->getBoilerplateBody((int) $fields['boilerplate_id'], $langcode);
     }
-    if (empty($noteText) && !empty($fields['status_term_id'])) {
+    if ($noteText === '' && !empty($fields['status_term_id'])) {
       $noteText = $this->getStatusTermDescription((int) $fields['status_term_id'], $langcode);
     }
 
-    if (!empty($noteText)) {
+    if ($noteText !== '') {
       $paragraph->set('field_status_note', [
         'value' => $noteText,
         'format' => 'plain_text',
@@ -3462,8 +3464,8 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
     if ($node->hasTranslation($langcode)) {
       $node = $node->getTranslation($langcode);
     }
-    $body = $node->body->value ?? '';
-    return $body ? strip_tags($body) : '';
+    $body = (string) ($node->body->value ?? '');
+    return $body !== '' ? strip_tags($body) : '';
   }
 
   /**

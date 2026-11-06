@@ -45,7 +45,7 @@ final class TenantImportFieldMapper {
     if ($status['notify_citizen'] === TRUE) {
       $notificationKey = $status['open311'] === 'closed' ? 'status_closed' : 'status_open';
     }
-    return [
+    $values = [
       'description' => trim((string) $status['description']) === ''
         ? []
         : $this->textValue((string) $status['description']),
@@ -59,6 +59,13 @@ final class TenantImportFieldMapper {
         : $term->get('field_status_definition')->getValue(),
       'field_jurisdiction' => ['target_id' => $rootId],
     ];
+    // Optional "Note required" switch. Without the key a re-import leaves the
+    // value set in the dashboard alone; a new status starts off.
+    if ($term->hasField('field_note_required')
+      && (array_key_exists('note_required', $status) || $term->isNew())) {
+      $values['field_note_required'] = (bool) ($status['note_required'] ?? FALSE);
+    }
+    return $values;
   }
 
   /**

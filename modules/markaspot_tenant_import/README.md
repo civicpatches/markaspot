@@ -169,6 +169,10 @@ outside the database cannot be rolled back.
   enabled and to an empty key when disabled. Existing status definitions are
   preserved because v1 does not supply status attributes; new definitions use
   `{"attributes": []}`.
+- The optional boolean `note_required` maps to the status term's
+  `field_note_required` ("Note required": staff must write a status note when
+  they set this status). Without the key a new status starts off and an
+  existing one keeps the value set in the dashboard.
 - An omitted existing initial status causes a validation error. Include it in
   the JSON with its intended kind to leave exactly one initial status in the
   resulting root jurisdiction. Unmentioned ordinary statuses are preserved.

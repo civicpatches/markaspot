@@ -1463,3 +1463,70 @@ function service_request_update_11022(): string {
     ? 'Removed the New York placeholder location default from: ' . implode(', ', $cleared) . '.'
     : 'No New York placeholder location default found.';
 }
+
+/**
+ * Adds the "Note required" switch to service status terms.
+ *
+ * Default off: no status requires a note until a tenant ticks the box in
+ * Dashboard > Settings > Statuses. Tenants deployed with drush deploy must
+ * ship the two field files and the changed term form display in config/sync,
+ * or their config import removes the field again.
+ */
+function service_request_update_11024(): string {
+  $created = [];
+  if (!FieldStorageConfig::loadByName('taxonomy_term', 'field_note_required')) {
+    // Fixed UUIDs: tenants deployed with `drush deploy` import their own
+    // config/sync right after this update. A random UUID per site would not
+    // match the exported copy, and the import would delete and recreate the
+    // field instead of leaving it alone.
+    FieldStorageConfig::create([
+      'uuid' => 'd11af134-0b61-4236-a8ca-73bec858bccc',
+      'field_name' => 'field_note_required',
+      'entity_type' => 'taxonomy_term',
+      'type' => 'boolean',
+      'cardinality' => 1,
+      'translatable' => FALSE,
+    ])->save();
+    $created[] = 'storage';
+  }
+
+  if (\Drupal::entityTypeManager()->getStorage('taxonomy_vocabulary')->load('service_status')
+    && !FieldConfig::loadByName('taxonomy_term', 'service_status', 'field_note_required')) {
+    FieldConfig::create([
+      'uuid' => '4171a918-e0e1-4f8b-9add-bdc4410ab9ef',
+      'field_name' => 'field_note_required',
+      'entity_type' => 'taxonomy_term',
+      'bundle' => 'service_status',
+      'label' => 'Note required',
+      'description' => 'Staff must write a status note when they set a report to this status.',
+      'required' => FALSE,
+      'translatable' => FALSE,
+      'default_value' => [['value' => 0]],
+      'settings' => [
+        'on_label' => 'On',
+        'off_label' => 'Off',
+      ],
+    ])->save();
+    $created[] = 'field on service_status';
+  }
+
+  $display = \Drupal::entityTypeManager()
+    ->getStorage('entity_form_display')
+    ->load('taxonomy_term.service_status.default');
+  if ($display && FieldConfig::loadByName('taxonomy_term', 'service_status', 'field_note_required')
+    && $display->getComponent('field_note_required') === NULL) {
+    $display->setComponent('field_note_required', [
+      'type' => 'boolean_checkbox',
+      'weight' => 7,
+      'region' => 'content',
+      'settings' => ['display_label' => TRUE],
+      'third_party_settings' => [],
+    ])->save();
+    $created[] = 'form widget';
+  }
+
+  $translations = _service_request_import_shipped_translations();
+  return ($created
+    ? 'Added field_note_required (' . implode(', ', $created) . ').'
+    : 'field_note_required already exists.') . ' ' . $translations;
+}

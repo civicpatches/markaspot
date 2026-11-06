@@ -29,6 +29,7 @@ class StatusSeedCommands extends DrushCommands {
     'field_status_icon',
     'field_open311_mapping',
     'field_notification_key',
+    'field_note_required',
     'field_status_definition',
   ];
 

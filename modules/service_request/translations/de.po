@@ -25,3 +25,14 @@ msgstr "Status wurde geändert."
 # status term has no description.
 msgid "The service request has been created."
 msgstr "Die Meldung wurde erstellt."
+
+# Label of the per-status switch on service_status terms (field_note_required).
+msgid "Note required"
+msgstr "Notiz erforderlich"
+
+msgid "Staff must write a status note when they set a report to this status."
+msgstr "Wer eine Meldung auf diesen Status setzt, muss eine Statusnotiz schreiben."
+
+# Rejection when a status that requires a note is set without one.
+msgid "The status @status requires a status note. Add a note that explains the change."
+msgstr "Der Status @status verlangt eine Statusnotiz. Schreiben Sie eine Notiz, die die Änderung begründet."

@@ -1,0 +1,22 @@
+langcode: en
+status: true
+dependencies:
+  config:
+    - field.storage.taxonomy_term.field_note_required
+    - taxonomy.vocabulary.service_status
+id: taxonomy_term.service_status.field_note_required
+field_name: field_note_required
+entity_type: taxonomy_term
+bundle: service_status
+label: 'Note required'
+description: 'Staff must write a status note when they set a report to this status.'
+required: false
+translatable: false
+default_value:
+  -
+    value: 0
+default_value_callback: ''
+settings:
+  on_label: 'On'
+  off_label: 'Off'
+field_type: boolean

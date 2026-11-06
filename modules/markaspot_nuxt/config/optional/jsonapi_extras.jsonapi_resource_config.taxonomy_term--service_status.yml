@@ -134,3 +134,9 @@ resourceFields:
     publicName: field_notification_key
     enhancer:
       id: ''
+  field_note_required:
+    disabled: false
+    fieldName: field_note_required
+    publicName: field_note_required
+    enhancer:
+      id: ''

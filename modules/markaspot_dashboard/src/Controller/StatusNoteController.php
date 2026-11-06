@@ -4,11 +4,13 @@ namespace Drupal\markaspot_dashboard\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\markaspot_group\Service\StatusTermScope;
 use Drupal\markaspot_nuxt\Service\FeatureFlagChecker;
 use Drupal\markaspot_open311\Service\GeoreportProcessorServiceInterface;
 use Drupal\node\NodeInterface;
+use Drupal\service_request\StatusNoteRequirement;
 use Drupal\taxonomy\TermInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -49,6 +51,7 @@ class StatusNoteController extends ControllerBase {
     AccountProxyInterface $current_user,
     protected FeatureFlagChecker $featureFlagChecker,
     protected StatusTermScope $statusTermScope,
+    protected ?StatusNoteRequirement $statusNoteRequirement = NULL,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->georeportProcessor = $georeport_processor;
@@ -65,6 +68,7 @@ class StatusNoteController extends ControllerBase {
       $container->get('current_user'),
       $container->get('markaspot_nuxt.feature_flag_checker'),
       $container->get('markaspot_group.status_term_scope'),
+      $container->get('service_request.status_note_requirement'),
     );
   }
 
@@ -149,27 +153,43 @@ class StatusNoteController extends ControllerBase {
       $statusTermId = (int) $node->get('field_status')->target_id;
     }
 
+    $note = isset($data['note']) ? strip_tags($data['note']) : NULL;
+    $boilerplateId = NULL;
+    $boilerplateText = '';
+    if (!empty($data['boilerplate_uuid'])) {
+      $boilerplates = $this->entityTypeManager->getStorage('node')->loadByProperties([
+        'uuid' => $data['boilerplate_uuid'],
+        'type' => 'boilerplate',
+      ]);
+      $boilerplate = reset($boilerplates);
+      if ($boilerplate instanceof NodeInterface) {
+        $boilerplateId = $boilerplate->id();
+        $boilerplateText = $this->boilerplateNoteText($boilerplate, $node->language()->getId());
+      }
+    }
+
+    // A status that requires a note needs text in the note that is stored:
+    // the author's own, or else the chosen boilerplate's, resolved the way the
+    // paragraph factory resolves it. A stale, unpublished or empty boilerplate
+    // does not count, and neither does the status description the factory
+    // falls back to. Checked before the factory runs, so nothing is written
+    // when it fails.
+    $requiredTerm = $this->noteRequiredForChange($node, $statusTermId);
+    if ($requiredTerm !== NULL
+      && !$this->statusNoteRequirement->isNoteText(($note ?? '') !== '' ? $note : $boilerplateText)) {
+      return $this->noteRequiredResponse($requiredTerm);
+    }
+
     if ($statusTermId !== NULL) {
       // Persist the validated status in the same node save as its audit note.
       // A later form PATCH must not be required for these records to agree.
       $node->set('field_status', $statusTermId);
     }
 
-    $boilerplateId = NULL;
-    if (!empty($data['boilerplate_uuid'])) {
-      $boilerplates = $this->entityTypeManager->getStorage('node')->loadByProperties([
-        'uuid' => $data['boilerplate_uuid'],
-        'type' => 'boilerplate',
-      ]);
-      if (!empty($boilerplates)) {
-        $boilerplateId = reset($boilerplates)->id();
-      }
-    }
-
     // Create paragraph via central factory.
     $paragraph = $this->georeportProcessor->createStatusNoteParagraph([
       'status_term_id' => $statusTermId,
-      'note' => isset($data['note']) ? strip_tags($data['note']) : NULL,
+      'note' => $note,
       'boilerplate_id' => $boilerplateId,
       'author_id' => $this->currentUser->id(),
       ...($statusAttributes !== NULL ? ['status_attributes' => $statusAttributes] : []),
@@ -276,6 +296,21 @@ class StatusNoteController extends ControllerBase {
       $paragraph->set('field_boilerplate', $boilerplateId ?? []);
     }
 
+    // Editing the note of a status that requires one must not empty it. The
+    // stored text decides, as in add(): an attached boilerplate does not put
+    // text into an emptied note here, so it does not count either.
+    if ($this->statusNoteRequirement !== NULL
+      && (array_key_exists('note', $data) || array_key_exists('status_term_uuid', $data))) {
+      $termId = $paragraph->hasField('field_status_term') && !$paragraph->get('field_status_term')->isEmpty()
+        ? (int) $paragraph->get('field_status_term')->target_id
+        : NULL;
+      $requiredTerm = $this->statusNoteRequirement->requiredTerm($termId);
+      if ($requiredTerm !== NULL
+        && !$this->statusNoteRequirement->isNoteText($paragraph->get('field_status_note')->value)) {
+        return $this->noteRequiredResponse($requiredTerm);
+      }
+    }
+
     $paragraph->save();
 
     return new JsonResponse([
@@ -319,6 +354,54 @@ class StatusNoteController extends ControllerBase {
     $paragraph->delete();
 
     return new JsonResponse(['status' => 'success']);
+  }
+
+  /**
+   * Returns the new status when this note changes to a note-required status.
+   */
+  private function noteRequiredForChange(NodeInterface $node, ?int $statusTermId): ?TermInterface {
+    if ($this->statusNoteRequirement === NULL || $statusTermId === NULL) {
+      return NULL;
+    }
+    $currentStatusId = $node->hasField('field_status') && !$node->get('field_status')->isEmpty()
+      ? (int) $node->get('field_status')->target_id
+      : NULL;
+    if ($currentStatusId === $statusTermId) {
+      return NULL;
+    }
+    return $this->statusNoteRequirement->requiredTerm($statusTermId);
+  }
+
+  /**
+   * The text a boilerplate contributes to a new status note.
+   *
+   * Mirrors the boilerplate step of the paragraph factory
+   * (GeoreportProcessorService::createStatusNoteParagraph()): only a published
+   * boilerplate counts, in the report's language when translated.
+   */
+  private function boilerplateNoteText(NodeInterface $boilerplate, string $langcode): string {
+    if (!$boilerplate->isPublished()) {
+      return '';
+    }
+    if ($langcode === LanguageInterface::LANGCODE_NOT_SPECIFIED) {
+      $langcode = $this->languageManager()->getDefaultLanguage()->getId();
+    }
+    if ($boilerplate->hasTranslation($langcode)) {
+      $boilerplate = $boilerplate->getTranslation($langcode);
+    }
+    $body = $boilerplate->hasField('body') ? (string) ($boilerplate->get('body')->value ?? '') : '';
+    return strip_tags($body);
+  }
+
+  /**
+   * The 422 response for a missing required status note.
+   */
+  private function noteRequiredResponse(TermInterface $term): JsonResponse {
+    return new JsonResponse([
+      'error' => (string) $this->statusNoteRequirement->message($term),
+      'code' => StatusNoteRequirement::ERROR_CODE,
+      'status_term_uuid' => $term->uuid(),
+    ], 422);
   }
 
   /**

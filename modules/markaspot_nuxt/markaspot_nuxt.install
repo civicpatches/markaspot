@@ -1193,3 +1193,39 @@ function markaspot_nuxt_update_11919(): string {
   $resource->save();
   return 'Hidden request image AI analysis fields from JSON:API.';
 }
+
+/**
+ * Exposes the service-status "Note required" switch through JSON:API.
+ *
+ * The dashboard reads and writes field_note_required on the status settings
+ * page. The resource config is an allowlist when jsonapi_extras runs with
+ * default_disabled, so the field must be listed explicitly.
+ */
+function markaspot_nuxt_update_11920(): string {
+  $entity_type_manager = \Drupal::entityTypeManager();
+  if (!$entity_type_manager->hasDefinition('jsonapi_resource_config')) {
+    return 'Skipped the service status JSON:API resource: jsonapi_extras is not enabled.';
+  }
+
+  $resource = $entity_type_manager->getStorage('jsonapi_resource_config')->load('taxonomy_term--service_status');
+  if (!$resource) {
+    return 'Skipped: the service status JSON:API resource is not configured.';
+  }
+
+  $fields = $resource->get('resourceFields') ?: [];
+  $field = [
+    'disabled' => FALSE,
+    'fieldName' => 'field_note_required',
+    'publicName' => 'field_note_required',
+    'enhancer' => ['id' => ''],
+  ];
+  if (($fields['field_note_required'] ?? NULL) === $field) {
+    return 'field_note_required is already enabled on the service status JSON:API resource.';
+  }
+
+  // Entity saves invalidate JSON:API Extras resource and route caches.
+  $fields['field_note_required'] = $field;
+  $resource->set('resourceFields', $fields);
+  $resource->save();
+  return 'Enabled field_note_required on the service status JSON:API resource.';
+}

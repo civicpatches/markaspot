@@ -262,6 +262,7 @@ final class StatusSelectionControllerTest extends UnitTestCase {
       'field_status_icon' => [['value' => 'fa-check']],
       'field_open311_mapping' => [['value' => 'closed']],
       'field_notification_key' => [['value' => 'status_closed']],
+      'field_note_required' => [['value' => 1]],
     ]);
     $first = $this->createTerm(102, -5, [
       'field_status_hex' => [],
@@ -293,8 +294,11 @@ final class StatusSelectionControllerTest extends UnitTestCase {
       'icon' => 'fa-check',
       'open311_mapping' => 'closed',
       'notification_key' => 'status_closed',
+      'note_required' => TRUE,
     ], $payload['pool'][1]);
     self::assertNull($payload['pool'][0]['notification_key']);
+    // Terms without the field (not updated yet) report no requirement.
+    self::assertFalse($payload['pool'][0]['note_required']);
   }
 
   /**

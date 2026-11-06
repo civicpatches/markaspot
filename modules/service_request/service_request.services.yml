@@ -1,0 +1,7 @@
+services:
+  # The per-status "Note required" rule (field_note_required on
+  # service_status terms), shared by the field_status constraint and the
+  # dashboard status note endpoint.
+  service_request.status_note_requirement:
+    class: Drupal\service_request\StatusNoteRequirement
+    arguments: ['@entity_type.manager', '@service_container']

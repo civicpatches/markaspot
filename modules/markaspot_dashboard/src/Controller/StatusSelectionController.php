@@ -274,6 +274,9 @@ final class StatusSelectionController implements ContainerInjectionInterface {
         'icon' => $this->getFieldString($term, 'field_status_icon'),
         'open311_mapping' => $this->getOpen311Mapping($term),
         'notification_key' => $this->getFieldString($term, 'field_notification_key'),
+        // "Note required": setting this status needs a status note.
+        'note_required' => $term->hasField('field_note_required')
+          && !empty($term->get('field_note_required')->getValue()[0]['value']),
       ],
       $terms,
     );

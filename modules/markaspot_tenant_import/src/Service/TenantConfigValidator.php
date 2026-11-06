@@ -175,6 +175,9 @@ final class TenantConfigValidator {
       if (!is_bool($row['notify_citizen'] ?? NULL)) {
         $errors[] = "statuses[$index].notify_citizen must be a boolean.";
       }
+      if (array_key_exists('note_required', $row) && !is_bool($row['note_required'])) {
+        $errors[] = "statuses[$index].note_required must be a boolean.";
+      }
       if (!is_int($row['weight'] ?? NULL)) {
         $errors[] = "statuses[$index].weight must be an integer.";
       }
