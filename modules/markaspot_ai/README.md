@@ -88,3 +88,51 @@ endpoint overrides, and fallback behavior remain unchanged. This profile
 policy does not cover direct Nuxt onboarding requests or independent cloud
 services. Those require separate work before claiming platform-wide enforcement.
 This policy does not configure server environments or provision credentials.
+
+## Required blur preprocessing
+
+Photos can pass a blur service (faces and licence plates) before any vision
+or AI provider sees them. The site switch
+`markaspot_vision.settings.enable_blur_preprocessing` ships as `false`, and the
+blur service is not part of the open-source release. The environment variable
+`MARKASPOT_BLUR_REQUIRED` decides whether the switch is authoritative. Vision
+analysis, the screening of imported and mail photos and the staff photo tools
+(attribute filling, description from photo, Assist) read the same parser,
+`Drupal\markaspot_ai\Utility\BlurPolicy`.
+
+| `MARKASPOT_BLUR_REQUIRED` | Mode | Behaviour |
+|---|---|---|
+| unset, `MARKASPOT_BLUR_URL` set in the environment | `auto-required` | Blur is mandatory and fails closed. The site switch and the configured blur URL are ignored. |
+| unset, no `MARKASPOT_BLUR_URL` | `auto-unprotected` | The site switch decides, as before. |
+| `1`, `true`, `yes`, `on` or an unrecognised value | `strict` | Blur is mandatory. Without `MARKASPOT_BLUR_URL` and a key (`MARKASPOT_BLUR_API_KEY`, legacy `AI_API_KEY`) no photo is sent. |
+| `0`, `false`, `no`, `off` | `off` | Deliberate opt-out: the site switch decides. |
+
+Only the environment signals a hosted stack. A blur URL in configuration and
+the legacy `VISION_BLUR_URL` never switch to `auto-required`. While blur is
+mandatory, photos stay unpublished until screening has completed without a
+privacy hold, even when `require_ai_screening` is disabled.
+
+The health check **Vision ENV overrides missing** (`vision_env_drift`)
+reports the resolved mode. It reports an error when blur is mandatory but
+`MARKASPOT_BLUR_URL` or the key is missing from the environment, whether or
+not AI image analysis is enabled, because no photo can be analysed then. In
+the other modes it checks the site switch and the configured blur URL when AI
+image analysis is enabled.
+
+### Upgrade note for self-hosted installations
+
+- **Without `MARKASPOT_BLUR_URL` in the environment:** no change. The mode is
+  `auto-unprotected` and the site switch keeps deciding. An unprotected
+  installation with an AI provider sees an advisory (log entry at most once a
+  day, status report row, message on the AI and vision settings forms).
+- **With `MARKASPOT_BLUR_URL` in the environment:** behaviour change. Blur
+  becomes mandatory and the site switch is ignored, also when it is off, and
+  the blur URL comes from the environment only. Make sure the blur service is
+  reachable and `MARKASPOT_BLUR_API_KEY` is set, or the health check reports
+  an error and photos are not analysed. To keep the previous behaviour, set
+  `MARKASPOT_BLUR_REQUIRED=0` explicitly.
+- **Hosted stacks** should set `MARKASPOT_BLUR_REQUIRED=1`, so that a stack
+  without a blur URL fails loudly instead of silently sending unblurred
+  photos.
+
+No configuration is changed and no update hook runs for this policy.
