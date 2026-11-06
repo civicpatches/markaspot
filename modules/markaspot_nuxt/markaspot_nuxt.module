@@ -76,13 +76,8 @@ function markaspot_nuxt_group_access(EntityInterface $entity, string $operation,
  * Implements hook_entity_presave().
  */
 function markaspot_nuxt_entity_presave(EntityInterface $entity) {
-  // Runs after every hook_node_presave() and after Content Moderation's own
-  // entity presave: a new report held for review stays unpublished, whatever
-  // re-derived the published flag in between.
-  if ($entity instanceof NodeInterface) {
-    \Drupal::service('markaspot_nuxt.review_before_publish')->reassertHold($entity);
-    return;
-  }
+  // Reports held for review are reasserted in
+  // \Drupal\markaspot_nuxt\Hook\ReviewBeforePublishHooks, ordered last.
 
   // Check if the entity is a file and is temporary.
   if ($entity->getEntityTypeId() === 'file' && $entity->isTemporary()) {

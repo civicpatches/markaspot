@@ -125,8 +125,8 @@ final class ReviewBeforePublish {
   /**
    * Keeps a held new report unpublished after Content Moderation's presave.
    *
-   * Called from hook_entity_presave(), which runs after every
-   * hook_node_presave() and after Content Moderation's entity presave.
+   * Called from ReviewBeforePublishHooks::entityPresave(), ordered last, so
+   * after every hook_node_presave() and Content Moderation's entity presave.
    */
   public function reassertHold(EntityInterface $entity): void {
     if ($entity instanceof NodeInterface

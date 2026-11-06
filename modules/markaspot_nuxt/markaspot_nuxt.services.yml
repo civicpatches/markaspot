@@ -40,6 +40,11 @@ services:
       - '@datetime.time'
       - '@logger.channel.markaspot_nuxt'
       - '@?content_moderation.moderation_information'
+  Drupal\markaspot_nuxt\Hook\ReviewBeforePublishHooks:
+    class: Drupal\markaspot_nuxt\Hook\ReviewBeforePublishHooks
+    arguments:
+      - '@markaspot_nuxt.review_before_publish'
+    public: true
   logger.channel.markaspot_nuxt:
     parent: logger.channel_base
     arguments: ['markaspot_nuxt']
