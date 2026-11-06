@@ -46,6 +46,19 @@ class SplitRequestContextTest extends UnitTestCase {
     $container->set('request_stack', new RequestStack());
     $container->set('markaspot_nuxt.feature_flag_checker', $checker);
     $container->set('markaspot_dashboard.split_context', $this->context);
+    // The presave hook first applies review before publish. The service is
+    // final, so a stub that never holds stands in for a tenant without the
+    // flag; the hold itself is covered by ReviewBeforePublishKernelTest.
+    $container->set('markaspot_nuxt.review_before_publish', new class() {
+
+      /**
+       * Never holds: the tenant has review before publish switched off.
+       */
+      public function holdNewReport(NodeInterface $node): bool {
+        return FALSE;
+      }
+
+    });
     \Drupal::setContainer($container);
   }
 
