@@ -2,6 +2,7 @@
 
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
+use Drupal\Core\Database\DatabaseExceptionWrapper;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
@@ -537,13 +538,16 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
     $config = $this->container->get('config.storage');
     $before = $config->readMultiple($config->listAll());
-    $sandbox = [];
+    // A small ID window forces two passes; the referenced image never becomes
+    // a candidate, so only the 50 orphans reach the locked check.
+    $sandbox = ['window' => 30];
     markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
     $this->assertLessThan(1, $sandbox['#finished']);
-    $this->assertSame(50, $sandbox['processed']);
+    $this->assertSame(30, $sandbox['processed']);
     $this->assertSame(0, $sandbox['skipped_busy']);
     markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
     $this->assertSame(1, $sandbox['#finished']);
+    $this->assertSame(50, $sandbox['processed']);
     $storage = $this->container->get('entity_type.manager')->getStorage('media');
     foreach ($ids as $id) {
       $this->assertFalse($storage->loadUnchanged($id)->isPublished());
@@ -556,6 +560,59 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       'field_request_media' => $media->id(),
     ])->save();
     $this->assertTrue($storage->loadUnchanged($media->id())->isPublished());
+  }
+
+  /**
+   * A deadlock against a parallel save is retried instead of aborting deploy.
+   */
+  public function testPostUpdateRetriesDeadlocks(): void {
+    require_once dirname(__DIR__, 3) . '/markaspot_vision.post_update.php';
+    $orphan = $this->upload();
+    $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    $c = $this->container;
+    $real = $c->get('markaspot_vision.orphan_upload_purger');
+    $purger = new class($real) extends OrphanUploadPurger {
+      public int $calls = 0;
+
+      public function __construct(private readonly OrphanUploadPurger $inner) {}
+
+      public function unreferencedRequestImageIds(int $after, int $upto): array {
+        return $this->inner->unreferencedRequestImageIds($after, $upto);
+      }
+
+      public function unpublishBatch(array $ids): int {
+        if (++$this->calls === 1) {
+          $pdo = new \PDOException('SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock');
+          $pdo->errorInfo = ['40001', 1213, 'Deadlock found when trying to get lock'];
+          throw new DatabaseExceptionWrapper($pdo->getMessage(), 0, $pdo);
+        }
+        return $this->inner->unpublishBatch($ids);
+      }
+
+    };
+    $c->set('markaspot_vision.orphan_upload_purger', $purger);
+    $sandbox = [];
+    markaspot_vision_post_update_unpublish_orphan_request_images($sandbox);
+    $this->assertSame(1, $sandbox['#finished']);
+    $this->assertSame(2, $purger->calls);
+    $this->assertFalse($c->get('entity_type.manager')->getStorage('media')->loadUnchanged($orphan->id())->isPublished());
+    $c->set('markaspot_vision.orphan_upload_purger', $real);
+  }
+
+  /**
+   * Only lock conflicts count as retryable, other database errors do not.
+   */
+  public function testRetryableLockErrorClassification(): void {
+    $deadlock = new \PDOException('Deadlock');
+    $deadlock->errorInfo = ['40001', 1213, 'Deadlock found when trying to get lock'];
+    $wait = new \PDOException('wait');
+    $wait->errorInfo = ['HY000', 1205, 'Lock wait timeout exceeded'];
+    $missing = new \PDOException('missing');
+    $missing->errorInfo = ['42S02', 1146, "Table 'x' doesn't exist"];
+    $this->assertTrue(OrphanUploadPurger::isRetryableLockError(new DatabaseExceptionWrapper('x', 0, $deadlock)));
+    $this->assertTrue(OrphanUploadPurger::isRetryableLockError($wait));
+    $this->assertFalse(OrphanUploadPurger::isRetryableLockError(new DatabaseExceptionWrapper('x', 0, $missing)));
+    $this->assertFalse(OrphanUploadPurger::isRetryableLockError(new \RuntimeException('Reference storage is not SQL.')));
   }
 
   /**

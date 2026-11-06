@@ -330,15 +330,89 @@ class OrphanUploadPurger {
       }
     }
     finally {
-      $storage->resetCache($ready);
-      foreach ($acquired as $name) {
-        $this->lock->release($name);
+      try {
+        $storage->resetCache($ready);
+      }
+      finally {
+        // A failed cache clear (deadlock against a parallel save) must not
+        // keep the publication locks for their whole 900 s lease.
+        foreach ($acquired as $name) {
+          $this->lock->release($name);
+        }
       }
     }
     if ($skipped) {
       $this->loggerFactory->get('markaspot_vision')->warning('Orphan image update skipped @count busy images; later lifecycle or purge runs can revisit them.', ['@count' => $skipped]);
     }
     return $skipped;
+  }
+
+  /**
+   * Request images in (after, upto] that no current service request references.
+   *
+   * Cheap SQL pre-filter for the bulk post update. It reads the same data as
+   * unpublishBatch(): the current field rows of every service_request
+   * translation, no historical revision. unpublishBatch() re-checks each
+   * candidate under its lock before it changes anything, so a report saved in
+   * between is still honoured. Without SQL table storage for a media field the
+   * whole window is returned and the locked check decides alone.
+   *
+   * @return int[]
+   *   Media IDs in ascending order.
+   */
+  public function unreferencedRequestImageIds(int $after, int $upto): array {
+    $query = $this->database->select('media_field_data', 'm')
+      ->fields('m', ['mid'])
+      ->condition('m.bundle', 'request_image')
+      ->condition('m.mid', $after, '>')
+      ->condition('m.mid', $upto, '<=')
+      ->distinct()
+      ->orderBy('m.mid');
+    $storage = $this->entityTypeManager->getStorage('node');
+    $mapping = $storage instanceof SqlEntityStorageInterface ? $storage->getTableMapping() : NULL;
+    $filtered = TRUE;
+    foreach ($this->entityFieldManager->getFieldStorageDefinitions('node') as $field) {
+      if ($field->getSetting('target_type') !== 'media') {
+        continue;
+      }
+      if ($mapping === NULL || !$mapping->requiresDedicatedTableStorage($field)) {
+        $filtered = FALSE;
+        break;
+      }
+      $table = $mapping->getDedicatedDataTableName($field);
+      $column = $mapping->getFieldColumnName($field, 'target_id');
+      $reference = $this->database->select($table, 'r');
+      $reference->addExpression('1');
+      $reference->where("r.$column = m.mid")
+        ->condition('r.bundle', 'service_request')
+        ->condition('r.deleted', 0);
+      $query->notExists($reference);
+    }
+    if (!$filtered) {
+      $query = $this->database->select('media_field_data', 'm')->fields('m', ['mid'])
+        ->condition('m.bundle', 'request_image')->condition('m.mid', $after, '>')
+        ->condition('m.mid', $upto, '<=')->distinct()->orderBy('m.mid');
+    }
+    return array_map('intval', $query->execute()->fetchCol());
+  }
+
+  /**
+   * Whether a database error is a deadlock or lock wait that can be retried.
+   */
+  public static function isRetryableLockError(\Throwable $error): bool {
+    for ($e = $error; $e !== NULL; $e = $e->getPrevious()) {
+      if ($e instanceof \PDOException) {
+        $state = (string) ($e->errorInfo[0] ?? $e->getCode());
+        $code = (int) ($e->errorInfo[1] ?? 0);
+        if ($state === '40001' || in_array($code, [1205, 1213], TRUE)) {
+          return TRUE;
+        }
+      }
+      if (preg_match('/SQLSTATE\[40001\]|Deadlock found|Lock wait timeout exceeded/', $e->getMessage())) {
+        return TRUE;
+      }
+    }
+    return FALSE;
   }
 
   /**
