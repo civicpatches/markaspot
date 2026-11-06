@@ -423,6 +423,46 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
   }
 
   /**
+   * Single organisation: a category without organisation keeps the current one.
+   *
+   * Removing the old derived organisation left the request without any
+   * responsible organisation, so it vanished from every organisation list.
+   */
+  public function testSingleOrganisationCategoryChangeToUnmappedKeepsTheOrganisation(): void {
+    [$unmapped, $parksCategory] = $this->createCategories();
+    $this->config('markaspot_group.settings')->set('single_organisation_assignment', TRUE)->save();
+    $parks = (int) $this->parks->id();
+    $request = $this->createRequest('Overgrown footpath', [$parks]);
+    $request->set('field_category', $parksCategory->id())->save();
+
+    $request = $this->reloadRequest($request);
+    $request->set('field_category', $unmapped->id());
+    $request->save();
+
+    $stored = $this->reloadRequest($request);
+    $this->assertSame([$parks], array_map('intval', array_column($stored->get('field_organisation')->getValue(), 'target_id')));
+    $this->assertSame([$parks], $this->relationIds((int) $request->id()));
+  }
+
+  /**
+   * Multiple organisations: a category without organisation drops the old one.
+   */
+  public function testCategoryChangeToUnmappedRemovesTheDerivedOrganisation(): void {
+    [$unmapped, $parksCategory] = $this->createCategories();
+    $this->config('markaspot_group.settings')->set('single_organisation_assignment', FALSE)->save();
+    $request = $this->createRequest('Overgrown footpath', [(int) $this->parks->id()]);
+    $request->set('field_category', $parksCategory->id())->save();
+
+    $request = $this->reloadRequest($request);
+    $request->set('field_category', $unmapped->id());
+    $request->save();
+
+    $stored = $this->reloadRequest($request);
+    $this->assertTrue($stored->get('field_organisation')->isEmpty());
+    $this->assertSame([], $this->relationIds((int) $request->id()));
+  }
+
+  /**
    * Deleting one of two relations to an organisation keeps it in the field.
    */
   public function testRelationshipDeletionKeepsTheFieldWhileAnotherRelationRemains(): void {
