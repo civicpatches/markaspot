@@ -102,8 +102,10 @@ definitions name the expected provider:
 - `org_moderator`: `access dashboard notifications` (`markaspot_notification`),
   `add dashboard status notes`, `manage dashboard notes` and
   `split service requests` (`markaspot_dashboard`), `assign service requests`
-  (`markaspot_group`), `bypass mas validation` (`markaspot_validation`) and
-  `use service request management form` (`markaspot_ui`).
+  (`markaspot_group`), `bypass mas validation` (`markaspot_validation`),
+  `triage inbound mail` (`markaspot_mail_inbound`; the inbox still scopes
+  mail by jurisdiction membership) and `use service request management form`
+  (`markaspot_ui`).
 - `org_contractor`: `add dashboard status notes` (`markaspot_dashboard`) and
   `use service request management form` (`markaspot_ui`).
 
