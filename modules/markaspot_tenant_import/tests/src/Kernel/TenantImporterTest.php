@@ -308,6 +308,7 @@ final class TenantImporterTest extends KernelTestBase {
       'bypass mas validation' => 'markaspot_validation',
       'manage dashboard notes' => 'markaspot_dashboard',
       'split service requests' => 'markaspot_dashboard',
+      'triage inbound mail' => 'markaspot_mail_inbound',
       'use service request management form' => 'markaspot_ui',
     ],
     'org_contractor' => [

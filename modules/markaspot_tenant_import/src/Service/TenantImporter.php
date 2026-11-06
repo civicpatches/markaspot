@@ -61,6 +61,12 @@ class TenantImporter {
         'bypass mas validation' => 'markaspot_validation',
         'manage dashboard notes' => 'markaspot_dashboard',
         'split service requests' => 'markaspot_dashboard',
+        // Inbound-mail triage is everyday moderation work. The permission is
+        // restricted because staged mail holds unredacted citizen content,
+        // yet InboundMailAccessControlHandler still requires membership in
+        // the mail's jurisdiction. Configuring mailboxes ("administer
+        // markaspot mail inbound") stays refused.
+        'triage inbound mail' => 'markaspot_mail_inbound',
         'use service request management form' => 'markaspot_ui',
       ],
     ],
