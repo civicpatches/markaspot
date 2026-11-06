@@ -5,15 +5,18 @@ declare(strict_types=1);
 namespace Drupal\markaspot_health\Plugin\HealthCheck;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\markaspot_ai\Utility\BlurPolicy;
 use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\markaspot_health\HealthCheckPluginBase;
 use Drupal\markaspot_health\HealthCheckResult;
+use Psr\Log\NullLogger;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
-// The standalone policy is available when the AI module is disabled.
+// The standalone policies are available when the AI module is disabled.
 require_once dirname(__DIR__, 4) . '/markaspot_ai/src/Utility/SovereignPolicy.php';
+require_once dirname(__DIR__, 4) . '/markaspot_ai/src/Utility/BlurPolicy.php';
 
 /**
  * Detects markaspot_vision running without ENV overrides applied.
@@ -24,6 +27,13 @@ require_once dirname(__DIR__, 4) . '/markaspot_ai/src/Utility/SovereignPolicy.ph
  * exported into config/sync, which on cloud-image installs is the stock
  * upstream OpenAI host with an empty key. Symptom: the AI categoriser
  * silently fails or hits a generic OpenAI account.
+ *
+ * Blur wiring follows the shared MARKASPOT_BLUR_REQUIRED policy: when blur is
+ * mandatory (strict, or automatic with MARKASPOT_BLUR_URL in the
+ * environment) the site switch and the configured URL are ignored, so only
+ * the environment URL and key count, and missing ones are an error even
+ * without AI analysis, because no image is sent at all. Otherwise the site
+ * switch decides, as before.
  *
  * @HealthCheck(
  *   id = "vision_env_drift",
@@ -80,6 +90,19 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
       return $this->pass('markaspot_vision.settings not present; check skipped.');
     }
 
+    $blurLogger = new NullLogger();
+    $blurMode = BlurPolicy::mode($blurLogger);
+    $blurRequired = BlurPolicy::isRequired($blurLogger);
+    if ($blurRequired && !BlurPolicy::hasEnvironmentCredentials()) {
+      return $this->failWithSeverity(
+        'error',
+        1,
+        sprintf('Blur is mandatory (MARKASPOT_BLUR_REQUIRED mode %s), but ', $blurMode) .
+        'MARKASPOT_BLUR_URL or MARKASPOT_BLUR_API_KEY is missing in the ' .
+        'environment; no photo is sent for analysis.',
+      );
+    }
+
     $aiAnalysisRequired = $context['ai_analysis_required'] ?? NULL;
     if (!is_bool($aiAnalysisRequired)) {
       $aiAnalysisRequired = $this->hasAiAnalysisEnabled();
@@ -116,7 +139,8 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
     }
 
     if ($aiAnalysisRequired) {
-      $blurEnabled = (bool) $config->get('enable_blur_preprocessing');
+      // Mandatory blur ignores the site switch and the configured URL.
+      $blurEnabled = $blurRequired || (bool) $config->get('enable_blur_preprocessing');
       if (!$blurEnabled) {
         return $this->failWithSeverity(
           'error',
@@ -126,7 +150,9 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
         );
       }
 
-      $blurUrl = trim((string) $config->get('blur_service_url'));
+      $blurUrl = $blurRequired
+        ? trim((string) getenv('MARKASPOT_BLUR_URL'))
+        : trim((string) $config->get('blur_service_url'));
       if ($blurUrl === '') {
         return $this->failWithSeverity(
           'error',
@@ -168,7 +194,7 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
       $message = 'Legacy Vision connection settings are inactive; see AI provider sovereignty for IONOS status.'
         . ($aiAnalysisRequired ? ' Blur wiring checks passed.' : ' AI analysis does not require blur wiring checks.');
     }
-    return $this->pass($message);
+    return $this->pass($message . sprintf(' Blur mode: %s.', $blurMode));
   }
 
   /**
