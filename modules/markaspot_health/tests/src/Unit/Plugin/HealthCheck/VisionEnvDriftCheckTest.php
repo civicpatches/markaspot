@@ -162,26 +162,99 @@ class VisionEnvDriftCheckTest extends UnitTestCase {
   }
 
   /**
-   * @covers ::run
+   * Mandatory blur reads the environment URL, not the configured one.
    */
-  public function testRunFailsWhenBlurEnvIsSetButRuntimeStillUsesLocalDefault(): void {
+  public function testRunIgnoresConfiguredBlurUrlWhenBlurIsMandatory(): void {
     putenv('MARKASPOT_BLUR_URL=https://blur.example.test/blur');
+    putenv('MARKASPOT_BLUR_API_KEY=blur-fake-runtime-secret');
     $config = $this->createConfig([
       'api_key' => 'sk-fake-runtime-secret',
       'api_url' => 'https://example.test/v1/chat/completions',
-      'enable_blur_preprocessing' => TRUE,
+      'enable_blur_preprocessing' => FALSE,
       'blur_service_url' => 'http://markaspot-vision:8200/blur',
     ]);
     $factory = $this->createConfigFactory($config);
     $modules = $this->createMock(ModuleHandlerInterface::class);
     $modules->method('moduleExists')->willReturn(TRUE);
 
-    $plugin = $this->createPlugin($factory, $modules);
-    $result = $plugin->run(['ai_analysis_required' => TRUE]);
+    $result = $this->createPlugin($factory, $modules)->run(['ai_analysis_required' => TRUE]);
+
+    $this->assertTrue($result->passed, $result->message);
+    $this->assertStringContainsString('Blur mode: auto-required.', $result->message);
+  }
+
+  /**
+   * A mandatory environment URL on the local default host is still an error.
+   */
+  public function testRunFailsWhenMandatoryBlurUrlIsTheLocalDefault(): void {
+    putenv('MARKASPOT_BLUR_URL=http://markaspot-vision:8200/blur');
+    putenv('MARKASPOT_BLUR_API_KEY=blur-fake-runtime-secret');
+    $config = $this->createConfig([
+      'api_key' => 'sk-fake-runtime-secret',
+      'api_url' => 'https://example.test/v1/chat/completions',
+      'enable_blur_preprocessing' => TRUE,
+      'blur_service_url' => 'https://blur.example.test/blur',
+    ]);
+    $factory = $this->createConfigFactory($config);
+    $modules = $this->createMock(ModuleHandlerInterface::class);
+    $modules->method('moduleExists')->willReturn(TRUE);
+
+    $result = $this->createPlugin($factory, $modules)->run(['ai_analysis_required' => TRUE]);
 
     $this->assertFalse($result->passed);
     $this->assertSame('error', $result->severity);
     $this->assertStringContainsString('local markaspot-vision default', $result->message);
+  }
+
+  /**
+   * The three MARKASPOT_BLUR_REQUIRED modes decide which blur wiring counts.
+   */
+  #[DataProvider('blurModes')]
+  public function testBlurRequirementModes(?string $required, string $url, string $key, bool $siteSwitch, bool $aiAnalysis, bool $passed, string $message): void {
+    if ($required !== NULL) {
+      putenv("MARKASPOT_BLUR_REQUIRED=$required");
+    }
+    if ($url !== '') {
+      putenv("MARKASPOT_BLUR_URL=$url");
+    }
+    if ($key !== '') {
+      putenv("MARKASPOT_BLUR_API_KEY=$key");
+    }
+    $config = $this->createConfig([
+      'api_key' => 'sk-fake-runtime-secret',
+      'api_url' => 'https://example.test/v1/chat/completions',
+      'enable_blur_preprocessing' => $siteSwitch,
+      'blur_service_url' => '',
+    ]);
+    $modules = $this->createMock(ModuleHandlerInterface::class);
+    $modules->method('moduleExists')->willReturn(TRUE);
+
+    $result = $this->createPlugin($this->createConfigFactory($config), $modules)->run(['ai_analysis_required' => $aiAnalysis]);
+
+    $this->assertSame($passed, $result->passed, $result->message);
+    if (!$passed) {
+      $this->assertSame('error', $result->severity);
+    }
+    $this->assertStringContainsString($message, $result->message);
+  }
+
+  /**
+   * Automatic, strict and off, each with and without the blur wiring.
+   */
+  public static function blurModes(): iterable {
+    $url = 'https://blur.example.test/blur';
+    $missing = 'MARKASPOT_BLUR_URL or MARKASPOT_BLUR_API_KEY is missing';
+    $disabled = 'blur preprocessing is disabled';
+    yield 'automatic, no URL: switch decides' => [NULL, '', '', FALSE, TRUE, FALSE, $disabled];
+    yield 'automatic, no URL, no analysis' => [NULL, '', '', FALSE, FALSE, TRUE, 'Blur mode: auto-unprotected.'];
+    yield 'automatic, URL without key' => [NULL, $url, '', TRUE, FALSE, FALSE, 'mode auto-required'];
+    yield 'automatic, URL and key' => [NULL, $url, 'key', FALSE, TRUE, TRUE, 'Blur mode: auto-required.'];
+    yield 'strict without URL or key' => ['1', '', '', TRUE, FALSE, FALSE, 'mode strict'];
+    yield 'strict without key' => ['1', $url, '', TRUE, TRUE, FALSE, $missing];
+    yield 'strict without URL' => ['1', '', 'synthetic', TRUE, TRUE, FALSE, $missing];
+    yield 'strict wiring, switch off' => ['1', $url, 'synthetic', FALSE, TRUE, TRUE, 'Blur mode: strict.'];
+    yield 'off with URL: switch decides' => ['0', $url, '', FALSE, TRUE, FALSE, $disabled];
+    yield 'off without analysis' => ['0', $url, '', FALSE, FALSE, TRUE, 'Blur mode: off.'];
   }
 
   /**
@@ -631,6 +704,7 @@ class VisionEnvDriftCheckTest extends UnitTestCase {
    * Clears process-level ENV used by the runtime check.
    */
   private function clearRuntimeEnv(): void {
+    putenv('MARKASPOT_BLUR_REQUIRED');
     putenv('MARKASPOT_BLUR_API_KEY');
     putenv('MARKASPOT_BLUR_URL');
     putenv('AI_API_KEY');
