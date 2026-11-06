@@ -7,6 +7,7 @@ namespace Drupal\Tests\markaspot_mail\Unit\Builder;
 use Drupal\Component\Serialization\Yaml;
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\File\FileSystemInterface;
 use Drupal\file\FileInterface;
 use Drupal\markaspot_mail\Mail\Builder\EcaActionEmailBuilder;
 use Drupal\markaspot_mail\Mail\Builder\EscalationNotificationBuilder;
@@ -266,6 +267,49 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
   }
 
   /**
+   * Private files reach PHPMailer as real paths, which it accepts.
+   */
+  public function testPrivateAttachmentsResolveToRealPaths(): void {
+    $dir = sys_get_temp_dir() . '/markaspot-mail-' . bin2hex(random_bytes(4));
+    mkdir($dir);
+    file_put_contents($dir . '/citizen.jpg', 'jpg');
+    file_put_contents($dir . '/provider.pdf', 'pdf');
+    $fileSystem = $this->createMock(FileSystemInterface::class);
+    $fileSystem->method('realpath')->willReturnCallback(static fn(string $uri): string => $dir . '/' . substr($uri, strlen('private://')));
+    try {
+      $message = $this->buildMail(fileSystem: $fileSystem);
+      $this->assertSame(['citizen.jpg', 'provider.pdf'], array_column($message->attachments, 'filename'));
+      foreach ($message->attachments as $attachment) {
+        $this->assertSame($dir . '/' . $attachment->filename, $attachment->filepath);
+        $this->assertStringNotContainsString('://', $attachment->filepath);
+      }
+    }
+    finally {
+      array_map('unlink', glob($dir . '/*'));
+      rmdir($dir);
+    }
+  }
+
+  /**
+   * An unreadable file is dropped; the mail and its other files still go out.
+   */
+  public function testUnreadableAttachmentIsSkippedNotFatal(): void {
+    $dir = sys_get_temp_dir() . '/markaspot-mail-' . bin2hex(random_bytes(4));
+    mkdir($dir);
+    file_put_contents($dir . '/citizen.jpg', 'jpg');
+    $fileSystem = $this->createMock(FileSystemInterface::class);
+    $fileSystem->method('realpath')->willReturnCallback(static fn(string $uri): string => $dir . '/' . substr($uri, strlen('private://')));
+    try {
+      $message = $this->buildMail(fileSystem: $fileSystem);
+      $this->assertSame(['citizen.jpg'], array_column($message->attachments, 'filename'));
+    }
+    finally {
+      array_map('unlink', glob($dir . '/*'));
+      rmdir($dir);
+    }
+  }
+
+  /**
    * Builds a real builder and resolver around fictional entity fixtures.
    */
   private function buildMail(
@@ -284,6 +328,7 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
     ?int $requestOrg = NULL,
     ?string $citizenMime = NULL,
     string $builderType = 'eca',
+    ?FileSystemInterface $fileSystem = NULL,
   ): MailMessage {
     $emailField = $this->createMock(FieldItemListInterface::class);
     $emailField->method('getValue')->willReturn(array_map(static fn(string $email): array => ['value' => $email], $emails));
@@ -343,7 +388,7 @@ final class EcaProviderAttachmentTest extends UnitTestCase {
 
     $config = Yaml::decode(file_get_contents(dirname(__DIR__, 4) . '/config/install/markaspot_mail.settings.yml'));
     $config['attachments'] = array_replace($config['attachments'], $settings);
-    $resolver = new AttachmentResolver($this->getConfigFactoryStub(['markaspot_mail.settings' => $config]), new NullLogger());
+    $resolver = new AttachmentResolver($this->getConfigFactoryStub(['markaspot_mail.settings' => $config]), new NullLogger(), $fileSystem);
     $builder = match ($builderType) {
       'escalation' => new EscalationNotificationBuilder(new NullLogger(), $resolver),
       'moderation' => new ModerationNoticeBuilder(new NullLogger(), $resolver),

@@ -57,6 +57,7 @@ services:
     arguments:
       - '@config.factory'
       - '@logger.channel.markaspot_mail'
+      - '@file_system'
 
   # Collects every service tagged markaspot_mail.builder. Individual builders
   # land in Stage 2 (ECA), Stage 3 (FastMap) and Stage 4 (passwordless OTP).

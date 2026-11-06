@@ -7,6 +7,7 @@ namespace Drupal\markaspot_mail\Service;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+use Drupal\Core\File\FileSystemInterface;
 use Drupal\file\FileInterface;
 use Drupal\markaspot_mail\Mail\MailAttachment;
 use Drupal\media\MediaInterface;
@@ -64,6 +65,7 @@ class AttachmentResolver {
   public function __construct(
     private readonly ConfigFactoryInterface $configFactory,
     private readonly LoggerInterface $logger,
+    private readonly ?FileSystemInterface $fileSystem = NULL,
   ) {}
 
   /**
@@ -191,11 +193,26 @@ class AttachmentResolver {
         return $out;
       }
 
+      $payload = $this->payload($uri);
+      if ($payload === NULL) {
+        // One unreadable file must not cost the recipient the whole mail:
+        // PHPMailer aborts the message on the first inaccessible attachment.
+        $this->logger->warning(
+          'Mail attachment skipped: file not readable (file @fid, @name).',
+          [
+            '@fid' => (string) $file->id(),
+            '@name' => $this->safeFilename($file),
+          ]
+        );
+        continue;
+      }
+
       $used += $sizeForBudget;
       $out[] = new MailAttachment(
         filename: (string) $file->getFilename(),
         filemime: $mime !== '' ? $mime : 'application/octet-stream',
-        filepath: $uri,
+        filepath: $payload['filepath'] ?? NULL,
+        filecontent: $payload['filecontent'] ?? NULL,
         filesize: $size !== NULL ? (int) $size : NULL,
       );
     }
@@ -275,6 +292,34 @@ class AttachmentResolver {
    */
   private function safeFilename(FileInterface $file): string {
     return str_replace(["\r", "\n", "\0"], '', basename((string) $file->getFilename()));
+  }
+
+  /**
+   * Resolves a file URI to a payload every mail backend can attach.
+   *
+   * PHPMailer refuses any path with a scheme (protection against phar://),
+   * and phpmailer_smtp converts only public:// itself, so private:// files
+   * made the whole message fail. Local stream wrappers resolve to their real
+   * path; wrappers without one (object storage) are read into memory, which
+   * the per-file cap above bounds. Without a file system service (unit tests,
+   * legacy wiring) the URI is passed through unchanged.
+   *
+   * @return array{filepath?: string, filecontent?: string}|null
+   *   NULL when the file cannot be read.
+   */
+  private function payload(string $uri): ?array {
+    if ($this->fileSystem === NULL) {
+      return ['filepath' => $uri];
+    }
+    if (!preg_match('#^[a-z][a-z\d+.-]*://#i', $uri)) {
+      return is_file($uri) && is_readable($uri) ? ['filepath' => $uri] : NULL;
+    }
+    $real = $this->fileSystem->realpath($uri);
+    if (is_string($real) && $real !== '') {
+      return is_file($real) && is_readable($real) ? ['filepath' => $real] : NULL;
+    }
+    $content = @file_get_contents($uri);
+    return is_string($content) ? ['filecontent' => $content] : NULL;
   }
 
 }
