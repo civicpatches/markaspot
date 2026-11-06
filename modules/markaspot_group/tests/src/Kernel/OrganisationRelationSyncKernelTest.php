@@ -19,6 +19,8 @@ use Drupal\markaspot_group\Drush\Commands\OrganisationRelationSyncCommands;
 use Drupal\markaspot_group\Service\OrganisationRelationSync;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
+use Drupal\taxonomy\Entity\Term;
+use Drupal\taxonomy\Entity\Vocabulary;
 use Drupal\user\Entity\User;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -375,6 +377,71 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
   }
 
   /**
+   * Krefeld 168717: a category change re-routes instead of adding an org.
+   *
+   * With one organisation per request the derived organisation of the new
+   * category used to be appended to the existing one, and the reconcile guard
+   * refused the save (HTTP 500 on the dashboard PATCH).
+   */
+  public function testSingleOrganisationCategoryChangeReplacesTheOrganisation(): void {
+    [$unmapped, $parksCategory] = $this->createCategories();
+    $this->config('markaspot_group.settings')->set('single_organisation_assignment', TRUE)->save();
+    $roads = (int) $this->roadWorks->id();
+    $parks = (int) $this->parks->id();
+    $request = $this->createRequest('Overgrown hedge', [$roads]);
+    $request->set('field_category', $unmapped->id())->save();
+
+    $request = $this->reloadRequest($request);
+    $request->set('field_category', $parksCategory->id());
+    $request->save();
+
+    $stored = $this->reloadRequest($request);
+    $this->assertSame([$parks], array_map('intval', array_column($stored->get('field_organisation')->getValue(), 'target_id')));
+    $this->assertSame([$parks], $this->relationIds((int) $request->id()));
+  }
+
+  /**
+   * An unchanged derived organisation leaves the loaded field values alone.
+   *
+   * Rewriting them as integers over the loaded strings looked like a change
+   * to ECA's strict field-changed condition and started a reassignment model
+   * that ended with an empty organisation field.
+   */
+  public function testCategoryChangeToTheSameOrganisationKeepsTheLoadedField(): void {
+    [, $parksCategory, $parksOther] = $this->createCategories();
+    $request = $this->createRequest('Leaning tree', [(int) $this->parks->id()]);
+    $request->set('field_category', $parksCategory->id())->save();
+
+    $storage = $this->container->get('entity_type.manager')->getStorage('node');
+    $request = $this->reloadRequest($request);
+    $loaded = $request->get('field_organisation')->getValue();
+    $request->setOriginal($storage->loadUnchanged($request->id()));
+    $request->set('field_category', $parksOther->id());
+    _markaspot_group_rederive_org_on_category_change($request);
+
+    $this->assertSame($loaded, $request->get('field_organisation')->getValue());
+  }
+
+  /**
+   * Deleting one of two relations to an organisation keeps it in the field.
+   */
+  public function testRelationshipDeletionKeepsTheFieldWhileAnotherRelationRemains(): void {
+    $roads = (int) $this->roadWorks->id();
+    $request = $this->requests['duplicate'];
+    $this->assertSame([$roads, $roads], $this->relationIds((int) $request->id()));
+    $relationships = $this->container->get('entity_type.manager')->getStorage('group_relationship')->loadByProperties([
+      'gid' => $roads,
+      'entity_id' => $request->id(),
+      'plugin_id' => 'group_node:service_request',
+    ]);
+    reset($relationships)->delete();
+
+    $stored = $this->reloadRequest($request);
+    $this->assertSame([$roads], array_map('intval', array_column($stored->get('field_organisation')->getValue(), 'target_id')));
+    $this->assertSame([$roads], $this->relationIds((int) $request->id()));
+  }
+
+  /**
    * Unknown relationship fields make apply refuse instead of writing.
    */
   public function testUnknownRelationshipFieldRefusesApply(): void {
@@ -622,6 +689,44 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
       ->fetchCol());
     sort($ids);
     return $ids;
+  }
+
+  /**
+   * Adds categories: one unmapped, two routed to the parks unit.
+   *
+   * @return list<\Drupal\taxonomy\TermInterface>
+   *   The unmapped category and the two parks categories.
+   */
+  private function createCategories(): array {
+    $this->installEntitySchema('taxonomy_term');
+    Vocabulary::create(['vid' => 'service_category', 'name' => 'Categories'])->save();
+    $this->createField('node', 'service_request', 'field_category', 'entity_reference', ['target_type' => 'taxonomy_term']);
+    // Organisations only take categories of their own tenant.
+    $this->createField('taxonomy_term', 'service_category', 'field_jurisdiction', 'entity_reference', ['target_type' => 'group']);
+    $this->container->get('entity_field.manager')->clearCachedFieldDefinitions();
+    $terms = [];
+    foreach (['Litter', 'Hedges', 'Trees'] as $name) {
+      $term = Term::create([
+        'vid' => 'service_category',
+        'name' => $name,
+        'field_jurisdiction' => $this->county->id(),
+      ]);
+      $term->save();
+      $terms[] = $term;
+    }
+    $this->parks->set('field_service_categories', [$terms[1]->id(), $terms[2]->id()])->save();
+    return $terms;
+  }
+
+  /**
+   * Loads a request from storage, bypassing the entity caches.
+   */
+  private function reloadRequest(Node $request): Node {
+    $storage = $this->container->get('entity_type.manager')->getStorage('node');
+    $storage->resetCache([$request->id()]);
+    $node = $storage->load($request->id());
+    $this->assertInstanceOf(Node::class, $node);
+    return $node;
   }
 
   /**

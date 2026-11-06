@@ -3932,7 +3932,15 @@ function _markaspot_group_rederive_org_on_category_change(NodeInterface $node): 
 
   if ($new_org_group_id) {
     if (_markaspot_group_org_matches_jurisdiction($new_org_group_id, $current_jurisdiction_id)) {
-      $updated_org_ids[] = $new_org_group_id;
+      // With one responsible organisation per request, the new category's
+      // organisation takes over: appending would hand the save two values,
+      // which the reconcile guard refuses (HTTP 500 on the category change).
+      if (_markaspot_group_single_organisation_assignment_enabled()) {
+        $updated_org_ids = [$new_org_group_id];
+      }
+      else {
+        $updated_org_ids[] = $new_org_group_id;
+      }
     }
     else {
       \Drupal::logger('markaspot_group')->warning(
@@ -3946,6 +3954,15 @@ function _markaspot_group_rederive_org_on_category_change(NodeInterface $node): 
   }
 
   $updated_org_ids = array_values(array_unique(array_filter(array_map('intval', $updated_org_ids))));
+  $sorted_ids = $updated_org_ids;
+  sort($sorted_ids);
+  // Same organisations: leave the loaded values alone. Rewriting them (as
+  // integers over loaded strings) looks like a change to strict comparators
+  // such as ECA's field-changed condition and starts tenant reassignment
+  // models for nothing.
+  if ($sorted_ids === _markaspot_group_field_target_ids($node, 'field_organisation')) {
+    return;
+  }
   $node->set('field_organisation', $updated_org_ids ? array_map(static fn(int $id) => ['target_id' => $id], $updated_org_ids) : NULL);
 }
 
@@ -5463,6 +5480,20 @@ function _markaspot_group_sync_relationship_to_field(GroupRelationshipInterface 
         }
       }
       elseif ($operation === 'delete') {
+        // A request can be related to the organisation again within the same
+        // request (a reconcile re-creates what a model just removed). The
+        // field then stays, otherwise it would drop an organisation whose
+        // relationship still exists.
+        $remaining = \Drupal::entityTypeManager()->getStorage('group_relationship')->getQuery()
+          ->accessCheck(FALSE)
+          ->condition('gid', $group_id)
+          ->condition('entity_id', $entity->id())
+          ->condition('plugin_id', 'group_node:service_request')
+          ->range(0, 1)
+          ->execute();
+        if ($remaining !== []) {
+          return;
+        }
         // Remove only this group from the multi-value field.
         $updated_ids = array_values(array_diff($current_ids, [$group_id]));
         if (count($updated_ids) !== count($current_ids)) {
