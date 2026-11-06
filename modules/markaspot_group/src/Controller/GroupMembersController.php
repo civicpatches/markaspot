@@ -73,7 +73,8 @@ class GroupMembersController extends ControllerBase {
     'split service requests',
     'use service request management form',
     'assign service requests',
-    // Flag administration is scoped to the editor's jurisdiction.
+    // Flag administration only reaches the caller's tenant administrator
+    // jurisdictions (TenantAdminHelper); deleting flags needs another one.
     'administer flags',
   ];
 
@@ -665,6 +666,12 @@ class GroupMembersController extends ControllerBase {
       fn($r) => !in_array($r, ['administrator', 'api_user'], TRUE)
     ));
 
+    // Name, e-mail, status and anonymization follow the same authority check
+    // as PATCH /profile (which never changes uid 1), so the dashboard can lock
+    // what it would refuse.
+    $canEditProfile = (int) $targetUser->id() !== 1
+      && ($isDrupalAdmin || $this->canManageGlobalProfile($targetUser, $currentAccount));
+
     return new JsonResponse([
       'uid' => (int) $targetUser->id(),
       'name' => $targetUser->getDisplayName(),
@@ -674,9 +681,7 @@ class GroupMembersController extends ControllerBase {
       'last_login' => (int) $targetUser->getLastLoginTime(),
       'drupal_roles' => $exposedRoles,
       'memberships' => $memberships,
-      // Name, e-mail, status and anonymization follow the same authority
-      // check as PATCH /profile, so the dashboard can lock what it refuses.
-      'can_edit_profile' => $isDrupalAdmin || $this->canManageGlobalProfile($targetUser, $currentAccount),
+      'can_edit_profile' => $canEditProfile,
     ]);
   }
 
@@ -895,6 +900,9 @@ class GroupMembersController extends ControllerBase {
         fn($r) => !in_array($r, ['administrator', 'api_user'], TRUE)
       ));
 
+      $canEditProfile = (int) $targetUser->id() !== 1
+        && ($context['is_drupal_admin'] || $this->canManageGlobalProfile($targetUser, $currentAccount));
+
       return new JsonResponse([
         'uid' => (int) $targetUser->id(),
         'name' => $targetUser->getDisplayName(),
@@ -904,7 +912,7 @@ class GroupMembersController extends ControllerBase {
         'last_login' => (int) $targetUser->getLastLoginTime(),
         'drupal_roles' => $exposedRoles,
         'changes' => $changes,
-        'can_edit_profile' => $context['is_drupal_admin'] || $this->canManageGlobalProfile($targetUser, $currentAccount),
+        'can_edit_profile' => $canEditProfile,
       ]);
     }
     catch (\Exception $e) {
@@ -941,6 +949,11 @@ class GroupMembersController extends ControllerBase {
     // Identity and lifecycle changes affect every tenant using this account.
     // Unlike membership edits, one overlapping membership is not sufficient.
     if (!$isDrupalAdmin && !$this->canManageGlobalProfile($targetUser, $currentAccount)) {
+      // Audit trail for refused account changes (possible takeover attempts).
+      $this->getLogger('markaspot_group')->notice('User @actor was refused a profile change of user @target.', [
+        '@actor' => (int) $currentAccount->id(),
+        '@target' => (int) $targetUser->id(),
+      ]);
       return new JsonResponse(['error' => 'Access denied to this user.'], 403);
     }
 
