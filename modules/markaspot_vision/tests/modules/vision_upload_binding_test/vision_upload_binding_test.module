@@ -1,0 +1,49 @@
+<?php
+
+/**
+ * @file
+ * Runs the upload binding hooks without the unrelated Nuxt dependencies.
+ */
+
+use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\file\FileInterface;
+use Drupal\markaspot_vision\Plugin\Validation\Constraint\RequestImageUploadBindingConstraint;
+
+require_once dirname(__DIR__, 3) . '/markaspot_vision.module';
+
+/**
+ * Implements hook_file_insert().
+ */
+function vision_upload_binding_test_file_insert(FileInterface $file): void {
+  markaspot_vision_file_insert($file);
+}
+
+/**
+ * Implements hook_file_delete().
+ */
+function vision_upload_binding_test_file_delete(FileInterface $file): void {
+  markaspot_vision_file_delete($file);
+}
+
+/**
+ * Implements hook_entity_bundle_field_info_alter().
+ */
+function vision_upload_binding_test_entity_bundle_field_info_alter(array &$fields, EntityTypeInterface $entity_type, string $bundle): void {
+  markaspot_vision_entity_bundle_field_info_alter($fields, $entity_type, $bundle);
+}
+
+/**
+ * Implements hook_validation_constraint_alter().
+ *
+ * The production plugin belongs to markaspot_vision, which this test does not
+ * enable, so its discovered definition would be dropped with its provider.
+ */
+function vision_upload_binding_test_validation_constraint_alter(array &$definitions): void {
+  $definitions['RequestImageUploadBinding'] = [
+    'id' => 'RequestImageUploadBinding',
+    'label' => 'Request image upload binding',
+    'class' => RequestImageUploadBindingConstraint::class,
+    'type' => [],
+    'provider' => 'vision_upload_binding_test',
+  ];
+}
