@@ -40,13 +40,16 @@ final class ApiKeyParameterUpdateKernelTest extends KernelTestBase {
   public function testEmptyParameterNamesAreFilled(): void {
     $settings = $this->config('services_api_key_auth.settings');
     $this->assertSame('', (string) $settings->get('api_key_post_parameter_name'));
+    // The header default belongs to the contrib module and differs between
+    // its releases (api_key, api-key); the update must leave it alone.
+    $header = $settings->get('api_key_request_header_name');
 
     markaspot_open311_update_11813();
 
     $settings = $this->config('services_api_key_auth.settings');
     $this->assertSame('api_key', $settings->get('api_key_post_parameter_name'));
     $this->assertSame('api_key', $settings->get('api_key_get_parameter_name'));
-    $this->assertSame('api_key', $settings->get('api_key_request_header_name'));
+    $this->assertSame($header, $settings->get('api_key_request_header_name'));
   }
 
   /**

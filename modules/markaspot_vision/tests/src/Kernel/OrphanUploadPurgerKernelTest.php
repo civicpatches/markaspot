@@ -7,6 +7,7 @@ use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Queue\DatabaseQueue;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
@@ -31,6 +32,7 @@ use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\media\Entity\Media;
 use Drupal\media\Entity\MediaType;
 use Drupal\node\Entity\Node;
+use Drupal\node\NodeInterface;
 use Drupal\user\Entity\User;
 use Drupal\node\Entity\NodeType;
 use Drupal\Tests\image\Kernel\ImageFieldCreationTrait;
@@ -225,6 +227,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $this->container->get('keyvalue.expirable')->get(MediaAnalysisAccessGuard::STORE)->setWithExpire($media->uuid(), 'test', 86400);
     // Model pre-fix data without letting the new presave guard repair it.
     $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->condition('mid', $media->id())->execute();
+    // Direct SQL bypasses the entity cache that loadUnchanged() reads.
+    $this->container->get('entity_type.manager')->getStorage('media')->resetCache();
     $this->assertSame(1, $this->purger->purge());
     $this->assertNull(Media::load($media->id()));
     $this->assertNull(File::load($file->id()));
@@ -536,6 +540,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $manual = $this->container->get('keyvalue')->get('markaspot_open311.media_publication_manual');
     $manual->set($media->id(), TRUE);
     $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    // Direct SQL bypasses the entity cache that loadUnchanged() reads.
+    $this->container->get('entity_type.manager')->getStorage('media')->resetCache();
     $config = $this->container->get('config.storage');
     $before = $config->readMultiple($config->listAll());
     // A small ID window forces two passes; the referenced image never becomes
@@ -569,17 +575,83 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     require_once dirname(__DIR__, 3) . '/markaspot_vision.post_update.php';
     $orphan = $this->upload();
     $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    // Direct SQL bypasses the entity cache that loadUnchanged() reads.
+    $this->container->get('entity_type.manager')->getStorage('media')->resetCache();
     $c = $this->container;
     $real = $c->get('markaspot_vision.orphan_upload_purger');
     $purger = new class($real) extends OrphanUploadPurger {
+      /**
+       * Number of unpublishBatch() calls.
+       */
       public int $calls = 0;
 
+      /**
+       * {@inheritdoc}
+       */
       public function __construct(private readonly OrphanUploadPurger $inner) {}
 
+      /**
+       * {@inheritdoc}
+       */
       public function unreferencedRequestImageIds(int $after, int $upto): array {
         return $this->inner->unreferencedRequestImageIds($after, $upto);
       }
 
+      /**
+       * {@inheritdoc}
+       *
+       * The entity hooks reach the service during the media save: every
+       * public method forwards, the parent state was never initialised.
+       */
+      public function protectReferences(EntityInterface $entity): void {
+        $this->inner->protectReferences($entity);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function protectReportDeletion(NodeInterface $report): void {
+        $this->inner->protectReportDeletion($report);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function holdsPublicationLock(int $id): bool {
+        return $this->inner->holdsPublicationLock($id);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function unpublishDetached(NodeInterface $report, ?NodeInterface $current = NULL): void {
+        $this->inner->unpublishDetached($report, $current);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function unpublishIfUnreferenced(int $id): void {
+        $this->inner->unpublishIfUnreferenced($id);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function releaseReferences(EntityInterface $entity): void {
+        $this->inner->releaseReferences($entity);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      public function purge(): int {
+        return $this->inner->purge();
+      }
+
+      /**
+       * {@inheritdoc}
+       */
       public function unpublishBatch(array $ids): int {
         if (++$this->calls === 1) {
           $pdo = new \PDOException('SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock');
@@ -625,6 +697,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
     $last = $this->upload();
     $c = $this->container;
     $c->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    // Direct SQL bypasses the entity cache that loadUnchanged() reads.
+    $c->get('entity_type.manager')->getStorage('media')->resetCache();
     $manual = $c->get('keyvalue')->get('markaspot_open311.media_publication_manual');
     foreach ([$first, $ready, $last] as $media) {
       $manual->set($media->id(), TRUE);
@@ -701,6 +775,8 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
       }
     }
     $this->container->get('database')->update('media_field_data')->fields(['status' => 1])->execute();
+    // Direct SQL bypasses the entity cache that loadUnchanged() reads.
+    $this->container->get('entity_type.manager')->getStorage('media')->resetCache();
     $manual = $this->container->get('keyvalue')->get('markaspot_open311.media_publication_manual');
     foreach ($images as $media) {
       $manual->set($media->id(), TRUE);

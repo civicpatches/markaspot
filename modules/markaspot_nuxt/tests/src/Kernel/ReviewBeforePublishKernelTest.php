@@ -484,6 +484,8 @@ final class ReviewBeforePublishKernelTest extends KernelTestBase {
    */
   public function testModeratedReportGetsInitialUnpublishedState(): void {
     $this->enableModules(['workflows', 'content_moderation']);
+    // enableModules() rebuilds the container and drops the setUp() stub.
+    $this->stubProcessor();
     $this->installEntitySchema('content_moderation_state');
     $workflow = $this->createEditorialWorkflow();
     $configuration = $workflow->getTypePlugin()->getConfiguration();
@@ -517,6 +519,8 @@ final class ReviewBeforePublishKernelTest extends KernelTestBase {
    */
   public function testModeratedLateHoldKeepsUnpublishedDefaultRevision(): void {
     $this->enableModules(['workflows', 'content_moderation']);
+    // enableModules() rebuilds the container and drops the setUp() stub.
+    $this->stubProcessor();
     $this->installEntitySchema('content_moderation_state');
     $workflow = $this->createEditorialWorkflow();
     $workflow->getTypePlugin()->addEntityTypeAndBundle('node', 'service_request');
