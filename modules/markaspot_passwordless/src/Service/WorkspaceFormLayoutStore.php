@@ -38,12 +38,13 @@ class WorkspaceFormLayoutStore {
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
    *   The entity type manager.
-   * @param \Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface $hierarchyResolver
-   *   The jurisdiction hierarchy resolver.
+   * @param \Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface|null $hierarchyResolver
+   *   The jurisdiction hierarchy resolver; NULL without markaspot_group,
+   *   where every jurisdiction is its own root.
    */
   public function __construct(
     private readonly EntityTypeManagerInterface $entityTypeManager,
-    private readonly JurisdictionHierarchyResolverInterface $hierarchyResolver,
+    private readonly ?JurisdictionHierarchyResolverInterface $hierarchyResolver = NULL,
   ) {}
 
   /**
@@ -57,7 +58,7 @@ class WorkspaceFormLayoutStore {
    *   its hierarchy cannot be resolved.
    */
   public function rootId(int $jurisdictionId): int {
-    return $this->hierarchyResolver->getRootJurisdictionId($jurisdictionId) ?? $jurisdictionId;
+    return $this->hierarchyResolver?->getRootJurisdictionId($jurisdictionId) ?? $jurisdictionId;
   }
 
   /**
