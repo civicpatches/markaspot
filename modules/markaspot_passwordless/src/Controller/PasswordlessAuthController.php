@@ -280,6 +280,26 @@ class PasswordlessAuthController extends ControllerBase {
   }
 
   /**
+   * Builds a 429 response that tells the client when to retry.
+   *
+   * FloodInterface does not expose when the oldest counted event leaves its
+   * window, so Retry-After carries the window of the limit that tripped. That
+   * is an upper bound: a client honouring it never retries too early.
+   *
+   * @param string $message
+   *   The error message for the JSON body.
+   * @param int $retryAfter
+   *   The flood window in seconds of the limit that rejected the request.
+   */
+  protected function tooManyRequests(string $message, int $retryAfter): JsonResponse {
+    return new JsonResponse(
+      ['error' => $message],
+      Response::HTTP_TOO_MANY_REQUESTS,
+      ['Retry-After' => (string) max(1, $retryAfter)],
+    );
+  }
+
+  /**
    * Checks whether passwordless auth is enabled on this installation.
    *
    * Passwordless login is a platform-scope flag: it is read from the central
@@ -367,17 +387,13 @@ class PasswordlessAuthController extends ControllerBase {
     // Rate limit by email.
     $email_identifier = $email . ':' . $jurisdiction_id;
     if (!$this->flood->isAllowed('passwordless.request_code', $request_limit_per_email, 3600, $email_identifier)) {
-      return new JsonResponse([
-        'error' => 'Too many code requests. Please try again in an hour.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many code requests. Please try again in an hour.', 3600);
     }
 
     // Rate limit by IP.
     $ip = $request->getClientIp();
     if (!$this->flood->isAllowed('passwordless.request_code.ip', $request_limit_per_ip, 3600, $ip)) {
-      return new JsonResponse([
-        'error' => 'Too many requests from your location. Please try again later.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many requests from your location. Please try again later.', 3600);
     }
 
     // Optional: language from request body.
@@ -489,16 +505,15 @@ class PasswordlessAuthController extends ControllerBase {
     // Check for hard lockout.
     if (!$this->flood->isAllowed('passwordless.verify.lockout', $verify_lockout_attempts, $verify_lockout_duration, $identifier)) {
       $minutes = ceil($verify_lockout_duration / 60);
-      return new JsonResponse([
-        'error' => "Too many failed attempts. Account temporarily locked. Please try again in {$minutes} minutes.",
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests(
+        "Too many failed attempts. Account temporarily locked. Please try again in {$minutes} minutes.",
+        (int) $verify_lockout_duration,
+      );
     }
 
     // Check exponential backoff (3+ attempts in 1 minute).
     if (!$this->flood->isAllowed('passwordless.verify.backoff', 3, 60, $identifier)) {
-      return new JsonResponse([
-        'error' => 'Too many attempts. Please wait a moment before trying again.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many attempts. Please wait a moment before trying again.', 60);
     }
 
     try {
@@ -571,14 +586,10 @@ class PasswordlessAuthController extends ControllerBase {
     $ip = $request->getClientIp() ?: 'unknown';
 
     if (!$this->flood->isAllowed('passwordless.break_glass.request', $request_limit_per_email, 3600, $email_identifier)) {
-      return new JsonResponse([
-        'error' => 'Too many code requests. Please try again in an hour.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many code requests. Please try again in an hour.', 3600);
     }
     if (!$this->flood->isAllowed('passwordless.break_glass.request.ip', $request_limit_per_ip, 3600, $ip)) {
-      return new JsonResponse([
-        'error' => 'Too many requests from your location. Please try again later.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many requests from your location. Please try again later.', 3600);
     }
 
     $langcode = !empty($data['langcode']) ? trim((string) $data['langcode']) : '';
@@ -626,14 +637,13 @@ class PasswordlessAuthController extends ControllerBase {
 
     if (!$this->flood->isAllowed('passwordless.break_glass.verify.lockout', $verify_lockout_attempts, $verify_lockout_duration, $identifier)) {
       $minutes = ceil($verify_lockout_duration / 60);
-      return new JsonResponse([
-        'error' => "Too many failed attempts. Account temporarily locked. Please try again in {$minutes} minutes.",
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests(
+        "Too many failed attempts. Account temporarily locked. Please try again in {$minutes} minutes.",
+        (int) $verify_lockout_duration,
+      );
     }
     if (!$this->flood->isAllowed('passwordless.break_glass.verify.backoff', 3, 60, $identifier)) {
-      return new JsonResponse([
-        'error' => 'Too many attempts. Please wait a moment before trying again.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many attempts. Please wait a moment before trying again.', 60);
     }
 
     $user = $this->breakGlassOtp->verifyCode($email, $code);
@@ -944,9 +954,7 @@ class PasswordlessAuthController extends ControllerBase {
     $event = 'passwordless.session_handoff_claim';
 
     if (!$this->flood->isAllowed($event, static::SESSION_HANDOFF_CLAIM_LIMIT, static::SESSION_HANDOFF_CLAIM_WINDOW, $ip)) {
-      return new JsonResponse([
-        'error' => 'Too many session handoff attempts. Please try again later.',
-      ], Response::HTTP_TOO_MANY_REQUESTS);
+      return $this->tooManyRequests('Too many session handoff attempts. Please try again later.', static::SESSION_HANDOFF_CLAIM_WINDOW);
     }
 
     $this->flood->register($event, static::SESSION_HANDOFF_CLAIM_WINDOW, $ip);
