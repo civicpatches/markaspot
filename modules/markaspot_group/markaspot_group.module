@@ -3925,31 +3925,41 @@ function _markaspot_group_rederive_org_on_category_change(NodeInterface $node): 
   $old_org_group_id = _markaspot_group_derive_org_from_category($node->original, $original_jurisdiction_id);
   $new_org_group_id = _markaspot_group_derive_org_from_category($node, $current_jurisdiction_id);
 
+  $new_org_valid = $new_org_group_id
+    && _markaspot_group_org_matches_jurisdiction($new_org_group_id, $current_jurisdiction_id);
+  if ($new_org_group_id && !$new_org_valid) {
+    \Drupal::logger('markaspot_group')->warning(
+      'Category change derived org @gid outside node jurisdiction @jur_id. Leaving field_organisation without that org.',
+      [
+        '@gid' => $new_org_group_id,
+        '@jur_id' => $current_jurisdiction_id ?? 'none',
+      ]
+    );
+  }
+
+  $single_organisation = _markaspot_group_single_organisation_assignment_enabled();
+  // With one responsible organisation per request, that organisation stays
+  // responsible until a category routes the request elsewhere. Removing it
+  // for a category without a (valid) organisation would leave the request
+  // with no organisation at all, outside every organisation list.
+  if ($single_organisation && !$new_org_valid) {
+    return;
+  }
+
   $updated_org_ids = _markaspot_group_field_target_ids($node, 'field_organisation');
   if ($old_org_group_id) {
     $updated_org_ids = array_values(array_diff($updated_org_ids, [$old_org_group_id]));
   }
 
-  if ($new_org_group_id) {
-    if (_markaspot_group_org_matches_jurisdiction($new_org_group_id, $current_jurisdiction_id)) {
-      // With one responsible organisation per request, the new category's
-      // organisation takes over: appending would hand the save two values,
-      // which the reconcile guard refuses (HTTP 500 on the category change).
-      if (_markaspot_group_single_organisation_assignment_enabled()) {
-        $updated_org_ids = [$new_org_group_id];
-      }
-      else {
-        $updated_org_ids[] = $new_org_group_id;
-      }
+  if ($new_org_valid) {
+    // With one responsible organisation per request, the new category's
+    // organisation takes over: appending would hand the save two values,
+    // which the reconcile guard refuses (HTTP 500 on the category change).
+    if ($single_organisation) {
+      $updated_org_ids = [$new_org_group_id];
     }
     else {
-      \Drupal::logger('markaspot_group')->warning(
-        'Category change derived org @gid outside node jurisdiction @jur_id. Leaving field_organisation without that org.',
-        [
-          '@gid' => $new_org_group_id,
-          '@jur_id' => $current_jurisdiction_id ?? 'none',
-        ]
-      );
+      $updated_org_ids[] = $new_org_group_id;
     }
   }
 
