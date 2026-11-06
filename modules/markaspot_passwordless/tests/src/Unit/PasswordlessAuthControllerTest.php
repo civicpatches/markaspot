@@ -30,6 +30,7 @@ use Drupal\markaspot_passwordless\Service\BreakGlassOtpServiceInterface;
 use Drupal\markaspot_passwordless\Controller\PasswordlessAuthController;
 use Drupal\markaspot_passwordless\Service\OtpService;
 use Drupal\Tests\UnitTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Drupal\user\UserInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -978,6 +979,7 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->requestCode($request);
 
     $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    $this->assertSame('3600', $response->headers->get('Retry-After'));
   }
 
   /**
@@ -1002,6 +1004,7 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->requestCode($request);
 
     $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    $this->assertSame('3600', $response->headers->get('Retry-After'));
   }
 
   /**
@@ -1213,6 +1216,8 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->verifyCode($request);
 
     $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    // The configured lockout duration (900 s) is the retry hint.
+    $this->assertSame('900', $response->headers->get('Retry-After'));
     $data = json_decode($response->getContent(), TRUE);
     $this->assertStringContainsString('locked', $data['error']);
   }
@@ -1239,6 +1244,50 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->verifyCode($request);
 
     $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    $this->assertSame('60', $response->headers->get('Retry-After'));
+  }
+
+  /**
+   * Recovery-code lockouts carry the window of the limit that tripped.
+   *
+   * @covers ::requestCode
+   * @covers ::verifyCode
+   * @covers ::requestBreakGlassCode
+   * @covers ::verifyBreakGlassCode
+   * @covers ::tooManyRequests
+   */
+  #[DataProvider('breakGlassRateLimitProvider')]
+  public function testBreakGlassRateLimitsSendRetryAfter(string $method, string $blockedEvent, string $body, string $retryAfter): void {
+    $this->setMaintenanceMode(TRUE);
+    $this->breakGlassOtp->expects($this->never())->method('requestCode');
+    $this->breakGlassOtp->expects($this->never())->method('verifyCode');
+    $this->flood = $this->createMock(FloodInterface::class);
+    $this->flood->method('isAllowed')
+      ->willReturnCallback(static fn (string $event): bool => $event !== $blockedEvent);
+    $this->flood->expects($this->never())->method('register');
+    $this->recreateController();
+
+    $response = $this->controller->{$method}(new Request([], [], [], [], [], [], $body));
+
+    $this->assertSame(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    $this->assertSame($retryAfter, $response->headers->get('Retry-After'));
+  }
+
+  /**
+   * Provides each recovery-code limit with its expected Retry-After value.
+   *
+   * @return array<string, array{string, string, string, string}>
+   *   Controller method, blocked flood event, request body, header value.
+   */
+  public static function breakGlassRateLimitProvider(): array {
+    $request = '{"email":"operator@example.com"}';
+    $verify = '{"email":"operator@example.com","code":"123456"}';
+    return [
+      'request per email' => ['requestCode', 'passwordless.break_glass.request', $request, '3600'],
+      'request per ip' => ['requestCode', 'passwordless.break_glass.request.ip', $request, '3600'],
+      'verify lockout' => ['verifyCode', 'passwordless.break_glass.verify.lockout', $verify, '900'],
+      'verify backoff' => ['verifyCode', 'passwordless.break_glass.verify.backoff', $verify, '60'],
+    ];
   }
 
   /**
@@ -1780,6 +1829,7 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->claimSessionHandoff($request);
 
     $this->assertSame(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+    $this->assertSame('300', $response->headers->get('Retry-After'));
   }
 
   /**
