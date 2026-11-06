@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Drupal\markaspot_passwordless\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\DependencyInjection\ClassResolverInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\markaspot_fastmap\Service\DemoStaffAccount;
 use Drupal\markaspot_group\Service\WorkspaceVisibilityInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
+use Drupal\markaspot_nuxt\Controller\TenantSettingsController;
+use Drupal\markaspot_passwordless\Service\WorkspaceFormLayoutStore;
 use Drupal\user\UserDataInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -17,6 +20,12 @@ use Symfony\Component\HttpFoundation\Request;
 
 /**
  * Stores personal form layout preferences, never field configuration or grants.
+ *
+ * GET also returns the workspace default ("workspaceDefault") of the
+ * jurisdiction named in the path, so the edit form can apply the order
+ * personal layout, workspace default, built-in layout with one request, and
+ * "workspaceDefaultWritable", whether the account may change that default
+ * (the PATCH rule of WorkspaceFormLayoutController).
  */
 final class FormLayoutPreferencesController extends ControllerBase {
 
@@ -39,6 +48,8 @@ final class FormLayoutPreferencesController extends ControllerBase {
     private readonly UserDataInterface $userData,
     private readonly WorkspaceVisibilityInterface $visibility,
     private readonly ?DemoStaffAccount $demoAccount = NULL,
+    private readonly ?WorkspaceFormLayoutStore $workspaceLayouts = NULL,
+    private readonly ?ClassResolverInterface $classResolver = NULL,
   ) {
     $this->currentUser = $account;
     $this->entityTypeManager = $entity_type_manager;
@@ -55,6 +66,8 @@ final class FormLayoutPreferencesController extends ControllerBase {
       $container->get('markaspot_group.workspace_visibility'),
       $container->has('markaspot_fastmap.demo_staff_account')
         ? $container->get('markaspot_fastmap.demo_staff_account') : NULL,
+      $container->get('markaspot_passwordless.workspace_form_layout'),
+      $container->get('class_resolver'),
     );
   }
 
@@ -73,7 +86,12 @@ final class FormLayoutPreferencesController extends ControllerBase {
     // Shared demo logins must never change another visitor's experience.
     if ($this->demoAccount?->isDemoAccount($this->currentUser)) {
       return $request->isMethodSafe()
-        ? $this->respond(['layout' => NULL, 'writable' => FALSE])
+        ? $this->respond([
+          'layout' => NULL,
+          'writable' => FALSE,
+          'workspaceDefault' => $this->workspaceDefault($jurisdiction),
+          'workspaceDefaultWritable' => FALSE,
+        ])
         : $this->respond(['error' => 'Demo accounts keep no preferences.'], 403);
     }
 
@@ -84,6 +102,8 @@ final class FormLayoutPreferencesController extends ControllerBase {
       return $this->respond([
         'layout' => self::validLayout($stored) ? $stored : NULL,
         'writable' => TRUE,
+        'workspaceDefault' => $this->workspaceDefault($jurisdiction),
+        'workspaceDefaultWritable' => $this->workspaceDefaultWritable($jurisdiction),
       ]);
     }
 
@@ -127,6 +147,45 @@ final class FormLayoutPreferencesController extends ControllerBase {
       }
     }
     return count(array_unique($ids)) === count(self::SECTIONS);
+  }
+
+  /**
+   * Returns the workspace default that applies to a jurisdiction.
+   *
+   * @param int $jurisdiction
+   *   The resolved jurisdiction ID; sub-jurisdictions get their root's value.
+   *
+   * @return array|null
+   *   The workspace default, or NULL when none is set.
+   */
+  private function workspaceDefault(int $jurisdiction): ?array {
+    return $this->workspaceLayouts?->get($jurisdiction);
+  }
+
+  /**
+   * Whether the current account may change the workspace default.
+   *
+   * The PATCH rule of /api/tenant-settings/{jurisdiction_id}/form-layout:
+   * the route's TenantSettingsController::accessCheck() for the jurisdiction
+   * plus WorkspaceFormLayoutController::rootWriteAllowed(). Demo accounts
+   * never get here; preferences() answers FALSE for them.
+   *
+   * @param int $jurisdiction
+   *   The resolved jurisdiction ID.
+   *
+   * @return bool
+   *   TRUE when a PATCH of the workspace default would be allowed.
+   */
+  private function workspaceDefaultWritable(int $jurisdiction): bool {
+    if ($this->workspaceLayouts === NULL || $this->classResolver === NULL) {
+      return FALSE;
+    }
+    $access = $this->classResolver->getInstanceFromDefinition(TenantSettingsController::class);
+    if (!$access instanceof TenantSettingsController
+      || !$access->accessCheck($this->currentUser, (string) $jurisdiction)->isAllowed()) {
+      return FALSE;
+    }
+    return WorkspaceFormLayoutController::rootWriteAllowed($access, $this->currentUser, $jurisdiction, $this->workspaceLayouts->rootId($jurisdiction));
   }
 
   /**

@@ -18,6 +18,7 @@ use Drupal\user\UserInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_group\Service\WorkspaceVisibilityInterface;
 use Drupal\markaspot_passwordless\Controller\FormLayoutPreferencesController;
+use Drupal\markaspot_passwordless\Service\WorkspaceFormLayoutStore;
 use Drupal\Tests\UnitTestCase;
 use Drupal\user\UserDataInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -48,7 +49,7 @@ final class FormLayoutPreferencesTest extends UnitTestCase {
   /**
    * Creates a controller with a fixed session account.
    */
-  private function controller(UserDataInterface $data, bool $authenticated = TRUE, bool $allowed = TRUE, ?DemoStaffAccount $demo = NULL, ?AccountInterface $account = NULL): FormLayoutPreferencesController {
+  private function controller(UserDataInterface $data, bool $authenticated = TRUE, bool $allowed = TRUE, ?DemoStaffAccount $demo = NULL, ?AccountInterface $account = NULL, ?WorkspaceFormLayoutStore $workspace = NULL): FormLayoutPreferencesController {
     $account ??= $this->createMock(AccountInterface::class);
     $account->method('id')->willReturn(42);
     $account->method('isAuthenticated')->willReturn($authenticated);
@@ -62,7 +63,7 @@ final class FormLayoutPreferencesTest extends UnitTestCase {
     $manager->method('getStorage')->with('group')->willReturn($storage);
     $visibility = $this->createMock(WorkspaceVisibilityInterface::class);
     $visibility->method('allowsReadFor')->with($account, 69)->willReturn($allowed);
-    return new FormLayoutPreferencesController($account, $manager, $data, $visibility, $demo);
+    return new FormLayoutPreferencesController($account, $manager, $data, $visibility, $demo, $workspace);
   }
 
   /**
@@ -167,7 +168,10 @@ final class FormLayoutPreferencesTest extends UnitTestCase {
     }
     $controller = $this->controller($data, TRUE, TRUE, $demo, $account);
     $response = $controller->preferences(Request::create('/', 'GET'), '69');
-    $this->assertSame(['layout' => NULL, 'writable' => FALSE], json_decode($response->getContent(), TRUE));
+    $this->assertSame(
+      ['layout' => NULL, 'writable' => FALSE, 'workspaceDefault' => NULL, 'workspaceDefaultWritable' => FALSE],
+      json_decode($response->getContent(), TRUE),
+    );
     $response = $controller->preferences(Request::create('/', 'PATCH', [], [], [], [], '{"layout":null}'), '69');
     $this->assertSame(403, $response->getStatusCode());
   }
@@ -197,6 +201,34 @@ final class FormLayoutPreferencesTest extends UnitTestCase {
     $this->assertTrue($check->access($patch, $account)->isForbidden());
     $patch->headers->set('X-CSRF-Token', 'valid');
     $this->assertTrue($check->access($patch, $account)->isAllowed());
+  }
+
+  /**
+   * GET carries the workspace default of the requested jurisdiction.
+   */
+  public function testReadIncludesWorkspaceDefault(): void {
+    $workspace = $this->createMock(WorkspaceFormLayoutStore::class);
+    $workspace->expects($this->once())->method('get')->with(69)->willReturn($this->layout());
+    $workspace->expects($this->never())->method('set');
+    $data = $this->createMock(UserDataInterface::class);
+    $data->method('get')->willReturn(NULL);
+    $response = $this->controller($data, TRUE, TRUE, NULL, NULL, $workspace)->preferences(Request::create('/', 'GET'), '69');
+    $this->assertSame(
+      ['layout' => NULL, 'writable' => TRUE, 'workspaceDefault' => $this->layout(), 'workspaceDefaultWritable' => FALSE],
+      json_decode($response->getContent(), TRUE),
+    );
+  }
+
+  /**
+   * Personal writes neither read nor change the workspace default.
+   */
+  public function testPersonalWriteLeavesWorkspaceDefaultAlone(): void {
+    $workspace = $this->createMock(WorkspaceFormLayoutStore::class);
+    $workspace->expects($this->never())->method('get');
+    $workspace->expects($this->never())->method('set');
+    $data = $this->createMock(UserDataInterface::class);
+    $response = $this->controller($data, TRUE, TRUE, NULL, NULL, $workspace)->preferences(Request::create('/', 'PATCH', [], [], [], [], '{"layout":null}'), '69');
+    $this->assertSame(['layout' => NULL, 'writable' => TRUE], json_decode($response->getContent(), TRUE));
   }
 
   /**
