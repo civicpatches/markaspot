@@ -1,5 +1,27 @@
 # Changelog
 
+## [11.9.246](https://github.com/markaspot/markaspot/compare/11.9.245...11.9.246) (2026-11-06)
+
+### Features
+
+* dispatch an ECA event per due service provider notification from cron ([88c9451](https://github.com/markaspot/markaspot/commit/88c94510c5e11dbf1d94aff2f1930f9646cebe22))
+* hold new reports for review before publishing per tenant ([efd3d65](https://github.com/markaspot/markaspot/commit/efd3d653e422464011ea9ec912acb02cf8c437aa))
+* require a status note for statuses marked note required ([f27ce4d](https://github.com/markaspot/markaspot/commit/f27ce4d69a55bf41af703f0930540dec591c6555))
+* workspace default for the edit form section layout ([72b8184](https://github.com/markaspot/markaspot/commit/72b8184b5911e6cd3d79abd88afd0ca2bdecc490))
+
+### Bug Fixes
+
+* attach private files to mails as real paths and skip unreadable ones ([3998325](https://github.com/markaspot/markaspot/commit/39983250809da5eb9f25e0e12af78804d3e3f74c))
+* let tenant administrators manage accounts whose powerful permissions they hold themselves ([96d4289](https://github.com/markaspot/markaspot/commit/96d4289825a61cac22a769736c5f59c7c6a6b614))
+* let the workspace form layout store run without markaspot_group ([5f2fb47](https://github.com/markaspot/markaspot/commit/5f2fb4710f707d8a488574d78e588795c328fb45))
+* never offer profile changes of uid 1 and log refused profile changes ([40deb3c](https://github.com/markaspot/markaspot/commit/40deb3cb2fefd4c9d0175b2d21d6eeaf91df24ff))
+* re-route single organisation requests on a category change and keep unchanged organisations untouched ([48c9453](https://github.com/markaspot/markaspot/commit/48c94535af2fc523e07303f7d8a20e29c85ef72b))
+* reassert the review hold in an entity presave hook ordered last ([2f35a9b](https://github.com/markaspot/markaspot/commit/2f35a9bd40f3144853c101b088acd95be4139fc9))
+
+### Performance
+
+* pre-filter unreferenced request images in the orphan post update ([af5acbf](https://github.com/markaspot/markaspot/commit/af5acbf7e75be7f6ef646844b55a20a0f07bf1ec))
+
 ## [11.9.245](https://github.com/markaspot/markaspot/compare/11.9.244...11.9.245) (2026-11-05)
 
 ### Features
