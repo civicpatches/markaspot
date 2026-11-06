@@ -102,6 +102,17 @@ final class RequestImageUploadBindingKernelTest extends KernelTestBase {
   }
 
   /**
+   * {@inheritdoc}
+   */
+  protected function tearDown(): void {
+    // The base class clears the session of the current request.
+    $request = Request::create('/');
+    $request->setSession(new Session(new MockArraySessionStorage()));
+    $this->enter($request);
+    parent::tearDown();
+  }
+
+  /**
    * Another anonymous session cannot claim a fresh upload, on any storage.
    */
   #[DataProvider('schemes')]
