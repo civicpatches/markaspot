@@ -17,8 +17,9 @@ use Drupal\user\UserInterface;
  * Decorates plugin.manager.mail to intercept ECA action e-mails.
  *
  * When an ECA action sends a mail via the system module (module='system',
- * key='action_send_email') and the send succeeds, a 'mail_sent' notification
- * is recorded in the NotificationCollector so the frontend can surface it.
+ * key='action_send_email') or via markaspot_mail (module='markaspot_mail',
+ * key='notification_*') and the send succeeds, a 'mail_sent' notification is
+ * recorded in the NotificationCollector so the frontend can surface it.
  *
  * All MailManagerInterface / PluginManagerInterface methods, as well as
  * CachedDiscoveryInterface and CacheableDependencyInterface methods, delegate
@@ -80,11 +81,15 @@ class NotifyMailManager implements MailManagerInterface, CachedDiscoveryInterfac
    * Returns whether a mail invocation should surface in the dashboard.
    *
    * Core's action_send_email action covers ECA-driven reporter, organisation,
-   * and service-provider notifications. markaspot_group notifications cover
-   * direct assignee and organisation assignment mails.
+   * and service-provider notifications. Tenants on the editable mail texts
+   * send the same notifications through markaspot_mail's ECA action as
+   * notification_* keys; other markaspot_mail keys (login codes, inbound
+   * replies) are not report notifications. markaspot_group notifications
+   * cover direct assignee and organisation assignment mails.
    */
   private function shouldRecordMail($module, $key): bool {
     return ($module === 'system' && $key === 'action_send_email')
+      || ($module === 'markaspot_mail' && str_starts_with((string) $key, 'notification_'))
       || ($module === 'markaspot_group' && in_array($key, ['org_notification', 'assignee_notification'], TRUE))
       || ($module === 'markaspot_escalation' && $key === 'delegation_notification');
   }
