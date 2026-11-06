@@ -30,6 +30,9 @@ use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_nuxt\Controller\TenantSettingsController;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
+use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
+use Drupal\Component\Datetime\TimeInterface;
+use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
 use Drupal\Tests\UnitTestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
@@ -3213,6 +3216,150 @@ class TenantSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Review before publish defaults off, is root-only and can be switched on.
+   *
+   * @covers ::getFeatureSettings
+   * @covers ::updateFeatureSettings
+   */
+  public function testReviewBeforePublishFeatureRoundTrip(): void {
+    $storedNuxtConfig = json_encode(['features' => []]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(14);
+
+    $getRequest = Request::create('/api/tenant/14/features', 'GET');
+    $getResponse = $this->controller->getFeatureSettings($getRequest, '14');
+    $getData = json_decode($getResponse->getContent(), TRUE);
+
+    $this->assertEquals(200, $getResponse->getStatusCode());
+    $this->assertFalse($getData['features']['reviewBeforePublish']);
+    $this->assertSame('tenant', $getData['scopes']['flags']['reviewBeforePublish']);
+    $this->assertContains('reviewBeforePublish', $getData['scopes']['editable']);
+    // Without the hold service the count is still an integer.
+    $this->assertSame(0, $getData['reviewBeforePublishPending']);
+
+    $patchRequest = Request::create(
+      '/api/tenant/14/features',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['reviewBeforePublish' => TRUE])
+    );
+    $patchResponse = $this->controller->updateFeatureSettings($patchRequest, '14');
+    $patchData = json_decode($patchResponse->getContent(), TRUE);
+    $updatedConfig = json_decode($storedNuxtConfig, TRUE);
+
+    $this->assertEquals(200, $patchResponse->getStatusCode());
+    $this->assertTrue($patchData['features']['reviewBeforePublish']);
+    $this->assertTrue($updatedConfig['features']['reviewBeforePublish']);
+  }
+
+  /**
+   * The features GET counts the held, unpublished reports of the whole tenant.
+   *
+   * A child jurisdiction reports the count of its root's tenant, read from
+   * the hold records and limited to unpublished reports of the tenant tree.
+   *
+   * @covers ::getFeatureSettings
+   */
+  public function testGetFeatureSettingsCountsPendingReviewOfTenant(): void {
+    $storedNuxtConfig = json_encode(['features' => []]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, FALSE, 15);
+    $this->groupStorage->method('load')->willReturn($group);
+    // The request names child 15; its tenant root is 14 with child 15.
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(14);
+    $this->hierarchyResolver->method('getDescendantIds')
+      ->willReturnCallback(static fn(int $id): array => $id === 14 ? [14, 15] : [$id]);
+
+    $conditions = [];
+    $countQuery = $this->createMock(QueryInterface::class);
+    $countQuery->method('accessCheck')->willReturnSelf();
+    $countQuery->method('count')->willReturnSelf();
+    $countQuery->method('condition')->willReturnCallback(
+      function (string $field, mixed $value, ?string $operator = NULL) use (&$conditions, $countQuery): QueryInterface {
+        $conditions[$field] = [$value, $operator];
+        return $countQuery;
+      }
+    );
+    $countQuery->method('execute')->willReturn(2);
+    $nodeStorage = $this->createMock(EntityStorageInterface::class);
+    $nodeStorage->method('getQuery')->willReturn($countQuery);
+    $holdEntityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
+    $holdEntityTypeManager->method('getStorage')->with('node')->willReturn($nodeStorage);
+
+    $keyValue = new KeyValueMemoryFactory();
+    $keyValue->get(ReviewBeforePublish::COLLECTION)->setMultiple([
+      '5' => ['created' => 1],
+      '6' => ['created' => 1],
+      '9' => ['created' => 1],
+    ]);
+    $container = \Drupal::getContainer();
+    $container->set('markaspot_nuxt.review_before_publish', new ReviewBeforePublish(
+      $holdEntityTypeManager,
+      $container->get('markaspot_nuxt.feature_scope_resolver'),
+      $this->hierarchyResolver,
+      $keyValue,
+      $this->createMock(TimeInterface::class),
+      $this->createMock(LoggerInterface::class),
+    ));
+    $controller = TenantSettingsController::create($container);
+
+    $response = $controller->getFeatureSettings(Request::create('/api/tenant/15/features', 'GET'), '15');
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertEquals(200, $response->getStatusCode());
+    $this->assertSame(2, $data['reviewBeforePublishPending']);
+    $this->assertArrayNotHasKey('reviewBeforePublishPending', $data['features'], 'The count is not a feature flag.');
+    $this->assertSame(['service_request', NULL], $conditions['type']);
+    $this->assertSame([0, NULL], $conditions['status']);
+    $this->assertSame([[5, 6, 9], 'IN'], $conditions['nid']);
+    $this->assertSame([[14, 15], 'IN'], $conditions['field_jurisdiction'], 'The whole tenant tree of the root counts.');
+  }
+
+  /**
+   * Review before publish accepts only booleans on the tenant root.
+   *
+   * @covers ::updateFeatureSettings
+   */
+  #[\PHPUnit\Framework\Attributes\DataProvider('reviewBeforePublishInvalidValueProvider')]
+  public function testReviewBeforePublishRejectsNonBoolean(mixed $value): void {
+    $storedNuxtConfig = json_encode(['features' => ['reviewBeforePublish' => FALSE]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(14);
+
+    $patchRequest = Request::create(
+      '/api/tenant/14/features',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['reviewBeforePublish' => $value])
+    );
+    $patchResponse = $this->controller->updateFeatureSettings($patchRequest, '14');
+    $data = json_decode($patchResponse->getContent(), TRUE);
+
+    $this->assertEquals(422, $patchResponse->getStatusCode());
+    $this->assertSame('reviewBeforePublish must be a boolean.', $data['error']);
+    $this->assertFalse(json_decode($storedNuxtConfig, TRUE)['features']['reviewBeforePublish']);
+  }
+
+  /**
+   * Provides values that are not booleans.
+   */
+  public static function reviewBeforePublishInvalidValueProvider(): array {
+    return [
+      'string true' => ['true'],
+      'integer one' => [1],
+      'null' => [NULL],
+      'object without enabled' => [['on' => TRUE]],
+    ];
+  }
+
+  /**
    * Personal assignment defaults off and can be switched on independently.
    */
   public function testPersonalAssignmentFeatureRoundTrip(): void {
@@ -4091,6 +4238,8 @@ class TenantSettingsControllerTest extends UnitTestCase {
       'platform ignored before validation' => ['privacyBlockOnFlag', 14, 'invalid', FALSE],
       'tenant child ignored' => ['delegationNoteRequired', 1, TRUE, FALSE],
       'tenant root stored' => ['delegationNoteRequired', 14, TRUE, TRUE],
+      'review child ignored' => ['reviewBeforePublish', 1, TRUE, FALSE],
+      'review root stored' => ['reviewBeforePublish', 14, TRUE, TRUE],
       'jurisdiction stored' => ['moderation', 1, TRUE, TRUE],
     ];
   }

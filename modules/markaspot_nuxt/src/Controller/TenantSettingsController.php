@@ -27,6 +27,7 @@ use Drupal\markaspot_nuxt\Image\BrandingImageDimensions;
 use Drupal\markaspot_nuxt\Service\BoundaryGeoJsonValidator;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
+use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
 use CommerceGuys\Addressing\Country\CountryRepositoryInterface;
 use enshrined\svgSanitize\Sanitizer;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -80,6 +81,7 @@ final class TenantSettingsController extends ControllerBase {
     'onboardingTour',
     'loginLink',
     'delegationNoteRequired',
+    'reviewBeforePublish',
     'assignmentSyncsOrganisation',
     'personalAssignment',
     'moderation',
@@ -361,6 +363,11 @@ final class TenantSettingsController extends ControllerBase {
   protected ?CountryRepositoryInterface $countryRepository;
 
   /**
+   * The review-before-publish hold (NULL on older module states).
+   */
+  protected ?ReviewBeforePublish $reviewBeforePublish;
+
+  /**
    * Constructs a TenantSettingsController.
    */
   public function __construct(
@@ -374,6 +381,7 @@ final class TenantSettingsController extends ControllerBase {
     FeatureScopeResolver $feature_scope_resolver,
     EmailValidator $email_validator,
     ?CountryRepositoryInterface $country_repository,
+    ?ReviewBeforePublish $review_before_publish = NULL,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->streamWrapperManager = $stream_wrapper_manager;
@@ -385,6 +393,7 @@ final class TenantSettingsController extends ControllerBase {
     $this->featureScopeResolver = $feature_scope_resolver;
     $this->emailValidator = $email_validator;
     $this->countryRepository = $country_repository;
+    $this->reviewBeforePublish = $review_before_publish;
   }
 
   /**
@@ -403,6 +412,9 @@ final class TenantSettingsController extends ControllerBase {
       $container->get('email.validator'),
       $container->has('address.country_repository')
         ? $container->get('address.country_repository')
+        : NULL,
+      $container->has('markaspot_nuxt.review_before_publish')
+        ? $container->get('markaspot_nuxt.review_before_publish')
         : NULL,
     );
   }
@@ -2291,6 +2303,11 @@ final class TenantSettingsController extends ControllerBase {
 
     return new JsonResponse([
       'jurisdiction_id' => (int) $group->id(),
+      // Reports of the whole tenant held by reviewBeforePublish and still
+      // unpublished. Counted even when the flag is off again, because reports
+      // held earlier keep their hold until staff publish them. Only this
+      // access-checked endpoint carries it, not the public settings.
+      'reviewBeforePublishPending' => $this->countReviewBeforePublishPending($root_id ?? (int) $group->id()),
       'features' => [
         // All simple flags go through getBooleanFeatureValue(): legacy
         // tenant configs still store some of them in the richer object
@@ -2323,6 +2340,9 @@ final class TenantSettingsController extends ControllerBase {
         'contactForm' => $this->getBooleanFeatureValue($features, 'contactForm', FALSE),
         'privacyBlockOnFlag' => $this->getBooleanFeatureValue($features, 'privacyBlockOnFlag', FALSE),
         'delegationNoteRequired' => $this->getBooleanFeatureValue($features, 'delegationNoteRequired', FALSE),
+        // Root-only: new reports of the whole tenant are saved unpublished
+        // until staff publish them (ReviewBeforePublish).
+        'reviewBeforePublish' => $this->getBooleanFeatureValue($features, 'reviewBeforePublish', FALSE),
         'assignmentSyncsOrganisation' => $this->getBooleanFeatureValue($features, 'assignmentSyncsOrganisation', FALSE),
         // Guided onboarding tour (citizen report + dashboard walkthrough).
         // Default follows the operating mode: on for SaaS workspaces, off
@@ -2364,6 +2384,22 @@ final class TenantSettingsController extends ControllerBase {
         'editable' => $editable,
       ],
     ]);
+  }
+
+  /**
+   * Counts the held, still unpublished reports of a tenant.
+   *
+   * @param int $root_id
+   *   The tenant root jurisdiction.
+   *
+   * @return int
+   *   Held reports in the root and all of its descendants.
+   */
+  private function countReviewBeforePublishPending(int $root_id): int {
+    if ($this->reviewBeforePublish === NULL) {
+      return 0;
+    }
+    return $this->reviewBeforePublish->countHeld($this->hierarchyResolver->getDescendantIds($root_id));
   }
 
   /**

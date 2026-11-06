@@ -28,6 +28,21 @@ services:
   markaspot_nuxt.feature_scope_resolver:
     class: Drupal\markaspot_nuxt\Service\FeatureScopeResolver
     arguments: ['@entity_type.manager', '@config.factory', '@markaspot_group.hierarchy_resolver', '@module_handler']
+  # Root-only flag reviewBeforePublish: holds new reports unpublished and
+  # keeps them out of automatic publication until staff publish them.
+  markaspot_nuxt.review_before_publish:
+    class: Drupal\markaspot_nuxt\Service\ReviewBeforePublish
+    arguments:
+      - '@entity_type.manager'
+      - '@markaspot_nuxt.feature_scope_resolver'
+      - '@markaspot_group.hierarchy_resolver'
+      - '@keyvalue'
+      - '@datetime.time'
+      - '@logger.channel.markaspot_nuxt'
+      - '@?content_moderation.moderation_information'
+  logger.channel.markaspot_nuxt:
+    parent: logger.channel_base
+    arguments: ['markaspot_nuxt']
   markaspot_nuxt.citizen_wording_resolver:
     class: Drupal\markaspot_nuxt\Service\CitizenWordingResolver
   markaspot_nuxt.feature_flag_access_check:

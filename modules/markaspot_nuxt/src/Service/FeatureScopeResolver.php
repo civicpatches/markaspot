@@ -32,6 +32,9 @@ class FeatureScopeResolver {
     'assignmentSyncsOrganisation' => 'tenant',
     'personalAssignment' => 'tenant',
     'delegationNoteRequired' => 'tenant',
+    // Review before publish holds every new report of the tenant, so one
+    // value at the root decides for all of its jurisdictions.
+    'reviewBeforePublish' => 'tenant',
     'dashboard' => 'tenant',
     // Organisation and facility management operate on the root portfolio, so
     // a child workspace inherits the root's opt-in (same as 'dashboard').
@@ -91,6 +94,8 @@ class FeatureScopeResolver {
     // on in the dashboard features settings.
     'personalAssignment' => FALSE,
     'delegationNoteRequired' => FALSE,
+    // Off: new reports follow the publish default of the content type.
+    'reviewBeforePublish' => FALSE,
     'dashboard' => TRUE,
     // Conservative constant; the effective default is operating-mode aware
     // via featureDefault(): opt-in on SaaS, enabled on self-hosted.

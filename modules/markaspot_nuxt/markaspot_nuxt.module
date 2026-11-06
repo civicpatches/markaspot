@@ -5,6 +5,7 @@
  * Contains Nuxt frontend integration hooks for Mark-a-Spot.
  */
 
+use Drupal\Core\Database\Query\AlterableInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Cache\Cache;
@@ -75,6 +76,14 @@ function markaspot_nuxt_group_access(EntityInterface $entity, string $operation,
  * Implements hook_entity_presave().
  */
 function markaspot_nuxt_entity_presave(EntityInterface $entity) {
+  // Runs after every hook_node_presave() and after Content Moderation's own
+  // entity presave: a new report held for review stays unpublished, whatever
+  // re-derived the published flag in between.
+  if ($entity instanceof NodeInterface) {
+    \Drupal::service('markaspot_nuxt.review_before_publish')->reassertHold($entity);
+    return;
+  }
+
   // Check if the entity is a file and is temporary.
   if ($entity->getEntityTypeId() === 'file' && $entity->isTemporary()) {
     $original_uri = $entity->getFileUri();
@@ -161,6 +170,12 @@ function markaspot_nuxt_node_presave(NodeInterface $node): void {
     return;
   }
 
+  // Review before publish (root-only flag) holds every new report of the
+  // tenant unpublished. It runs first because the consent checks below
+  // return early for some save paths (split children, bundles without
+  // field_gdpr). A consent failure below still aborts the whole save.
+  \Drupal::service('markaspot_nuxt.review_before_publish')->holdNewReport($node);
+
   // JSON:API is the current citizen frontend create path. Restrict this
   // request-level gate to anonymous JSON:API creates so staff intake, mail
   // promotion, imports, and other entity save paths remain unchanged.
@@ -225,6 +240,53 @@ function markaspot_nuxt_node_presave(NodeInterface $node): void {
   throw new UnprocessableEntityHttpException(
     'Privacy notice consent (field_gdpr) is required for this jurisdiction but was not accepted.'
   );
+}
+
+/**
+ * Implements hook_node_insert().
+ *
+ * Records the review hold of a new report under its node ID. A report that
+ * presave could not match to a tenant is checked again here: markaspot_group
+ * (alphabetically earlier, both weight 0) has derived field_jurisdiction by
+ * now.
+ */
+function markaspot_nuxt_node_insert(NodeInterface $node): void {
+  if ($node->bundle() === 'service_request') {
+    $review = \Drupal::service('markaspot_nuxt.review_before_publish');
+    if (!$review->recordHold($node)) {
+      $review->holdAfterInsert($node);
+    }
+  }
+}
+
+/**
+ * Implements hook_node_update().
+ *
+ * Publishing a held report by hand is the review decision: the hold ends.
+ */
+function markaspot_nuxt_node_update(NodeInterface $node): void {
+  if ($node->bundle() === 'service_request') {
+    \Drupal::service('markaspot_nuxt.review_before_publish')->releaseOnPublish($node);
+  }
+}
+
+/**
+ * Implements hook_node_delete().
+ */
+function markaspot_nuxt_node_delete(NodeInterface $node): void {
+  if ($node->bundle() === 'service_request') {
+    \Drupal::service('markaspot_nuxt.review_before_publish')->release($node);
+  }
+}
+
+/**
+ * Implements hook_query_TAG_alter() for markaspot_publisher_candidates.
+ *
+ * Automatic publication never releases a report held for review; only a
+ * person publishing it does.
+ */
+function markaspot_nuxt_query_markaspot_publisher_candidates_alter(AlterableInterface $query): void {
+  \Drupal::service('markaspot_nuxt.review_before_publish')->excludeHeldReports($query);
 }
 
 /**
