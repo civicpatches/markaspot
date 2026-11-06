@@ -8,6 +8,7 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Field\FieldItemInterface;
 use Drupal\Core\Field\FieldItemList;
 use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\markaspot_notification\Mail\NotifyMailManager;
 use Drupal\markaspot_notification\NotificationCollector;
 use Drupal\node\NodeInterface;
@@ -60,6 +61,7 @@ final class NotifyMailManagerTest extends UnitTestCase {
       $inner,
       $collector,
       $this->createMock(EntityTypeManagerInterface::class),
+      $this->currentUser(),
     );
 
     $result = $manager->mail(
@@ -89,6 +91,7 @@ final class NotifyMailManagerTest extends UnitTestCase {
       $inner,
       $collector,
       $this->createMock(EntityTypeManagerInterface::class),
+      $this->currentUser(),
     );
 
     $manager->mail(
@@ -123,6 +126,7 @@ final class NotifyMailManagerTest extends UnitTestCase {
       $inner,
       $collector,
       $this->createMock(EntityTypeManagerInterface::class),
+      $this->currentUser(),
     );
 
     $manager->mail(
@@ -138,12 +142,51 @@ final class NotifyMailManagerTest extends UnitTestCase {
   }
 
   /**
-   * Tests that other markaspot_mail keys and failed sends stay unrecorded.
+   * Tests that mails sent on behalf of anonymous users are never recorded.
+   *
+   * A citizen's own report POST triggers report_confirmation. Recording it
+   * would write to the private tempstore and start an anonymous session.
    *
    * @covers ::mail
    */
-  #[DataProvider('unrecordedMarkaspotMailProvider')]
-  public function testMarkaspotMailWithoutReportNotificationIsNotRecorded(string $key, bool $sent): void {
+  public function testAnonymousSenderNeverRecordsReceipt(): void {
+    $inner = $this->createMock(MailManagerInterface::class);
+    $inner->expects($this->once())
+      ->method('mail')
+      ->willReturn(['result' => TRUE]);
+
+    $collector = $this->createMock(NotificationCollector::class);
+    $collector->expects($this->never())->method('record');
+    $collector->expects($this->never())->method('getCurrentNodeUuid');
+
+    $manager = new NotifyMailManager(
+      $inner,
+      $collector,
+      $this->createMock(EntityTypeManagerInterface::class),
+      $this->currentUser(TRUE),
+    );
+
+    $result = $manager->mail(
+      'markaspot_mail',
+      'notification_report_confirmation',
+      'citizen@example.test',
+      'de',
+      [
+        'node' => $this->reporterNode('citizen@example.test'),
+        'notification_key' => 'report_confirmation',
+      ],
+    );
+
+    $this->assertTrue($result['result']);
+  }
+
+  /**
+   * Tests that non-notification mails and failed sends stay unrecorded.
+   *
+   * @covers ::mail
+   */
+  #[DataProvider('unrecordedMailProvider')]
+  public function testMailWithoutReportNotificationIsNotRecorded(string $module, string $key, bool $sent): void {
     $inner = $this->createMock(MailManagerInterface::class);
     $inner->method('mail')->willReturn(['result' => $sent]);
 
@@ -154,10 +197,11 @@ final class NotifyMailManagerTest extends UnitTestCase {
       $inner,
       $collector,
       $this->createMock(EntityTypeManagerInterface::class),
+      $this->currentUser(),
     );
 
     $manager->mail(
-      'markaspot_mail',
+      $module,
       $key,
       'citizen@example.test',
       'de',
@@ -166,17 +210,27 @@ final class NotifyMailManagerTest extends UnitTestCase {
   }
 
   /**
-   * Provides markaspot_mail invocations that must not produce a receipt.
+   * Provides real mail invocations that must not produce a receipt.
    *
-   * @return array<string, array{string, bool}>
-   *   Mail key and send result.
+   * @return array<string, array{string, string, bool}>
+   *   Mail module, mail key and send result.
    */
-  public static function unrecordedMarkaspotMailProvider(): array {
+  public static function unrecordedMailProvider(): array {
     return [
-      'login code' => ['passwordless_otp', TRUE],
-      'inbound triage reply' => ['triage_reply', TRUE],
-      'failed notification' => ['notification_status_closed', FALSE],
+      'login code' => ['markaspot_passwordless', 'verification_code', TRUE],
+      'inbound triage reply' => ['markaspot_mail_inbound', 'triage_reply', TRUE],
+      'workspace welcome' => ['markaspot_fastmap', 'workspace_welcome', TRUE],
+      'failed notification' => ['markaspot_mail', 'notification_status_closed', FALSE],
     ];
+  }
+
+  /**
+   * Builds the current user, authenticated unless stated otherwise.
+   */
+  private function currentUser(bool $anonymous = FALSE): AccountProxyInterface {
+    $account = $this->createMock(AccountProxyInterface::class);
+    $account->method('isAnonymous')->willReturn($anonymous);
+    return $account;
   }
 
   /**
