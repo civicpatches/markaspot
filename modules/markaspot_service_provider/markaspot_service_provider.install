@@ -189,6 +189,11 @@ function markaspot_service_provider_requirements($phase) {
 function markaspot_service_provider_uninstall() {
   // Clean up any state variables.
   \Drupal::state()->delete('markaspot_service_provider.last_notification');
+  \Drupal::state()->delete('markaspot_service_provider.next_execution');
+
+  // Drop the cron notification bookkeeping and any queued notifications.
+  \Drupal::keyValue('markaspot_service_provider.notified')->deleteAll();
+  \Drupal::queue('markaspot_service_provider_notification')->deleteQueue();
 
   // Clean up configuration.
   \Drupal::configFactory()->getEditable('markaspot_service_provider.settings')->delete();

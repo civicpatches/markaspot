@@ -5,6 +5,7 @@
  * Contains markaspot_service_provider.module.
  */
 
+use Drupal\markaspot_service_provider\ServiceProviderNotificationScheduler;
 use Drupal\node\NodeInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
@@ -136,6 +137,11 @@ function markaspot_service_provider_node_presave(NodeInterface $node) {
 
 /**
  * Implements hook_cron().
+ *
+ * While "enable_cron_notifications" is on, queues every published service
+ * request with an assigned provider that is not completed, at most once per
+ * "cron_interval". The queue worker dispatches
+ * ServiceProviderEvents::NOTIFICATION_DUE per node for ECA models to react to.
  */
 function markaspot_service_provider_cron() {
   $config = \Drupal::config('markaspot_service_provider.settings');
@@ -147,35 +153,17 @@ function markaspot_service_provider_cron() {
   }
 
   // Get the interval setting (default to 1 hour).
-  $interval = $config->get('cron_interval');
-  $interval = !empty($interval) ? $interval : 3600;
+  $interval = ServiceProviderNotificationScheduler::normalizeInterval($config->get('cron_interval'));
 
   // Check if it's time to run based on the interval.
   $next_execution = \Drupal::state()
     ->get('markaspot_service_provider.next_execution', 0);
 
   if (\Drupal::time()->getRequestTime() >= $next_execution) {
-    $entity_type_manager = \Drupal::entityTypeManager();
-    $node_storage = $entity_type_manager->getStorage('node');
-
-    // Find service requests with assigned service providers.
-    // You can customize this query based on your specific needs.
-    $query = $node_storage->getQuery()
-      ->condition('type', 'service_request')
-      ->condition('status', 1)
-      ->exists('field_service_provider')
-      ->accessCheck(FALSE);
-
-    $nids = $query->execute();
-    $count = count($nids);
-
+    $count = \Drupal::service('markaspot_service_provider.notification_scheduler')->enqueueDue();
     if ($count > 0) {
-      // For now this only logs that nodes are ready for notification.
-      // Dispatching an event (or feeding a queue worker) so that ECA models
-      // can react to it is tracked in
-      // https://github.com/markaspot/markaspot-ui/issues/480.
       \Drupal::logger('markaspot_service_provider')
-        ->notice('Found @count service requests with assigned providers ready for cron notification.',
+        ->notice('Queued @count service requests with assigned providers for cron notification.',
           ['@count' => $count]);
     }
 

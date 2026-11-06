@@ -151,12 +151,29 @@ $emails = $service->getServiceProviderEmails($node);
 
 ### Cron-based Notifications (Optional)
 
-When **Enable Cron Notifications** is enabled in module settings:
+When **Enable Cron Notifications** is enabled in module settings (it is off by
+default, and nothing below happens while it is off):
 
-- The module's cron hook runs at the configured interval
-- It finds all service requests with assigned service providers
-- Logs the count of eligible requests
-- Can be integrated with ECA to trigger notification events
+- The module's cron hook runs at the configured interval.
+- It queues every published service request that has an assigned service
+  provider and is not at the configured completion status
+  (`markaspot_service_provider_notification` queue).
+- The queue worker checks each request again and dispatches the ECA event
+  **Service provider notification due**
+  (`ServiceProviderEvents::NOTIFICATION_DUE`) once per request. The request is
+  the event entity (`[node]`, `[entity]`); `[sp_email]` holds the provider's
+  configured addresses (organisation scope applied), separated by commas,
+  ready for a mail action.
+- Each queue item carries the time of the cron run that queued it. That time,
+  not the moment the worker reaches the item, is kept per request in the
+  key-value collection `markaspot_service_provider.notified`. A request is
+  therefore notified at most once per interval and stays on the cron hook's
+  cadence when the queue spills into a later cron run. An item that is a full
+  interval old is notified with the current time, so a newer duplicate of the
+  same request finds it already notified. Items without that time (for example added by hand) use the time the
+  worker processes them. Requests whose provider has no address, or whose
+  provider belongs to another organisation, get no event.
+- The event needs the ECA module; without it nothing is queued.
 
 This allows for periodic reminder emails to service providers about pending work.
 

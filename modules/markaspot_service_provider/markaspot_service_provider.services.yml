@@ -5,3 +5,20 @@ services:
       - '@config.factory'
       - '@entity_type.manager'
       - '@logger.factory'
+
+  logger.channel.markaspot_service_provider:
+    parent: logger.channel_base
+    arguments: ['markaspot_service_provider']
+
+  markaspot_service_provider.notification_scheduler:
+    class: Drupal\markaspot_service_provider\ServiceProviderNotificationScheduler
+    arguments:
+      - '@entity_type.manager'
+      - '@entity_field.manager'
+      - '@config.factory'
+      - '@queue'
+      - '@keyvalue'
+      - '@datetime.time'
+      - '@event_dispatcher'
+      - '@markaspot_service_provider.service_provider'
+      - '@logger.channel.markaspot_service_provider'
