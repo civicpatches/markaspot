@@ -7,6 +7,7 @@
 
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
 use Drupal\Core\Field\FieldDefinitionInterface;
@@ -15,11 +16,13 @@ use Drupal\Core\Hook\Attribute\LegacyHook;
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\markaspot_vision\Hook\HazardLevelHooks;
+use Drupal\markaspot_vision\Hook\RequestImageUploadBindingHooks;
 use Drupal\markaspot_vision\Service\OriginalImageStore;
 use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_vision\Service\ScreeningMarker;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
 use Drupal\media\Entity\Media;
+use Drupal\file\FileInterface;
 use Drupal\media\MediaInterface;
 use Drupal\node\NodeInterface;
 
@@ -162,6 +165,40 @@ function markaspot_vision_node_presave(NodeInterface $node): void {
   /** @var \Drupal\markaspot_vision\Hook\HazardLevelHooks $hooks */
   $hooks = \Drupal::service(HazardLevelHooks::class);
   $hooks->nodePresave($node);
+}
+
+/**
+ * Implements hook_file_insert().
+ *
+ * Drupal 10 bridge; Drupal 11 runs
+ * RequestImageUploadBindingHooks::fileInsert() and skips this wrapper.
+ */
+#[LegacyHook]
+function markaspot_vision_file_insert(FileInterface $file): void {
+  \Drupal::service(RequestImageUploadBindingHooks::class)->fileInsert($file);
+}
+
+/**
+ * Implements hook_file_delete().
+ *
+ * Drupal 10 bridge; Drupal 11 runs
+ * RequestImageUploadBindingHooks::fileDelete() and skips this wrapper.
+ */
+#[LegacyHook]
+function markaspot_vision_file_delete(FileInterface $file): void {
+  \Drupal::service(RequestImageUploadBindingHooks::class)->fileDelete($file);
+}
+
+/**
+ * Implements hook_entity_bundle_field_info_alter().
+ *
+ * Drupal 10 bridge; Drupal 11 runs
+ * RequestImageUploadBindingHooks::entityBundleFieldInfoAlter() and skips this
+ * wrapper.
+ */
+#[LegacyHook]
+function markaspot_vision_entity_bundle_field_info_alter(array &$fields, EntityTypeInterface $entity_type, string $bundle): void {
+  \Drupal::service(RequestImageUploadBindingHooks::class)->entityBundleFieldInfoAlter($fields, $entity_type, $bundle);
 }
 
 /**
