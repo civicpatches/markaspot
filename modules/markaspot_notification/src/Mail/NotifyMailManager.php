@@ -9,6 +9,7 @@ use Drupal\Core\Cache\CacheableDependencyInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\markaspot_notification\NotificationCollector;
 use Drupal\node\NodeInterface;
 use Drupal\user\UserInterface;
@@ -20,6 +21,9 @@ use Drupal\user\UserInterface;
  * key='action_send_email') or via markaspot_mail (module='markaspot_mail',
  * key='notification_*') and the send succeeds, a 'mail_sent' notification is
  * recorded in the NotificationCollector so the frontend can surface it.
+ * Mails sent on behalf of anonymous users (citizen report submissions) are
+ * never recorded: anonymous users cannot read these receipts, and writing to
+ * the private tempstore would start a session for them.
  *
  * All MailManagerInterface / PluginManagerInterface methods, as well as
  * CachedDiscoveryInterface and CacheableDependencyInterface methods, delegate
@@ -41,11 +45,14 @@ class NotifyMailManager implements MailManagerInterface, CachedDiscoveryInterfac
    *   The notification collector service.
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
    *   The entity type manager.
+   * @param \Drupal\Core\Session\AccountProxyInterface $currentUser
+   *   The current user; receipts are recorded for authenticated senders only.
    */
   public function __construct(
     private readonly MailManagerInterface $inner,
     private readonly NotificationCollector $collector,
     private readonly EntityTypeManagerInterface $entityTypeManager,
+    private readonly AccountProxyInterface $currentUser,
   ) {}
 
   /**
@@ -67,7 +74,9 @@ class NotifyMailManager implements MailManagerInterface, CachedDiscoveryInterfac
    */
   public function mail($module, $key, $to, $langcode, $params = [], $reply = NULL, $send = TRUE): array {
     $result = $this->inner->mail($module, $key, $to, $langcode, $params, $reply, $send);
-    if ($this->shouldRecordMail($module, $key) && ($result['result'] ?? FALSE) === TRUE) {
+    if (!$this->currentUser->isAnonymous()
+      && $this->shouldRecordMail($module, $key)
+      && ($result['result'] ?? FALSE) === TRUE) {
       $node = $this->resolveNode($params);
       $uuid = $node?->uuid() ?? $this->collector->getCurrentNodeUuid();
       if ($uuid !== NULL) {
