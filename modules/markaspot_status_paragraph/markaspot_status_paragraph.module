@@ -135,6 +135,11 @@ function _markaspot_status_paragraph_lock_initial_status(array &$form) {
 
   $widget = &$form['field_status_notes']['widget'];
 
+  // The classic entity_reference_paragraphs widget stores its actions in links,
+  // including the dropbutton wrappers. Remove the complete group so an empty
+  // dropdown cannot remain after the initial status actions are removed.
+  unset($widget[0]['top']['links']);
+
   // Remove the per-item action affordances for the initial status (delta 0).
   if (isset($widget[0]['top']['actions'])) {
     $actions = &$widget[0]['top']['actions'];

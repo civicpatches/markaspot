@@ -21,6 +21,13 @@
       once('disable-first-status', 'input[name="field_status_notes_0_edit"]', context).forEach(function (editButton) {
         editButton.style.display = 'none';
 
+        // The classic widget wraps its edit and remove buttons in a dropbutton.
+        // Hide the whole action group, including its otherwise empty toggle.
+        const classicActions = editButton.closest('.paragraphs-dropbutton-wrapper');
+        if (classicActions) {
+          classicActions.style.display = 'none';
+        }
+
         const row = editButton.closest('tr');
         const dropdownToggle = row && row.querySelector('.paragraphs-dropdown .paragraphs-dropdown-toggle');
         if (dropdownToggle) {
