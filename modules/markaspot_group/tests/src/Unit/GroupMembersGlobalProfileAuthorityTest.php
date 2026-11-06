@@ -53,6 +53,7 @@ final class GroupMembersGlobalProfileAuthorityTest extends UnitTestCase {
     ?array $membershipsAfterLock = NULL,
     bool $targetAdminRole = FALSE,
     array $targetTenantAdminIds = [],
+    array $actorPermissions = [],
   ): array {
     $container = new ContainerBuilder();
     $contexts = $this->createMock(CacheContextsManager::class);
@@ -73,6 +74,9 @@ final class GroupMembersGlobalProfileAuthorityTest extends UnitTestCase {
     $actor->method('id')->willReturn($actorId);
     $actor->method('getRoles')->willReturn($actorRoles);
     $actor->method('getDisplayName')->willReturn('Acting administrator');
+    $actor->method('hasPermission')->willReturnCallback(
+      static fn(string $permission): bool => in_array($permission, $actorPermissions, TRUE),
+    );
     $target = $this->createMock(UserInterface::class);
     $target->method('id')->willReturn(42);
     $target->method('getRoles')->willReturn($targetRoles);
@@ -375,10 +379,73 @@ final class GroupMembersGlobalProfileAuthorityTest extends UnitTestCase {
       'access dashboard notifications', 'access dashboard kpis',
       'manage dashboard notes', 'add dashboard status notes',
       'split service requests', 'use service request management form',
-      'assign service requests',
+      'assign service requests', 'administer flags',
     ] as $permission) {
       yield $permission => [$permission];
     }
+  }
+
+  /**
+   * A caller holding every powerful permission of the target gains nothing.
+   *
+   * Krefeld: tenant administrators with media administration and inbound
+   * mail triage rename and re-mail the moderators who hold the same.
+   */
+  #[DataProvider('sharedPrivileges')]
+  public function testCallerWithTheSamePrivilegesCanUpdateTheProfile(array $targetPermissions, array $body): void {
+    $fixture = $this->fixture(targetPermissions: $targetPermissions, actorPermissions: $targetPermissions);
+    $fixture['target']->expects($this->once())->method('save');
+    $this->assertSame(200, $this->patch($fixture['controller'], $body)->getStatusCode());
+  }
+
+  /**
+   * Restricted and administrative permissions, name and e-mail changes.
+   */
+  public static function sharedPrivileges(): iterable {
+    foreach ([
+      'media and inbound triage' => ['administer media', 'triage inbound mail'],
+      'custom administer' => ['administer custom global integration'],
+    ] as $case => $permissions) {
+      yield "$case / name" => [$permissions, ['name' => 'Changed']];
+      yield "$case / email" => [$permissions, ['email' => 'changed@example.test']];
+    }
+  }
+
+  /**
+   * One powerful permission the caller lacks keeps the account protected.
+   */
+  public function testCallerMissingOneTargetPrivilegeIsRefused(): void {
+    $fixture = $this->fixture(
+      targetPermissions: ['administer media', 'triage inbound mail'],
+      actorPermissions: ['administer media'],
+    );
+    foreach (['save', 'setUsername', 'setEmail'] as $method) {
+      $fixture['target']->expects($this->never())->method($method);
+    }
+    $this->assertSame(403, $this->patch($fixture['controller'], ['email' => 'changed@example.test'])->getStatusCode());
+  }
+
+  /**
+   * Shared privileges do not lift the peer, role or scope protections.
+   */
+  public function testSharedPrivilegesKeepOtherProtections(): void {
+    $peer = $this->fixture(
+      targetRoles: ['authenticated', 'tenant_admin'],
+      targetPermissions: ['administer media'],
+      actorPermissions: ['administer media'],
+    );
+    $this->assertSame(403, $this->patch($peer['controller'], ['name' => 'Changed'])->getStatusCode());
+    $foreign = $this->fixture(
+      targetGroupDefinitions: [[101, 'jur'], [202, 'jur']],
+      targetPermissions: ['administer media'],
+      actorPermissions: ['administer media'],
+    );
+    $this->assertSame(403, $this->patch($foreign['controller'], ['name' => 'Changed'])->getStatusCode());
+    $editorial = $this->fixture(
+      targetRoles: ['authenticated', 'editorial_board'],
+      actorPermissions: ['administer users', 'bypass node access'],
+    );
+    $this->assertSame(403, $this->patch($editorial['controller'], ['name' => 'Changed'])->getStatusCode());
   }
 
   /**

@@ -73,6 +73,8 @@ class GroupMembersController extends ControllerBase {
     'split service requests',
     'use service request management form',
     'assign service requests',
+    // Flag administration is scoped to the editor's jurisdiction.
+    'administer flags',
   ];
 
   /**
@@ -672,6 +674,9 @@ class GroupMembersController extends ControllerBase {
       'last_login' => (int) $targetUser->getLastLoginTime(),
       'drupal_roles' => $exposedRoles,
       'memberships' => $memberships,
+      // Name, e-mail, status and anonymization follow the same authority
+      // check as PATCH /profile, so the dashboard can lock what it refuses.
+      'can_edit_profile' => $isDrupalAdmin || $this->canManageGlobalProfile($targetUser, $currentAccount),
     ]);
   }
 
@@ -899,6 +904,7 @@ class GroupMembersController extends ControllerBase {
         'last_login' => (int) $targetUser->getLastLoginTime(),
         'drupal_roles' => $exposedRoles,
         'changes' => $changes,
+        'can_edit_profile' => $context['is_drupal_admin'] || $this->canManageGlobalProfile($targetUser, $currentAccount),
       ]);
     }
     catch (\Exception $e) {
@@ -951,9 +957,11 @@ class GroupMembersController extends ControllerBase {
    *
    * Own name/email updates are still available to authorized route callers;
    * self-blocking and self-anonymization remain forbidden by the mutator.
-   * Other accounts must have no platform privileges, must not be tenant
-   * administrators or editors, and every membership must belong to a
-   * jurisdiction or organisation the caller actually administers.
+   * Other accounts must not be tenant administrators or editors, must not
+   * hold a powerful permission the caller lacks (taking the account over by
+   * its e-mail address must not widen the caller's rights), and every
+   * membership must belong to a jurisdiction or organisation the caller
+   * actually administers.
    */
   protected function canManageGlobalProfile(UserInterface $targetUser, AccountInterface $account): bool {
     if ((int) $targetUser->id() === (int) $account->id()) {
@@ -974,13 +982,17 @@ class GroupMembersController extends ControllerBase {
     // Drupal marks powerful permissions explicitly. Unknown custom restricted
     // permissions therefore fail closed without extending a denylist for each
     // module, including impersonation and configuration import capabilities.
+    // A permission the caller holds as well is no escalation: the login of
+    // this account (OTP to its e-mail address) would give the caller nothing
+    // it does not already have.
     if ($this->permissionHandler === NULL) {
       return FALSE;
     }
     foreach ($this->permissionHandler->getPermissions() as $permission => $definition) {
       if (!empty($definition['restrict access'])
         && !in_array($permission, self::TENANT_PROFILE_COMPATIBLE_PERMISSIONS, TRUE)
-        && $targetUser->hasPermission($permission)) {
+        && $targetUser->hasPermission($permission)
+        && !$account->hasPermission($permission)) {
         return FALSE;
       }
     }
@@ -996,7 +1008,8 @@ class GroupMembersController extends ControllerBase {
       foreach ($role->getPermissions() as $permission) {
         if (str_starts_with($permission, 'administer ')
           && !in_array($permission, self::TENANT_PROFILE_COMPATIBLE_PERMISSIONS, TRUE)
-          && $targetUser->hasPermission($permission)) {
+          && $targetUser->hasPermission($permission)
+          && !$account->hasPermission($permission)) {
           return FALSE;
         }
       }
