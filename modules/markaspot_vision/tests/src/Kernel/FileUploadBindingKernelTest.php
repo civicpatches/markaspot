@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_vision\Kernel;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\Core\Field\Entity\BaseFieldOverride;
 use Drupal\Core\StreamWrapper\PrivateStream;
 use Drupal\Core\StreamWrapper\StreamWrapperInterface;
 use Drupal\field\Entity\FieldConfig;
@@ -151,6 +152,15 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
       $definition = $fields->getFieldDefinitions($type, $bundle)[$name];
       $this->assertArrayNotHasKey('FileUploadBinding', $definition->getConstraints(), "$type.$bundle.$name is not bound.");
     }
+
+    // An override of a read-only base field is skipped like the base field.
+    $media_base = $fields->getBaseFieldDefinitions('media');
+    BaseFieldOverride::createFromBaseFieldDefinition($media_base['thumbnail'], 'request_image')
+      ->setLabel('Request image thumbnail')
+      ->save();
+    $thumbnail = $fields->getFieldDefinitions('media', 'request_image')['thumbnail'];
+    $this->assertInstanceOf(BaseFieldOverride::class, $thumbnail);
+    $this->assertArrayNotHasKey('FileUploadBinding', $thumbnail->getConstraints(), 'The overridden thumbnail stays unbound.');
 
     // A config entity type is never bound, even if handed a field.
     $field = FieldConfig::loadByName('node', 'service_request', 'field_attachment');
