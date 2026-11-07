@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
+use Drupal\Component\Serialization\Yaml;
+use Drupal\Core\Extension\Dependency;
+use Drupal\Core\Extension\ExtensionDiscovery;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_vision\Plugin\Validation\Constraint\FileUploadBindingConstraint;
 use Drupal\media\Entity\Media;
@@ -30,24 +33,26 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
   use MediaTypeCreationTrait;
 
   /**
-   * Modules enabled first; setUp() resolves the rest from the info files.
+   * Core modules enabled first; setUp() resolves the rest from info files.
    *
    * @var list<string>
    */
-  protected static $modules = ['system', 'user'];
+  protected static $modules = ['system', 'user', 'field', 'file', 'image', 'media'];
 
   /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     parent::setUp();
-    $this->enableModules($this->withDependencies('markaspot_vision'));
     foreach (['user', 'file', 'media'] as $type) {
       $this->installEntitySchema($type);
     }
     $this->installSchema('file', ['file_usage']);
     $this->installSchema('user', ['users_data']);
+    // Before the chain: a role save lists every enabled module by name, and
+    // after enableModules() it could not resolve markaspot_nuxt in CI.
     $this->installConfig(['system', 'user', 'field', 'file', 'image', 'media']);
+    $this->enableModules($this->withDependencies('markaspot_vision'));
 
     User::create(['uid' => 0, 'name' => '', 'status' => 0])->save();
     User::create(['uid' => 1, 'name' => 'root', 'status' => 1])->save();
@@ -68,19 +73,29 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
    *
    * Resolved from the info files, so a new dependency of markaspot_vision or
    * of a module it depends on is enabled here too instead of failing the
-   * container build.
+   * container build. Sorted by name, like the module order of an install.
    *
    * @return list<string>
    *   The module names.
    */
   private function withDependencies(string $module): array {
-    $list = $this->container->get('extension.list.module')->getList();
-    $this->assertArrayHasKey($module, $list);
-    $modules = array_map('strval', array_keys($list[$module]->requires ?? []));
-    foreach ($modules as $dependency) {
-      $this->assertArrayHasKey($dependency, $list, "$module requires $dependency, which is not in the codebase.");
+    $available = (new ExtensionDiscovery($this->root))->scan('module');
+    $resolved = [];
+    $pending = [$module];
+    while ($pending !== []) {
+      $name = array_shift($pending);
+      if (isset($resolved[$name])) {
+        continue;
+      }
+      $this->assertArrayHasKey($name, $available, "Required module $name is not in the codebase.");
+      $resolved[$name] = TRUE;
+      $info = Yaml::decode((string) file_get_contents($available[$name]->getPathname()));
+      foreach ($info['dependencies'] ?? [] as $dependency) {
+        $pending[] = Dependency::createFromString($dependency)->getName();
+      }
     }
-    $modules[] = $module;
+    $modules = array_map('strval', array_keys($resolved));
+    sort($modules);
     return $modules;
   }
 
