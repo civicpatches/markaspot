@@ -47,6 +47,8 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
    */
   protected static $modules = [
     'system', 'user', 'field', 'file', 'image', 'media', 'node', 'text', 'filter',
+    // Records a file usage for every data-entity-uuid embed in formatted text.
+    'editor',
     'vision_upload_binding_test',
   ];
 
@@ -103,6 +105,8 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
     $this->createFileField('node', 'service_request', 'field_attachment', 'file', -1, 'public');
     $this->createFileField('node', 'service_request', 'field_request_image', 'image', 1, 'private');
     $this->createFileField('user', 'user', 'field_portrait', 'image', 1, 'public');
+    $this->createTextField('body', 'text_with_summary', 1);
+    $this->createTextField('field_notes', 'text_long', -1);
   }
 
   /**
@@ -394,6 +398,118 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
   }
 
   /**
+   * Formatted text fields carry the binding, plain string fields do not.
+   */
+  public function testFormattedTextFieldsAreBound(): void {
+    $definitions = $this->container->get('entity_field.manager')->getFieldDefinitions('node', 'service_request');
+    $this->assertArrayHasKey('FileUploadBinding', $definitions['body']->getConstraints());
+    $this->assertArrayHasKey('FileUploadBinding', $definitions['field_notes']->getConstraints());
+    $this->assertArrayNotHasKey('FileUploadBinding', $definitions['title']->getConstraints());
+  }
+
+  /**
+   * Another session cannot embed a fresh upload in formatted text.
+   *
+   * The editor module would record a usage for the embed on save, whatever
+   * the text format, and the citizen's request image would no longer be the
+   * file's only user. Through a validated save (JSON:API, Open311) the embed
+   * is refused, so no usage lands and the citizen still attaches the photo.
+   *
+   * @param string $field
+   *   The text field.
+   * @param list<array{value: string, summary?: string}> $items
+   *   The field items, with "%s" for the file UUID.
+   */
+  #[DataProvider('foreignEmbeds')]
+  public function testForeignEmbedsAreRefusedBeforeTheEditorRecordsThem(string $field, array $items): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+
+    $this->enter($this->request('other-token'));
+    $report = $this->textNode($field, $items, $file);
+    $this->assertGreaterThan(0, $this->bindingViolations($report, $field), 'The foreign embed is refused.');
+    // A validated save path stops here, so the editor module records nothing.
+    $this->assertSame([], $this->container->get('file.usage')->listUsage($file));
+
+    $this->enter($this->request('citizen-token'));
+    $request_image = $this->media($file);
+    $this->assertSame(0, $this->bindingViolations($request_image, 'field_media_image'), 'The citizen still attaches the photo.');
+    $request_image->save();
+    // The database lists usage counts as strings.
+    $this->assertEquals(['file' => ['media' => [(int) $request_image->id() => 1]]], $this->container->get('file.usage')->listUsage($file));
+  }
+
+  /**
+   * Embeds the editor module finds, in the forms it accepts them.
+   */
+  public static function foreignEmbeds(): iterable {
+    yield 'quoted span, plain text format' => [
+      'body',
+      [['value' => '<p>Pothole <span data-entity-type="file" data-entity-uuid="%s">here</span></p>']],
+    ];
+    yield 'unquoted and upper case' => [
+      'field_notes',
+      [['value' => '<IMG DATA-ENTITY-TYPE=file DATA-ENTITY-UUID=%s>']],
+    ];
+    yield 'summary of a text with summary' => [
+      'body',
+      [['value' => 'Pothole', 'summary' => '<img data-entity-type="file" data-entity-uuid="%s">']],
+    ];
+    // The editor module parses all items of a field as one string.
+    yield 'split over two items' => [
+      'field_notes',
+      [
+        ['value' => '<span data-entity-type="file" '],
+        ['value' => 'data-entity-uuid="%s">x</span>'],
+      ],
+    ];
+  }
+
+  /**
+   * Media administrators embed any file, and stored embeds stay untouched.
+   */
+  public function testBypassAndStoredEmbedsStillSave(): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+    $this->media($file)->save();
+
+    $admin = $this->createUser(['administer media']);
+    $this->enter($this->request('admin-token'), $admin);
+    $page = $this->textNode('body', [['value' => '<img data-entity-type="file" data-entity-uuid="%s">']], $file);
+    $this->assertSame(0, $this->bindingViolations($page, 'body'), 'administer media may embed a file in use.');
+    $page->save();
+    $usage = $this->container->get('file.usage')->listUsage($file);
+    $this->assertEquals([(int) $page->id() => 1], $usage['editor']['node'] ?? NULL, 'The editor module records the embed.');
+
+    // Anyone else may keep editing the node: the stored embed is not checked.
+    $this->enter($this->request('staff-token'), $this->createUser([]));
+    $page = Node::load($page->id());
+    $this->assertInstanceOf(NodeInterface::class, $page);
+    $page->setTitle('Renamed');
+    $this->assertSame(0, $this->bindingViolations($page, 'body'), 'An unchanged embed is not checked again.');
+    $page->save();
+
+    // A new embed next to the stored one is checked.
+    $this->enter($this->request('citizen-token'));
+    $foreign = $this->upload('public');
+    $this->enter($this->request('staff-token'), $this->createUser([]));
+    $page = Node::load($page->id());
+    $this->assertInstanceOf(NodeInterface::class, $page);
+    $page->set('body', [
+      'value' => $page->get('body')->value . sprintf('<img data-entity-type="file" data-entity-uuid="%s">', $foreign->uuid()),
+      'format' => 'plain_text',
+    ]);
+    $this->assertSame(1, $this->bindingViolations($page, 'body'), 'Only the new embed is refused.');
+
+    // Unknown UUIDs record no usage, so they are no claim either.
+    $page->set('body', [
+      'value' => '<img data-entity-type="file" data-entity-uuid="00000000-0000-4000-8000-000000000000">',
+      'format' => 'plain_text',
+    ]);
+    $this->assertSame(0, $this->bindingViolations($page, 'body'));
+  }
+
+  /**
    * Builds an unsaved request_image media for the file.
    */
   private function media(FileInterface $file): MediaInterface {
@@ -433,6 +549,46 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
       return [$entity, $this->catalogSourceField];
     }
     return [$this->node($sibling, $file), $sibling];
+  }
+
+  /**
+   * Builds an unsaved service request with formatted text embedding a file.
+   *
+   * @param string $field
+   *   The text field.
+   * @param list<array{value: string, summary?: string}> $items
+   *   The field items, with "%s" for the file UUID.
+   * @param \Drupal\file\FileInterface $file
+   *   The embedded file.
+   */
+  private function textNode(string $field, array $items, FileInterface $file): NodeInterface {
+    $values = [];
+    foreach ($items as $item) {
+      $values[] = array_map(static fn (string $text): string => sprintf($text, $file->uuid()), $item) + ['format' => 'plain_text'];
+    }
+    return Node::create([
+      'type' => 'service_request',
+      'title' => 'Report',
+      'status' => 0,
+      $field => $values,
+    ]);
+  }
+
+  /**
+   * Creates a formatted text field on service requests.
+   */
+  private function createTextField(string $name, string $type, int $cardinality): void {
+    FieldStorageConfig::create([
+      'field_name' => $name,
+      'entity_type' => 'node',
+      'type' => $type,
+      'cardinality' => $cardinality,
+    ])->save();
+    FieldConfig::create([
+      'field_name' => $name,
+      'entity_type' => 'node',
+      'bundle' => 'service_request',
+    ])->save();
   }
 
   /**
