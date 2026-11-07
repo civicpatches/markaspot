@@ -50,6 +50,7 @@ use Drupal\markaspot_vision\Service\MediaIntakeScreening;
 use Drupal\markaspot_vision\Service\OrphanUploadPurger;
 use Drupal\markaspot_open311\Exception\GeoreportException;
 use Drupal\paragraphs\Entity\Paragraph;
+use Drupal\taxonomy\TermInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -655,6 +656,15 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
 
       // Extract extended attributes, handling field_request_media specially.
       $extendedDrupal = $requestData['extended_attributes']['drupal'] ?? [];
+
+      // A submitted field_status must name a service status term. Checked
+      // before the empty-value filter below: an empty, zero or non-numeric
+      // value would otherwise reach the entity reference as target_id 0,
+      // which validation accepts as an empty reference, so the report would
+      // lose its status without an error.
+      if (array_key_exists('field_status', $extendedDrupal)) {
+        $extendedDrupal['field_status'] = $this->validateExtendedStatusTid($extendedDrupal['field_status']);
+      }
 
       // Check if field_request_media contains status/published updates.
       if (array_key_exists('field_request_media', $extendedDrupal)) {
@@ -4389,6 +4399,38 @@ class GeoreportProcessorService implements GeoreportProcessorServiceInterface {
       }
     }
     return FALSE;
+  }
+
+  /**
+   * Validates a status term ID submitted as an extended attribute.
+   *
+   * @param mixed $value
+   *   The raw extended_attributes[drupal][field_status] value.
+   *
+   * @return int
+   *   The ID of an existing service status term.
+   *
+   * @throws \Drupal\markaspot_open311\Exception\GeoreportException
+   *   If the value is empty, not a positive integer or no service status
+   *   term.
+   */
+  private function validateExtendedStatusTid(mixed $value): int {
+    $tid = 0;
+    if (is_int($value)) {
+      $tid = $value;
+    }
+    elseif (is_string($value) && ctype_digit(trim($value))) {
+      $tid = (int) trim($value);
+    }
+
+    if ($tid > 0) {
+      $term = $this->entityTypeManager->getStorage('taxonomy_term')->load($tid);
+      if ($term instanceof TermInterface && $term->bundle() === 'service_status') {
+        return $tid;
+      }
+    }
+
+    throw new GeoreportException('Status not valid: extended_attributes[drupal][field_status] must be the ID of a service status term.', 400);
   }
 
   /**

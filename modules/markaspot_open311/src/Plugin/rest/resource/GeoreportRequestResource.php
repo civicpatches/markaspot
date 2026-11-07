@@ -1121,8 +1121,10 @@ class GeoreportRequestResource extends ResourceBase {
     // field_status: map TID directly, bypassing field_permissions.
     // The post() access gate (access open311 advanced properties) is the
     // authoritative guard. field_permissions restricts UI editing but must
-    // not block privileged API writes.
-    if (isset($values['field_status']) && $node->hasField('field_status')) {
+    // not block privileged API writes. prepareNodeProperties() rejects
+    // invalid submitted IDs; a value that is no positive ID never reaches the
+    // field, where target_id 0 would pass validation as an empty reference.
+    if (isset($values['field_status']) && $node->hasField('field_status') && (int) $values['field_status'] > 0) {
       $node->set('field_status', ['target_id' => (int) $values['field_status']]);
     }
 
