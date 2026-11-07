@@ -62,6 +62,13 @@ class FeedbackController extends ControllerBase {
   public const FLOOD_WINDOW = 3600;
 
   /**
+   * A data-entity-type or data-entity-uuid attribute, with its value.
+   *
+   * HTML parsers lower-case attribute names, so the match ignores case.
+   */
+  private const FILE_EMBED_ATTRIBUTE = '/\s*\bdata-entity-(?:type|uuid)\b(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s"\'=<>`]+))?/i';
+
+  /**
    * Constructs the controller.
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
@@ -215,6 +222,12 @@ class FeedbackController extends ControllerBase {
       if (isset($data['feedback'])) {
         // Citizen feedback - single value field.
         $node->set('field_feedback', $data['feedback']);
+        // Saved without validation, so the upload binding never sees it.
+        foreach ($node->get('field_feedback') as $item) {
+          if (is_string($item->value)) {
+            $item->value = self::stripFileEmbeds($item->value);
+          }
+        }
 
         // Set the field_has_feedback flag to TRUE.
         if ($node->hasField('field_has_feedback')) {
@@ -364,6 +377,36 @@ class FeedbackController extends ControllerBase {
       return TRUE;
     }
     return $this->t('The email address does not match this service request.');
+  }
+
+  /**
+   * Removes the attributes that make an element a file embed.
+   *
+   * Field_feedback is a formatted text field: on every save the editor module
+   * records a file usage, and makes a temporary file permanent, for each
+   * element with data-entity-type="file" and a data-entity-uuid attribute in
+   * its raw value, whatever the text format. The feedback is saved without
+   * validation, so the upload binding of markaspot_vision never checks it.
+   * Text without these attribute names is returned unchanged. Removing a
+   * match can join the text around it into a new one, so the removal repeats
+   * until nothing matches.
+   *
+   * @param string $text
+   *   The citizen's feedback.
+   *
+   * @return string
+   *   The feedback without data-entity-type and data-entity-uuid attributes.
+   */
+  public static function stripFileEmbeds(string $text): string {
+    if (stripos($text, 'data-entity-') === FALSE) {
+      return $text;
+    }
+    do {
+      $previous = $text;
+      $text = preg_replace(self::FILE_EMBED_ATTRIBUTE, '', $text)
+        ?? str_ireplace(['data-entity-uuid', 'data-entity-type'], '', $previous);
+    } while ($text !== $previous);
+    return $text;
   }
 
   /**
