@@ -1124,7 +1124,9 @@ class GeoreportRequestResource extends ResourceBase {
     // not block privileged API writes. prepareNodeProperties() rejects
     // invalid submitted IDs; a value that is no positive ID never reaches the
     // field, where target_id 0 would pass validation as an empty reference.
+    $statusChanged = FALSE;
     if (isset($values['field_status']) && $node->hasField('field_status') && (int) $values['field_status'] > 0) {
+      $statusChanged = (int) $node->get('field_status')->target_id !== (int) $values['field_status'];
       $node->set('field_status', ['target_id' => (int) $values['field_status']]);
     }
 
@@ -1139,17 +1141,23 @@ class GeoreportRequestResource extends ResourceBase {
         // Resolve the effective status TID: prefer the newly set status, fall
         // back to the node's current status if no status change was submitted.
         $status = $values['field_status'] ?? $node->get('field_status')->target_id;
-        $paragraph = $this->georeportProcessor->createStatusNoteParagraph([
-          'status_term_id' => $status,
-          'note' => $values['field_status_notes'],
-        ], $node->language()->getId());
 
-        $current = $node->get('field_status_notes')->getValue();
-        $current[] = [
-          'target_id' => $paragraph->id(),
-          'target_revision_id' => $paragraph->getRevisionId(),
-        ];
-        $node->set('field_status_notes', $current);
+        // Clients that resend an unchanged note on every sync must not grow
+        // the note list without bound: skip a note that repeats the last one.
+        // A status change always gets its own note.
+        if ($statusChanged || !$this->repeatsLastStatusNote($node, (int) $status, $values['field_status_notes'])) {
+          $paragraph = $this->georeportProcessor->createStatusNoteParagraph([
+            'status_term_id' => $status,
+            'note' => $values['field_status_notes'],
+          ], $node->language()->getId());
+
+          $current = $node->get('field_status_notes')->getValue();
+          $current[] = [
+            'target_id' => $paragraph->id(),
+            'target_revision_id' => $paragraph->getRevisionId(),
+          ];
+          $node->set('field_status_notes', $current);
+        }
       }
     }
 
@@ -1165,6 +1173,66 @@ class GeoreportRequestResource extends ResourceBase {
       // the same author the revision would otherwise carry.
       $node->setRevisionUserId((int) $this->currentUser->id());
     }
+  }
+
+  /**
+   * Whether a submitted note repeats the last status note of the report.
+   *
+   * Loads only the last referenced paragraph, so reports with a long note
+   * history stay cheap to update.
+   *
+   * @param \Drupal\Core\Entity\ContentEntityInterface $node
+   *   The service request, before the new note is appended.
+   * @param int $statusTid
+   *   The status the new note would carry.
+   * @param mixed $note
+   *   The submitted note text.
+   *
+   * @return bool
+   *   TRUE when the last note has the same status term and, compared as plain
+   *   text with collapsed whitespace, the same text.
+   */
+  protected function repeatsLastStatusNote(ContentEntityInterface $node, int $statusTid, mixed $note): bool {
+    if (!is_scalar($note)) {
+      return FALSE;
+    }
+
+    $last = $node->get('field_status_notes')->last();
+    $paragraph = $last?->entity;
+    if (!$paragraph instanceof ContentEntityInterface
+      || !$paragraph->hasField('field_status_term')
+      || !$paragraph->hasField('field_status_note')) {
+      return FALSE;
+    }
+
+    $langcode = $node->language()->getId();
+    if ($paragraph->hasTranslation($langcode)) {
+      $paragraph = $paragraph->getTranslation($langcode);
+    }
+
+    if ((int) $paragraph->get('field_status_term')->target_id !== $statusTid) {
+      return FALSE;
+    }
+
+    return static::normalizeStatusNoteText((string) $paragraph->get('field_status_note')->value)
+      === static::normalizeStatusNoteText((string) $note);
+  }
+
+  /**
+   * Reduces a status note to its plain text for comparison.
+   *
+   * Markup, HTML entities and whitespace differences do not make a note
+   * different.
+   *
+   * @param string $text
+   *   The stored or submitted note text.
+   *
+   * @return string
+   *   The plain text with collapsed whitespace.
+   */
+  protected static function normalizeStatusNoteText(string $text): string {
+    $plain = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    return trim(preg_replace('/[\s\x{00A0}]+/u', ' ', $plain) ?? $plain);
   }
 
   /**
