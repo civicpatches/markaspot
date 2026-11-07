@@ -2198,6 +2198,134 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
   }
 
   /**
+   * Values of extended field_status that name no status term.
+   */
+  public static function invalidExtendedStatusValues(): array {
+    return [
+      'empty string' => [''],
+      'whitespace' => ['  '],
+      'non-numeric' => ['closed'],
+      'numeric prefix' => ['6abc'],
+      'zero' => [0],
+      'zero string' => ['0'],
+      'negative' => [-6],
+      'negative string' => ['-6'],
+      'decimal string' => ['6.0'],
+      'float' => [6.0],
+      'null' => [NULL],
+      'boolean' => [TRUE],
+      'empty array' => [[]],
+      'reference array' => [['target_id' => 6]],
+    ];
+  }
+
+  /**
+   * An invalid extended field_status is rejected instead of clearing status.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  #[DataProvider('invalidExtendedStatusValues')]
+  public function testUpdateRejectsInvalidExtendedStatus(mixed $status): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $this->termStorage->expects($this->never())->method('load');
+
+    $this->expectException(GeoreportException::class);
+    $this->expectExceptionCode(400);
+    $this->expectExceptionMessage('Status not valid');
+
+    $this->processor->prepareNodeProperties([
+      'extended_attributes' => [
+        'drupal' => [
+          'field_status' => $status,
+          'field_status_notes' => 'Status note',
+        ],
+      ],
+    ], 'update');
+  }
+
+  /**
+   * An extended field_status ID without a term is rejected.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  public function testUpdateRejectsUnknownExtendedStatusTid(): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $this->termStorage->method('load')->with(999)->willReturn(NULL);
+
+    $this->expectException(GeoreportException::class);
+    $this->expectExceptionCode(400);
+    $this->expectExceptionMessage('Status not valid');
+
+    $this->processor->prepareNodeProperties([
+      'extended_attributes' => ['drupal' => ['field_status' => '999']],
+    ], 'update');
+  }
+
+  /**
+   * An extended field_status naming a term of another vocabulary is rejected.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  public function testUpdateRejectsExtendedStatusOfOtherVocabulary(): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $category = $this->createMock(TermInterface::class);
+    $category->method('bundle')->willReturn('service_category');
+    $this->termStorage->method('load')->with(12)->willReturn($category);
+
+    $this->expectException(GeoreportException::class);
+    $this->expectExceptionCode(400);
+    $this->expectExceptionMessage('Status not valid');
+
+    $this->processor->prepareNodeProperties([
+      'extended_attributes' => ['drupal' => ['field_status' => 12]],
+    ], 'update');
+  }
+
+  /**
+   * Valid status term IDs as JSON number or form string.
+   */
+  public static function validExtendedStatusValues(): array {
+    return [
+      'integer' => [6],
+      'string' => ['6'],
+      'padded string' => [' 6 '],
+    ];
+  }
+
+  /**
+   * A service status term ID passes as an integer field value.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  #[DataProvider('validExtendedStatusValues')]
+  public function testUpdateAcceptsValidExtendedStatusTid(mixed $status): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $term = $this->createMock(TermInterface::class);
+    $term->method('bundle')->willReturn('service_status');
+    $this->termStorage->expects($this->once())->method('load')->with(6)->willReturn($term);
+
+    $values = $this->processor->prepareNodeProperties([
+      'extended_attributes' => [
+        'drupal' => [
+          'field_status' => $status,
+          'field_status_notes' => 'Status note',
+        ],
+      ],
+    ], 'update');
+
+    $this->assertSame(6, $values['field_status']);
+    $this->assertSame('Status note', $values['field_status_notes']);
+  }
+
+  /**
    * @covers ::createNodeQuery
    */
   public function testCreateNodeQueryAnonymousPublishedOnly(): void {
