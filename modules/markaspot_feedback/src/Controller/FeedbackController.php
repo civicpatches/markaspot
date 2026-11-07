@@ -387,9 +387,9 @@ class FeedbackController extends ControllerBase {
    * element with data-entity-type="file" and a data-entity-uuid attribute in
    * its raw value, whatever the text format. The feedback is saved without
    * validation, so the upload binding of markaspot_vision never checks it.
-   * Text without these attribute names is returned unchanged. Removing a
-   * match can join the text around it into a new one, so the removal repeats
-   * until nothing matches.
+   * Text without these attribute names is returned unchanged. One pass
+   * replaces every match with a space, so the text around a removed attribute
+   * cannot join into a new one.
    *
    * @param string $text
    *   The citizen's feedback.
