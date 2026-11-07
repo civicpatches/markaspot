@@ -116,3 +116,54 @@ publish while the intake hold is still pending; the publication guard correctly
 keeps the image hidden. The worker subsequently reconciles the screening
 checkpoint and releases eligible media. The warning alone does not mean the
 analysis failed and does not justify bypassing the intake hold.
+
+## Upload binding
+
+The citizen frontend uploads a photo
+(`POST /jsonapi/media/request_image/field_media_image`) and creates its
+`request_image` media in a second request. The file is public on `public://`
+tenants and its UUID can be listed, so another client could reference the
+fresh upload first. Any other user of the file stops the blur of the citizen's
+photo, because blur only runs for the file's oldest media user and never for a
+file a node references directly. The upload binding closes that gap.
+
+- **What is recorded.** Every new file stores its upload context for 6 hours
+  in the expirable key/value collection `markaspot_vision_media_analysis`
+  (key `file:<fid>`): an HMAC of the `X-CSRF-Token` header, otherwise of the
+  session ID. Requests without either record nothing. Deleting the file
+  removes the record.
+- **What is checked.** Every file and image field of media (all bundles) and
+  nodes (all bundles) carries the `FileUploadBinding` constraint. A newly
+  referenced file is accepted only if it is not in use yet and it was created
+  in the same request, or the recorded context matches the current request,
+  or the current user owns the file and the request carries that user's real
+  cookie session. References the stored entity already holds are not checked
+  again, so updates that resend the whole attachment list keep working.
+- **Who bypasses.** Only accounts with `administer media`. Staff permissions
+  such as `edit any request_image media` or `bypass node access` do not
+  bypass, because staff roles hold them globally, also on stacks with several
+  jurisdictions. Staff uploads pass through the same token or the same cookie
+  session instead.
+- **Server-side paths** pass without a record: the Open311 `media_url`
+  import creates the file and its media in one request, tenant demo content
+  validates unsaved files, and the inbound mail promoter saves without
+  validation.
+
+A refusal is a JSON:API 422 on the file field with the message "This file
+cannot be attached. Please upload it again." It does not say whether the file
+exists, is in use or belongs to another upload. Expected cases:
+
+- A media create whose upload sent an empty `X-CSRF-Token` and had no session
+  cookie, for example because `/session/token` failed when the page loaded.
+- A JSON:API client authenticated by API key only (no session, no CSRF token)
+  that uploads in one request and references the file in another. A shared
+  API-key account is never proof of one upload.
+- A repeated create for the same file after a lost response: the first create
+  succeeded and the file is in use.
+- The deploy window: a file uploaded before the deploy has no record, so its
+  media create after the deploy is refused and the citizen uploads again.
+  Uploads older than 6 hours are refused the same way.
+
+There is no environment variable, configuration or update hook for the
+binding. After a deploy, rebuild caches (`drush deploy` does) so the field
+definitions carry the constraint.
