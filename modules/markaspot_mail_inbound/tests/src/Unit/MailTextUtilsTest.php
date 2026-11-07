@@ -141,11 +141,17 @@ class MailTextUtilsTest extends UnitTestCase {
     $plain = "Grüße & Dank.\n<b>Laterne</b> <img src=\"x.png\"> data-entity";
     $this->assertSame($plain, MailTextUtils::stripFileEmbeds($plain));
 
-    $this->assertSame('Photo <img> here', MailTextUtils::stripFileEmbeds("Photo <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> here"));
-    $this->assertSame("<img src='a.png' alt='x'>", MailTextUtils::stripFileEmbeds("<img src='a.png' DATA-ENTITY-UUID='$uuid' Data-Entity-Type=file alt='x'>"));
-    $this->assertSame('<img//>', MailTextUtils::stripFileEmbeds("<img/data-entity-type=\"file\"/data-entity-uuid=\"$uuid\">"));
-    // Removing one pass of matches would join the rest into a new embed.
-    $this->assertSame('<img>', MailTextUtils::stripFileEmbeds("<img data-entity-t data-entity-uuid=\"1\"ype=\"file\" data-entity-u data-entity-type=\"2\"uid=\"$uuid\">"));
+    $this->assertSame('Photo <img  > here', MailTextUtils::stripFileEmbeds("Photo <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> here"));
+    $this->assertSame("<img src='a.png'   alt='x'>", MailTextUtils::stripFileEmbeds("<img src='a.png' DATA-ENTITY-UUID='$uuid' Data-Entity-Type=file alt='x'>"));
+    $this->assertSame('<img/ / >', MailTextUtils::stripFileEmbeds("<img/data-entity-type=\"file\"/data-entity-uuid=\"$uuid\">"));
+    // Each match becomes a space, so the rest cannot join into a new embed.
+    $this->assertSame("<img data-entity-t ype=\"file\" data-entity-u uid=\"$uuid\">", MailTextUtils::stripFileEmbeds("<img data-entity-t data-entity-uuid=\"1\"ype=\"file\" data-entity-u data-entity-type=\"2\"uid=\"$uuid\">"));
+    // A deeply nested join payload is stripped in one pass.
+    $payload = ' data-entity-uuid="' . $uuid . '"';
+    for ($level = 0; $level < 2000; $level++) {
+      $payload = ' data-entity-t' . $payload . 'ype="file"';
+    }
+    $this->assertStringNotContainsString('data-entity-type="file"', MailTextUtils::stripFileEmbeds('<img' . $payload . '>'));
   }
 
   /**

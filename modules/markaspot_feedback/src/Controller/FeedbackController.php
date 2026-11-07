@@ -401,12 +401,11 @@ class FeedbackController extends ControllerBase {
     if (stripos($text, 'data-entity-') === FALSE) {
       return $text;
     }
-    do {
-      $previous = $text;
-      $text = preg_replace(self::FILE_EMBED_ATTRIBUTE, '', $text)
-        ?? str_ireplace(['data-entity-uuid', 'data-entity-type'], '', $previous);
-    } while ($text !== $previous);
-    return $text;
+    // One pass. Each match becomes a space, so the fragments around a removed
+    // attribute cannot join into a new one, and a nested payload cannot force
+    // a quadratic number of passes.
+    return preg_replace(self::FILE_EMBED_ATTRIBUTE, ' ', $text)
+      ?? str_ireplace(['data-entity-uuid', 'data-entity-type'], ' ', $text);
   }
 
   /**

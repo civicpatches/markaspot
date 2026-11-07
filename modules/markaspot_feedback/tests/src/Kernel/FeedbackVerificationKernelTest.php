@@ -181,7 +181,7 @@ final class FeedbackVerificationKernelTest extends KernelTestBase {
 
     $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
     $saved = Node::load($report->id());
-    $this->assertSame('Still broken. <img> See photo.', $saved->get('field_feedback')->value);
+    $this->assertSame('Still broken. <img  > See photo.', $saved->get('field_feedback')->value);
     $this->assertSame([], $this->container->get('file.usage')->listUsage(File::load($upload->id())));
     $this->assertTrue(File::load($upload->id())->isTemporary(), 'The upload stays temporary.');
   }

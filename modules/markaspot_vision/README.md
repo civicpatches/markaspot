@@ -158,6 +158,8 @@ closes that gap.
   and `>` escaped, and the feedback endpoint and the inbound mail pipeline
   drop `data-entity-type` and `data-entity-uuid` attributes from the citizen's
   feedback and mail text, so none of them can make a fresh upload permanent.
+  Staff replies appended to an inbound mail body are staff-authored and are
+  not stripped.
 - **Who bypasses.** Only accounts with `administer media`. Staff permissions
   such as `edit any request_image media` or `bypass node access` do not
   bypass, because staff roles hold them globally, also on stacks with several

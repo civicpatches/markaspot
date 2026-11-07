@@ -327,7 +327,7 @@ class InboundMailStagingKernelTest extends KernelTestBase {
     $uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
     $first = $this->ingest($this->makeRaw('embed-001@example.org', body: "Broken light. <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> Near the church."));
     $this->assertSame(IngestResult::STAGED, $first->status);
-    $this->assertSame('Broken light. <img> Near the church.', $this->loadMail((int) $first->entityId)->getBody());
+    $this->assertSame('Broken light. <img  > Near the church.', $this->loadMail((int) $first->entityId)->getBody());
 
     // An HTML-only reply: the text conversion decodes the escaped element.
     $reply = "From: Citizen <citizen@example.org>\r\n"
@@ -344,7 +344,7 @@ class InboundMailStagingKernelTest extends KernelTestBase {
     $this->assertSame(IngestResult::REPLY, $result->status);
 
     $body = $this->loadMail((int) $first->entityId)->getBody();
-    $this->assertStringContainsString('Photo: <img> still dark.', $body);
+    $this->assertStringContainsString('Photo: <img  > still dark.', $body);
     $this->assertStringNotContainsStringIgnoringCase('data-entity', $body);
   }
 
