@@ -279,4 +279,27 @@ class MediaAnalysisAccessGuardTest extends UnitTestCase {
     $this->assertFalse($guard->canClaimFile($this->createFile(9, 42)));
   }
 
+  /**
+   * Only a CSRF header or a session cookie gives a request an upload context.
+   */
+  public function testUploadContextNeedsTokenOrSessionCookie(): void {
+    $stack = new RequestStack();
+    $guard = $this->createGuard($this->createMemoryStore(), TRUE, 0, $stack);
+    $this->assertFalse($guard->hasUploadContext(), 'No request, no context.');
+
+    $this->assertTrue($guard->hasUploadContext($this->createRequest('token')));
+    $this->assertFalse($guard->hasUploadContext($this->createRequest('  ')), 'An empty token is no context.');
+
+    $session = $this->createMock(SessionInterface::class);
+    $session->method('getName')->willReturn('SSESSabc');
+    $session->method('getId')->willReturn('lazy-session-id');
+    $request = Request::create('/jsonapi/media/request_image', 'POST');
+    $request->setSession($session);
+    $this->assertFalse($guard->hasUploadContext($request), 'A session the client did not send is no context.');
+
+    $request->cookies->set('SSESSabc', 'session-id');
+    $stack->push($request);
+    $this->assertTrue($guard->hasUploadContext(), 'A session cookie is.');
+  }
+
 }

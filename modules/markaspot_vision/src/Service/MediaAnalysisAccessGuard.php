@@ -145,6 +145,34 @@ class MediaAnalysisAccessGuard {
   }
 
   /**
+   * Whether a request carries anything a later request can be bound to.
+   *
+   * That is a non-empty X-CSRF-Token header or a session cookie. Without
+   * either, no recorded upload can match the request and no cookie session
+   * can prove ownership, so only files created in the same request can be
+   * claimed. Callers use it to tell the client what is missing; it is no
+   * access decision.
+   */
+  public function hasUploadContext(?Request $request = NULL): bool {
+    $request ??= $this->requestStack->getCurrentRequest();
+    if (!$request) {
+      return FALSE;
+    }
+    if (trim((string) $request->headers->get('X-CSRF-Token', '')) !== '') {
+      return TRUE;
+    }
+    if (!$request->hasSession()) {
+      return FALSE;
+    }
+    try {
+      return $request->cookies->has($request->getSession()->getName());
+    }
+    catch (\Throwable) {
+      return FALSE;
+    }
+  }
+
+  /**
    * Drops the recorded upload context of a deleted file.
    */
   public function forgetFile(FileInterface $file): void {
