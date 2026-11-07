@@ -78,8 +78,8 @@ class MediaAnalysisAccessGuard {
    * The file is remembered for the rest of this PHP request, so server-side
    * paths that create the file and its media together (Open311 media_url
    * import, seeding) never need a fingerprint. Client uploads also store the
-   * fingerprint, so only the same upload session can later attach the file
-   * to a new request_image media.
+   * fingerprint, so only the same upload session can later reference the
+   * file from a media or node file field.
    */
   public function recordFileUpload(FileInterface $file, ?Request $request = NULL): void {
     $fid = (int) $file->id();
@@ -107,7 +107,7 @@ class MediaAnalysisAccessGuard {
   }
 
   /**
-   * Checks whether the current request may attach a file to a new media.
+   * Checks whether the current request may newly reference a file.
    *
    * Allowed are files created in this PHP request, files whose recorded
    * upload fingerprint matches this request, and files the current user owns

@@ -8,16 +8,26 @@ use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Field\FieldConfigInterface;
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\file\FileInterface;
+use Drupal\file\Plugin\Field\FieldType\FileItem;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 
 /**
- * Binds request image uploads to the session that uploaded the file.
+ * Binds file references to the session that uploaded the file.
  *
- * Every file insert records its upload context, and the source field of
- * request_image media carries the RequestImageUploadBinding constraint that
+ * Every file insert records its upload context, and every file and image
+ * field of media and nodes carries the FileUploadBinding constraint that
  * checks it, so JSON:API answers a foreign or reused file with a 422.
  */
-final class RequestImageUploadBindingHooks {
+final class FileUploadBindingHooks {
+
+  /**
+   * Entity types whose file fields only take files of the current upload.
+   *
+   * Anonymous clients can create media of every bundle and service request
+   * nodes, and each new reference to a fresh upload changes who may blur it.
+   * Group branding files are only written by their own upload controller.
+   */
+  public const BOUND_ENTITY_TYPES = ['media', 'node'];
 
   /**
    * Constructs the hooks.
@@ -43,7 +53,10 @@ final class RequestImageUploadBindingHooks {
   }
 
   /**
-   * Attaches the upload binding to the request image source field.
+   * Attaches the upload binding to every file and image field.
+   *
+   * The field type decides, not the field name, so a media type whose source
+   * field has another name is covered as well.
    *
    * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
    *   The bundle field definitions.
@@ -54,12 +67,13 @@ final class RequestImageUploadBindingHooks {
    */
   #[Hook('entity_bundle_field_info_alter')]
   public function entityBundleFieldInfoAlter(array &$fields, EntityTypeInterface $entity_type, string $bundle): void {
-    if ($entity_type->id() !== 'media' || $bundle !== 'request_image') {
+    if (!in_array($entity_type->id(), self::BOUND_ENTITY_TYPES, TRUE)) {
       return;
     }
-    $field = $fields['field_media_image'] ?? NULL;
-    if ($field instanceof FieldConfigInterface) {
-      $field->addConstraint('RequestImageUploadBinding', []);
+    foreach ($fields as $field) {
+      if ($field instanceof FieldConfigInterface && is_a($field->getItemDefinition()->getClass(), FileItem::class, TRUE)) {
+        $field->addConstraint('FileUploadBinding', []);
+      }
     }
   }
 
