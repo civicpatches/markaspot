@@ -202,6 +202,17 @@ function markaspot_vision_entity_bundle_field_info_alter(array &$fields, EntityT
 }
 
 /**
+ * Implements hook_entity_base_field_info_alter().
+ *
+ * Drupal 10 bridge; Drupal 11 runs
+ * FileUploadBindingHooks::entityBaseFieldInfoAlter() and skips this wrapper.
+ */
+#[LegacyHook]
+function markaspot_vision_entity_base_field_info_alter(array &$fields, EntityTypeInterface $entity_type): void {
+  \Drupal::service(FileUploadBindingHooks::class)->entityBaseFieldInfoAlter($fields, $entity_type);
+}
+
+/**
  * Implements hook_node_insert().
  *
  * Publishes safe media on node creation. The hazard level is set before the

@@ -102,7 +102,6 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
     NodeType::create(['type' => 'service_request', 'name' => 'Service request'])->save();
     $this->createFileField('node', 'service_request', 'field_attachment', 'file', -1, 'public');
     $this->createFileField('node', 'service_request', 'field_request_image', 'image', 1, 'private');
-    // Users are no anonymous-writable host of fresh uploads.
     $this->createFileField('user', 'user', 'field_portrait', 'image', 1, 'public');
   }
 
@@ -116,15 +115,17 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
   }
 
   /**
-   * Every file and image field of media and nodes carries the binding.
+   * Every writable file and image field of a content entity is bound.
    */
-  public function testEveryFileFieldOfMediaAndNodesIsBound(): void {
+  public function testEveryFileFieldOfContentEntitiesIsBound(): void {
     $fields = $this->container->get('entity_field.manager');
     $bound = [
       ['media', 'request_image', 'field_media_image'],
       ['media', 'catalog_image', $this->catalogSourceField],
       ['node', 'service_request', 'field_attachment'],
       ['node', 'service_request', 'field_request_image'],
+      // No list of known hosts: any other content entity type is bound too.
+      ['user', 'user', 'field_portrait'],
     ];
     $this->assertNotSame('field_media_image', $this->catalogSourceField);
     foreach ($bound as [$type, $bundle, $name]) {
@@ -132,8 +133,47 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
       $this->assertNotNull($definition, "$type.$bundle.$name exists.");
       $this->assertArrayHasKey('FileUploadBinding', $definition->getConstraints(), "$type.$bundle.$name is bound.");
     }
-    $portrait = $fields->getFieldDefinitions('user', 'user')['field_portrait'];
-    $this->assertArrayNotHasKey('FileUploadBinding', $portrait->getConstraints());
+
+    $unbound = [
+      // Read-only: media derive the thumbnail from their source file.
+      ['media', 'request_image', 'thumbnail'],
+      ['node', 'service_request', 'title'],
+      ['user', 'user', 'name'],
+    ];
+    foreach ($unbound as [$type, $bundle, $name]) {
+      $definition = $fields->getFieldDefinitions($type, $bundle)[$name];
+      $this->assertArrayNotHasKey('FileUploadBinding', $definition->getConstraints(), "$type.$bundle.$name is not bound.");
+    }
+
+    // A config entity type is never bound, even if handed a field.
+    $field = FieldConfig::loadByName('node', 'service_request', 'field_attachment');
+    $this->assertInstanceOf(FieldConfig::class, $field);
+    $field->setConstraints([]);
+    $config_fields = ['field_attachment' => $field];
+    $this->container->get(FileUploadBindingHooks::class)->entityBundleFieldInfoAlter(
+      $config_fields,
+      $this->container->get('entity_type.manager')->getDefinition('node_type'),
+      'service_request',
+    );
+    $this->assertArrayNotHasKey('FileUploadBinding', $field->getConstraints());
+  }
+
+  /**
+   * A fresh upload cannot be claimed through another content entity type.
+   */
+  public function testOtherContentEntityTypesCannotClaimFreshUploads(): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+
+    $portrait = ['target_id' => $file->id(), 'alt' => 'Portrait'];
+
+    $this->enter($this->request('other-token'));
+    $account = User::create(['name' => 'portrait', 'field_portrait' => $portrait]);
+    $this->assertSame(1, $this->bindingViolations($account, 'field_portrait'), 'A user picture cannot claim a foreign upload.');
+
+    $this->enter($this->request('citizen-token'));
+    $account = User::create(['name' => 'portrait', 'field_portrait' => $portrait]);
+    $this->assertSame(0, $this->bindingViolations($account, 'field_portrait'), 'The uploading session may use its own file.');
   }
 
   /**

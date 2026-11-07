@@ -92,7 +92,7 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
    */
   public function testHooksAndConstraintAreDiscovered(): void {
     $modules = $this->container->get('module_handler');
-    foreach (['file_insert', 'file_delete', 'entity_bundle_field_info_alter'] as $hook) {
+    foreach (['file_insert', 'file_delete', 'entity_bundle_field_info_alter', 'entity_base_field_info_alter'] as $hook) {
       $this->assertTrue($modules->hasImplementations($hook, 'markaspot_vision'), "markaspot_vision implements hook_$hook.");
     }
 

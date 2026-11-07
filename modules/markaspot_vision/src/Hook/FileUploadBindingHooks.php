@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_vision\Hook;
 
+use Drupal\Core\Entity\ContentEntityTypeInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\Core\Field\BaseFieldDefinition;
 use Drupal\Core\Field\FieldConfigInterface;
+use Drupal\Core\Field\FieldDefinitionInterface;
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\file\FileInterface;
 use Drupal\file\Plugin\Field\FieldType\FileItem;
@@ -15,19 +18,11 @@ use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
  * Binds file references to the session that uploaded the file.
  *
  * Every file insert records its upload context, and every file and image
- * field of media and nodes carries the FileUploadBinding constraint that
- * checks it, so JSON:API answers a foreign or reused file with a 422.
+ * field of every content entity type carries the FileUploadBinding
+ * constraint that checks it, so JSON:API answers a foreign or reused file
+ * with a 422.
  */
 final class FileUploadBindingHooks {
-
-  /**
-   * Entity types whose file fields only take files of the current upload.
-   *
-   * Anonymous clients can create media of every bundle and service request
-   * nodes, and each new reference to a fresh upload changes who may blur it.
-   * Group branding files are only written by their own upload controller.
-   */
-  public const BOUND_ENTITY_TYPES = ['media', 'node'];
 
   /**
    * Constructs the hooks.
@@ -53,10 +48,18 @@ final class FileUploadBindingHooks {
   }
 
   /**
-   * Attaches the upload binding to every file and image field.
+   * Attaches the upload binding to every configurable file and image field.
+   *
+   * Every content entity type, not a list of known hosts: a tenant overlay
+   * or a later module may expose another entity type with a file field to
+   * anonymous clients, and each new reference to a fresh upload changes who
+   * may blur it. Hosts written by their own upload controller (group
+   * branding) or by the owning user pass through the same-request and
+   * owner-session paths of the binding.
    *
    * The field type decides, not the field name, so a media type whose source
-   * field has another name is covered as well.
+   * field has another name is covered as well. Base field overrides arrive
+   * here too, because they do not inherit the base field's constraints.
    *
    * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
    *   The bundle field definitions.
@@ -67,14 +70,47 @@ final class FileUploadBindingHooks {
    */
   #[Hook('entity_bundle_field_info_alter')]
   public function entityBundleFieldInfoAlter(array &$fields, EntityTypeInterface $entity_type, string $bundle): void {
-    if (!in_array($entity_type->id(), self::BOUND_ENTITY_TYPES, TRUE)) {
+    if (!$entity_type instanceof ContentEntityTypeInterface) {
       return;
     }
     foreach ($fields as $field) {
-      if ($field instanceof FieldConfigInterface && is_a($field->getItemDefinition()->getClass(), FileItem::class, TRUE)) {
+      if ($field instanceof FieldConfigInterface && self::isBound($field)) {
         $field->addConstraint('FileUploadBinding', []);
       }
     }
+  }
+
+  /**
+   * Attaches the upload binding to writable file and image base fields.
+   *
+   * Read-only and computed base fields are skipped: clients cannot set them,
+   * and media keep their thumbnail, which is the source file itself, there.
+   *
+   * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
+   *   The base field definitions.
+   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
+   *   The entity type.
+   */
+  #[Hook('entity_base_field_info_alter')]
+  public function entityBaseFieldInfoAlter(array &$fields, EntityTypeInterface $entity_type): void {
+    if (!$entity_type instanceof ContentEntityTypeInterface) {
+      return;
+    }
+    foreach ($fields as $field) {
+      if ($field instanceof BaseFieldDefinition
+        && !$field->isReadOnly()
+        && !$field->isComputed()
+        && self::isBound($field)) {
+        $field->addConstraint('FileUploadBinding', []);
+      }
+    }
+  }
+
+  /**
+   * Whether a field references files the binding has to check.
+   */
+  public static function isBound(FieldDefinitionInterface $field): bool {
+    return is_a($field->getItemDefinition()->getClass(), FileItem::class, TRUE);
   }
 
 }
