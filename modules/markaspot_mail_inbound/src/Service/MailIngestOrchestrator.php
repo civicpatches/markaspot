@@ -303,12 +303,16 @@ class MailIngestOrchestrator {
   }
 
   /**
-   * Extracts the plain-text body, length-capped.
+   * Extracts the plain-text body, length-capped and without file embeds.
+   *
+   * Used for the staged body, every reply appended to it and the reply
+   * remark on a promoted request.
    */
   protected function extractBody(InboundMessage $message, array $settings): string {
     $body = $message->textBody !== ''
       ? MailTextUtils::normalizeWhitespace($message->textBody)
       : MailTextUtils::htmlToText($message->htmlBody);
+    $body = MailTextUtils::stripFileEmbeds($body);
     if (mb_strlen($body) > $settings['max_body_length']) {
       $body = mb_substr($body, 0, $settings['max_body_length']);
     }

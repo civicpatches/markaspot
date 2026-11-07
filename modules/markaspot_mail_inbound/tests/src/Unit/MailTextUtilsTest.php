@@ -133,6 +133,22 @@ class MailTextUtilsTest extends UnitTestCase {
   }
 
   /**
+   * @covers ::stripFileEmbeds
+   */
+  public function testStripFileEmbeds(): void {
+    $uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    // A body without the attribute names stays byte for byte.
+    $plain = "Grüße & Dank.\n<b>Laterne</b> <img src=\"x.png\"> data-entity";
+    $this->assertSame($plain, MailTextUtils::stripFileEmbeds($plain));
+
+    $this->assertSame('Photo <img> here', MailTextUtils::stripFileEmbeds("Photo <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> here"));
+    $this->assertSame("<img src='a.png' alt='x'>", MailTextUtils::stripFileEmbeds("<img src='a.png' DATA-ENTITY-UUID='$uuid' Data-Entity-Type=file alt='x'>"));
+    $this->assertSame('<img//>', MailTextUtils::stripFileEmbeds("<img/data-entity-type=\"file\"/data-entity-uuid=\"$uuid\">"));
+    // Removing one pass of matches would join the rest into a new embed.
+    $this->assertSame('<img>', MailTextUtils::stripFileEmbeds("<img data-entity-t data-entity-uuid=\"1\"ype=\"file\" data-entity-u data-entity-type=\"2\"uid=\"$uuid\">"));
+  }
+
+  /**
    * @covers ::extractOriginalMessage
    * @covers ::hasConversationEntries
    */
