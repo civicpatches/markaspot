@@ -11,11 +11,10 @@ namespace Drupal\markaspot_vision\Utility;
  * attribute it finds in the raw value of a formatted text field, on every
  * insert and update, whatever the text format and whether or not the save
  * was validated. The upload binding refuses such embeds on validated saves,
- * but text written without validation, or rewritten after it (the service
- * request presave re-encodes the attributes JSON, the PII redaction rewrites
- * the body), still lands there. An embed is therefore no claim on an upload: it
- * neither blocks the uploading session's attach nor the photo's blur, and it
- * does not keep an orphaned upload alive.
+ * but text written without validation, or rewritten after it (the PII
+ * redaction rewrites the body), still lands there. An embed is therefore no
+ * claim on an upload: it neither blocks the uploading session's attach nor
+ * the photo's blur, and it does not keep an orphaned upload alive.
  */
 final class UploadFileUsage {
 

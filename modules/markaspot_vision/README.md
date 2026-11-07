@@ -149,18 +149,23 @@ closes that gap.
   so updates that resend the whole attachment list or an unchanged text keep
   working.
 - **Embeds are no claim.** Text saved without validation, or rewritten after
-  it (the service request presave re-encodes `field_request_attributes`, the
-  PII redaction of markaspot_ai rewrites the body), can still embed a fresh
-  upload, and the editor module records that usage. Usage of the `editor`
-  module therefore never counts as use of an upload: it does not block the
-  uploading session's attach, the photo's blur or the purge of an orphaned
-  upload.
+  it (the PII redaction of markaspot_ai rewrites the body), can still embed a
+  fresh upload, and the editor module records that usage. Usage of the
+  `editor` module therefore never counts as use of an upload: it does not
+  block the uploading session's attach, the photo's blur or the purge of an
+  orphaned upload. The citizen texts stored without validation embed nothing:
+  the service request presave re-encodes `field_request_attributes` with `<`
+  and `>` escaped, and the feedback endpoint and the inbound mail pipeline
+  drop `data-entity-type` and `data-entity-uuid` attributes from the citizen's
+  feedback and mail text, so none of them can make a fresh upload permanent.
 - **Who bypasses.** Only accounts with `administer media`. Staff permissions
   such as `edit any request_image media` or `bypass node access` do not
   bypass, because staff roles hold them globally, also on stacks with several
   jurisdictions. Staff uploads pass through the same token or the same cookie
   session instead. Pasting markup that embeds somebody else's file is refused
-  for staff without `administer media`.
+  for staff without `administer media`. Such staff cannot re-embed an image
+  another account uploaded or that is already in use either; they upload it
+  again or ask an administrator.
 - **Server-side paths** pass without a record: the Open311 `media_url`
   import creates the file and its media in one request, tenant demo content
   saves its fixture files and validates their media in the same request, and
