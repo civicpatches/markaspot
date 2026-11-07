@@ -62,7 +62,8 @@ final class FileUploadBindingHooks {
    * field has another name is covered as well, and so is every formatted text
    * field the editor module scans for embedded files. Base field overrides
    * arrive here too, because they do not inherit the base field's
-   * constraints.
+   * constraints. An override of a read-only or computed base field, such as
+   * the media thumbnail, is skipped like the base field itself.
    *
    * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
    *   The bundle field definitions.
@@ -77,7 +78,10 @@ final class FileUploadBindingHooks {
       return;
     }
     foreach ($fields as $field) {
-      if ($field instanceof FieldConfigInterface && self::isBound($field)) {
+      if ($field instanceof FieldConfigInterface
+        && !$field->isReadOnly()
+        && !$field->isComputed()
+        && self::isBound($field)) {
         $field->addConstraint('FileUploadBinding', []);
       }
     }
