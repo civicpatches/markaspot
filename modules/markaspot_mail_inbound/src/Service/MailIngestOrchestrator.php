@@ -312,11 +312,12 @@ class MailIngestOrchestrator {
     $body = $message->textBody !== ''
       ? MailTextUtils::normalizeWhitespace($message->textBody)
       : MailTextUtils::htmlToText($message->htmlBody);
-    $body = MailTextUtils::stripFileEmbeds($body);
+    // Cap first, so the embed strip only ever scans max_body_length bytes.
+    // Truncation cannot form a type and uuid pair that the strip then misses.
     if (mb_strlen($body) > $settings['max_body_length']) {
       $body = mb_substr($body, 0, $settings['max_body_length']);
     }
-    return $body;
+    return MailTextUtils::stripFileEmbeds($body);
   }
 
   /**

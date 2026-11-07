@@ -49,20 +49,33 @@ final class FeedbackFileEmbedTest extends UnitTestCase {
   public static function embeds(): array {
     $uuid = self::UUID;
     return [
-      'double quotes' => ["See <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> here", 'See <img> here'],
+      'double quotes' => ["See <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> here", 'See <img  > here'],
       'single quotes, other attributes kept' => [
         "<img src='a.jpg' data-entity-uuid='$uuid' data-entity-type='file' alt='x'>",
-        "<img src='a.jpg' alt='x'>",
+        "<img src='a.jpg'   alt='x'>",
       ],
-      'unquoted' => ["<img data-entity-type=file data-entity-uuid=$uuid>", '<img>'],
-      'slash separated' => ["<img/data-entity-type=\"file\"/data-entity-uuid=\"$uuid\">", '<img//>'],
-      'upper case, line breaks' => ["<IMG\nDATA-ENTITY-TYPE = \"file\"\r\nData-Entity-Uuid=\"$uuid\">", '<IMG>'],
+      'unquoted' => ["<img data-entity-type=file data-entity-uuid=$uuid>", '<img  >'],
+      'slash separated' => ["<img/data-entity-type=\"file\"/data-entity-uuid=\"$uuid\">", '<img/ / >'],
+      'upper case, line breaks' => ["<IMG\nDATA-ENTITY-TYPE = \"file\"\r\nData-Entity-Uuid=\"$uuid\">", '<IMG  >'],
       'removal joins a new embed' => [
         "<img data-entity-t data-entity-uuid=\"1\"ype=\"file\" data-entity-u data-entity-type=\"2\"uid=\"$uuid\">",
-        '<img>',
+        "<img data-entity-t ype=\"file\" data-entity-u uid=\"$uuid\">",
         FALSE,
       ],
     ];
+  }
+
+  /**
+   * A deeply nested join payload is stripped in one pass and embeds nothing.
+   */
+  public function testNestedJoinPayloadEmbedsNothing(): void {
+    $payload = ' data-entity-uuid="' . self::UUID . '"';
+    for ($level = 0; $level < 2000; $level++) {
+      $payload = ' data-entity-t' . $payload . 'ype="file"';
+    }
+    $stripped = FeedbackController::stripFileEmbeds('<img' . $payload . '>');
+    $this->assertSame([], $this->embeddedFileUuids($stripped));
+    $this->assertStringNotContainsString('data-entity-type="file"', $stripped);
   }
 
   /**
