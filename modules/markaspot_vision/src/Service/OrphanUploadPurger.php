@@ -17,6 +17,7 @@ use Drupal\Core\Site\Settings;
 use Drupal\Core\State\StateInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
+use Drupal\markaspot_vision\Utility\UploadFileUsage;
 use Drupal\media\MediaInterface;
 use Drupal\node\NodeInterface;
 use Drupal\group\Entity\GroupInterface;
@@ -604,9 +605,12 @@ class OrphanUploadPurger {
 
   /**
    * Rechecks every file reference before deleting a journaled upload file.
+   *
+   * Embeds in formatted text do not keep the upload: they are no attachment
+   * and may have landed without validation (see UploadFileUsage).
    */
   protected function deleteUnusedFile(FileInterface $file, array $references): void {
-    if ($this->fileUsage->listUsage($file) === []
+    if (UploadFileUsage::attachments($this->fileUsage->listUsage($file)) === []
       && !$this->isReferenced($references, (int) $file->id())
       && !$this->entityTypeManager->getStorage('file')->getQuery()->accessCheck(FALSE)
         ->condition('uri', $file->getFileUri())->condition('fid', $file->id(), '<>')->range(0, 1)->execute()) {

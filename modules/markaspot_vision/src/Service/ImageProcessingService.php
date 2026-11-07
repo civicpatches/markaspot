@@ -15,6 +15,7 @@ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
+use Drupal\markaspot_vision\Utility\UploadFileUsage;
 use Drupal\media\MediaInterface;
 use GuzzleHttp\ClientInterface;
 use Psr\Log\LoggerInterface;
@@ -548,13 +549,17 @@ class ImageProcessingService {
 
   /**
    * Whether this media is the oldest recorded user of a file, and only media.
+   *
+   * Embeds in formatted text are no user: the editor module records one for
+   * any data-entity-uuid attribute, also in text that never passed the
+   * upload binding, so such an embed must not block the photo's blur.
    */
   protected function isOldestUser(FileInterface $file, MediaInterface $media): bool {
     if (!$this->fileUsage) {
       return FALSE;
     }
     $media_ids = [];
-    foreach ($this->fileUsage->listUsage($file) as $types) {
+    foreach (UploadFileUsage::attachments($this->fileUsage->listUsage($file)) as $types) {
       foreach ($types as $type => $ids) {
         if ($type !== 'media') {
           return FALSE;
