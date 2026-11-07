@@ -1,5 +1,42 @@
 # Changelog
 
+## [11.9.247](https://github.com/markaspot/markaspot/compare/11.9.246...11.9.247) (2026-11-07)
+
+### Bug Fixes
+
+* bind every media and node file reference to the uploading session ([e96efa4](https://github.com/markaspot/markaspot/commit/e96efa43dca2b8232a062cb2baceeca23fbe414d))
+* bind file embeds in formatted text to the uploading session ([103517c](https://github.com/markaspot/markaspot/commit/103517ca0a81b99335f5f6891d25241ce1fc8b6f))
+* bind new request images to the session that uploaded their file ([9d7b55f](https://github.com/markaspot/markaspot/commit/9d7b55fc72c9568d501207dea08ef5f01b8fc78a))
+* bind the file fields of every content entity type to the uploading session ([a6e818d](https://github.com/markaspot/markaspot/commit/a6e818dfc936ad6ed891c1dd75d717393dd5f71a))
+* check mandatory blur before the vision settings shortcut and name unrecognised blur modes ([ec066d0](https://github.com/markaspot/markaspot/commit/ec066d08e2ee37bad646e169abf83f26a180ff43))
+* compare GeoReport status notes without cutting text at a less-than sign ([c8fbd1a](https://github.com/markaspot/markaspot/commit/c8fbd1adba030e67773c4494545416d59ddcba94))
+* drop file embed attributes from citizen feedback before it is stored ([1962040](https://github.com/markaspot/markaspot/commit/1962040bb67978a24bdf982b4fad5f7b781274e8))
+* drop file embed attributes from inbound mail text before it is stored ([a2d754d](https://github.com/markaspot/markaspot/commit/a2d754dae5b73e1a693b5c43161ed7f4426ae9e3))
+* ignore a blank GeoReport field_status instead of rejecting it ([c9c93b9](https://github.com/markaspot/markaspot/commit/c9c93b92a79c1b9c1ffd2ff85ed06657d4a78888))
+* keep escaped markup in the request attributes escaped when the presave re-encodes them ([a086fd3](https://github.com/markaspot/markaspot/commit/a086fd3ad823fc5613642893faf249d930a9a644))
+* keep formatted text embeds from blocking the attach, blur and purge of an upload ([c933ef2](https://github.com/markaspot/markaspot/commit/c933ef274a2b78ef8cf2da2b8bb8abf507a8f2ea))
+* keep the organisation of a single organisation request when the new category has no organisation ([e85d572](https://github.com/markaspot/markaspot/commit/e85d5721ec7d601c91e32daf1fdcd29a0e66c0b0))
+* leave read-only and computed base field overrides out of the upload binding ([7d79c34](https://github.com/markaspot/markaspot/commit/7d79c3408d657f4a11cd6449fd39455cffb6b372))
+* **notification:** record markaspot_mail notifications as sent-mail receipts ([f6bf790](https://github.com/markaspot/markaspot/commit/f6bf7908c1e8e6726078daf7a7b2dc7f6abf6b5c))
+* **notification:** skip mail receipts for anonymous senders ([ab653dc](https://github.com/markaspot/markaspot/commit/ab653dcb0fe53fec180f56d2019f21d59609a9f0))
+* **passwordless:** send Retry-After on every rate-limit 429 ([3306c8f](https://github.com/markaspot/markaspot/commit/3306c8fa5f068486743990fd6b1930fb96e3e2ac))
+* reject a GeoReport field_status that names no service status term ([30eb52e](https://github.com/markaspot/markaspot/commit/30eb52e50eb0efa9694eaf46454fe74009999223))
+* resolve blur wiring in the vision health check through the shared blur policy ([0f0c8b1](https://github.com/markaspot/markaspot/commit/0f0c8b1667d2413b998dffc02f06686c472a6e26))
+* skip a GeoReport status note that repeats the last note of the report ([45b3802](https://github.com/markaspot/markaspot/commit/45b3802133c9b30d783708cf95c02a8146202d80))
+* **status-paragraph:** remove empty initial status actions ([f581775](https://github.com/markaspot/markaspot/commit/f5817756080ec451e235bca7fdb4741e2354054f))
+* strip file embeds in one pass and cap the inbound mail body before stripping ([7f3669d](https://github.com/markaspot/markaspot/commit/7f3669d2f67c73149230d2aa4e4a3e67d7ece136))
+* tell clients without token or session cookie why the upload binding refuses a file ([b5777a3](https://github.com/markaspot/markaspot/commit/b5777a3c34fab14ba00712213563dbe4b6c57751))
+* **tenant_import:** allow inbound-mail triage for imported moderators ([fc029a3](https://github.com/markaspot/markaspot/commit/fc029a3949511c1ff9c4c8370abfc4fbfbb1e0d0))
+
+### Documentation
+
+* describe the citizen texts that drop file embeds and re-embedding without administer media ([7e98a16](https://github.com/markaspot/markaspot/commit/7e98a161bd1aabb885f11cb9d17646b07815c386))
+* describe the one-pass embed strip in the stripFileEmbeds docblocks ([75e26d0](https://github.com/markaspot/markaspot/commit/75e26d0f02ca37c084f0bda651977d81bb545beb))
+* describe the upload binding for every content entity, formatted text embeds and both refusals ([71028d8](https://github.com/markaspot/markaspot/commit/71028d884aadc87187bfd75d2795b790e6b0fead))
+* document the blur requirement modes and the upgrade note for self-hosted installations ([3567bf0](https://github.com/markaspot/markaspot/commit/3567bf0d994744f1ccb5d9ccbdfcd846ddb621ae))
+* document the upload binding, its bypass and its refusals ([cdea8f2](https://github.com/markaspot/markaspot/commit/cdea8f23a41796eca39fbf9b032dc003ef87b381))
+* note how the vision health check reports unrecognised blur modes ([6ec171c](https://github.com/markaspot/markaspot/commit/6ec171c12c30556d2638323ac188ffcfe7355c03))
+
 ## [11.9.246](https://github.com/markaspot/markaspot/compare/11.9.245...11.9.246) (2026-11-06)
 
 ### Features
