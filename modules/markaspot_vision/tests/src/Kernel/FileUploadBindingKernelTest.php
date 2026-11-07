@@ -510,6 +510,56 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
   }
 
   /**
+   * An embed saved without validation does not lock the citizen out.
+   *
+   * Server-side writers save without validation, and the service request
+   * presave re-encodes the attributes JSON after it, which turns escaped
+   * markup into real markup. The editor module records such embeds, so they
+   * must count as no use of the upload.
+   */
+  public function testEmbedsSavedWithoutValidationDoNotBlockTheUpload(): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+
+    $this->enter($this->request('other-token'));
+    $escaped = '{"note":"\\u003cimg data-entity-type=file data-entity-uuid=%s\\u003e"}';
+    $report = $this->textNode('field_notes', [['value' => $escaped]], $file);
+    $this->assertSame(0, $this->bindingViolations($report, 'field_notes'), 'Escaped markup is no embed yet.');
+    // What the presave re-encode stores after validation.
+    $reencoded = json_encode(json_decode((string) $report->get('field_notes')->value, TRUE));
+    $report->set('field_notes', ['value' => $reencoded, 'format' => 'plain_text']);
+    $report->save();
+    $usage = $this->container->get('file.usage')->listUsage($file);
+    $this->assertEquals([(int) $report->id() => 1], $usage['editor']['node'] ?? NULL, 'The re-encoded embed was recorded.');
+
+    $this->enter($this->request('citizen-token'));
+    $request_image = $this->media($file);
+    $this->assertSame(0, $this->bindingViolations($request_image, 'field_media_image'), 'The embed does not block the attach.');
+    $request_image->save();
+
+    // The embed is still no claim for anyone else.
+    $this->enter($this->request('other-token'));
+    $this->assertSame(1, $this->bindingViolations($this->media($file), 'field_media_image'));
+  }
+
+  /**
+   * The uploading session may embed its upload and still attach it.
+   */
+  public function testOwnEmbedKeepsTheUploadAttachable(): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+
+    $this->enter($this->request('citizen-token'));
+    $report = $this->textNode('body', [['value' => '<img data-entity-type="file" data-entity-uuid="%s">']], $file);
+    $this->assertSame(0, $this->bindingViolations($report, 'body'), 'The uploading session may embed its file.');
+    $report->save();
+    $this->assertArrayHasKey('editor', $this->container->get('file.usage')->listUsage($file));
+
+    $this->enter($this->request('citizen-token'));
+    $this->assertSame(0, $this->bindingViolations($this->media($file), 'field_media_image'), 'The embed does not count as use.');
+  }
+
+  /**
    * Builds an unsaved request_image media for the file.
    */
   private function media(FileInterface $file): MediaInterface {

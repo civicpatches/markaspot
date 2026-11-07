@@ -848,6 +848,31 @@ class ImageProcessingServiceTest extends UnitTestCase {
   }
 
   /**
+   * An embed of the photo in formatted text cannot block its blur.
+   *
+   * The editor module records one for any data-entity-uuid attribute, also
+   * in text that was saved without validation.
+   */
+  public function testSaveBlurredImageIgnoresTextEmbeds(): void {
+    $this->fileUsageList = [
+      'file' => ['media' => [123 => 1]],
+      'editor' => ['node' => [5 => 1], 'paragraph' => [9 => 2]],
+    ];
+    $service = $this->createService();
+    $this->fileSystem->expects($this->once())
+      ->method('saveData')
+      ->willThrowException(new \RuntimeException('overwrite reached'));
+
+    try {
+      $service->saveBlurredImage($this->createImageMedia('public://photo.jpg'), 'blurred-bytes', 'public://photo.jpg');
+      $this->fail('saveData was not reached.');
+    }
+    catch (\RuntimeException $e) {
+      $this->assertSame('overwrite reached', $e->getPrevious()?->getMessage());
+    }
+  }
+
+  /**
    * A blur never overwrites a file that is not the media's own.
    */
   #[DataProvider('refusedOverwriteProvider')]
@@ -888,6 +913,12 @@ class ImageProcessingServiceTest extends UnitTestCase {
         ['file' => ['media' => [123 => 1], 'node' => [5 => 1]]],
       ],
       'file without recorded usage' => ['private://photo.jpg', 'private://photo.jpg', []],
+      // An embed is no claim, but it does not make the media a user either.
+      'file only embedded in text' => [
+        'public://photo.jpg',
+        'public://photo.jpg',
+        ['editor' => ['node' => [5 => 1]]],
+      ],
     ];
   }
 

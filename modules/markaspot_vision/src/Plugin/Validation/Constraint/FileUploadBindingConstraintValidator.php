@@ -15,6 +15,7 @@ use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Drupal\markaspot_vision\Hook\FileUploadBindingHooks;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
+use Drupal\markaspot_vision\Utility\UploadFileUsage;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Validator\Constraint;
 use Symfony\Component\Validator\ConstraintValidator;
@@ -23,7 +24,8 @@ use Symfony\Component\Validator\ConstraintValidator;
  * Refuses file references whose file another session uploaded or uses.
  *
  * Applies to every newly referenced file of a bound field, for accounts
- * without "administer media": the file must not be in use yet, and it must
+ * without "administer media": the file must not be in use yet (embeds in
+ * formatted text do not count, see UploadFileUsage), and it must
  * come from this request, from the same upload session or from the current
  * user's own cookie session. File and image fields reference a file by ID;
  * formatted text fields embed it with a data-entity-uuid attribute, parsed
@@ -143,9 +145,13 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
 
   /**
    * Whether the current request may add a reference to an existing file.
+   *
+   * Embeds in formatted text do not make a file used: they may have landed
+   * without validation, and must not lock the uploading session out.
    */
   protected function mayAttach(FileInterface $file): bool {
-    return $this->fileUsage->listUsage($file) === [] && $this->guard->canClaimFile($file);
+    return UploadFileUsage::attachments($this->fileUsage->listUsage($file)) === []
+      && $this->guard->canClaimFile($file);
   }
 
   /**

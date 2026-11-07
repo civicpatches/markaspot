@@ -313,6 +313,22 @@ class OrphanUploadPurgerKernelTest extends KernelTestBase {
   }
 
   /**
+   * An embed of the upload in formatted text does not keep the orphan.
+   *
+   * The editor module records such embeds also for text saved without
+   * validation, so they are no attachment of the upload.
+   */
+  public function testTextEmbedDoesNotKeepOrphanFile(): void {
+    $orphan = $this->upload();
+    $file = $orphan->get('field_media_image')->entity;
+    $this->container->get('file.usage')->add($file, 'editor', 'node', '99');
+    $this->assertSame(1, $this->purger->purge());
+    $this->assertNull(Media::load($orphan->id()));
+    $this->assertNull(File::load($file->id()));
+    $this->assertFileDoesNotExist($file->getFileUri());
+  }
+
+  /**
    * Non-SQL lock backends remain locked until the outer SQL commit.
    */
   public function testReferenceLockOutlivesPostSaveHooks(): void {
