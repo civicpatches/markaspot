@@ -111,6 +111,34 @@ final class StatusNoteRepeatKernelTest extends KernelTestBase {
   }
 
   /**
+   * Escaped markup matches the same markup stored by the dashboard.
+   */
+  public function testEscapedMarkupMatchesStoredMarkup(): void {
+    $node = $this->createReport($this->inProgress, [
+      $this->note($this->inProgress, '<p>Termin <b>morgen</b></p>', 'basic_html'),
+    ]);
+
+    $node = $this->update($node, ['field_status_notes' => 'Termin &lt;b&gt;morgen&lt;/b&gt;']);
+    $this->assertNoteCount(1, $node);
+  }
+
+  /**
+   * A "<" in plain text is text, not the start of a tag.
+   */
+  public function testLessThanSignKeepsNotesApart(): void {
+    $node = $this->createReport($this->inProgress);
+
+    $node = $this->update($node, ['field_status_notes' => 'Menge <120 l']);
+    $node = $this->update($node, ['field_status_notes' => 'Menge <240 l']);
+    $this->assertNoteCount(2, $node);
+    $this->assertSame('Menge <240 l', $this->lastNote($node)->get('field_status_note')->value);
+
+    // The escaped form of the same text is still the same note.
+    $node = $this->update($node, ['field_status_notes' => 'Menge &lt;240 l']);
+    $this->assertNoteCount(2, $node);
+  }
+
+  /**
    * A changed note text gives a second note.
    */
   public function testChangedTextAppendsNote(): void {
