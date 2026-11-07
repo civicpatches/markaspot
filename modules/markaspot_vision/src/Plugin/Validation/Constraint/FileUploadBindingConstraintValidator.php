@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_vision\Plugin\Validation\Constraint;
 
+use Drupal\Component\Utility\Html;
 use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\FieldableEntityInterface;
@@ -12,6 +13,7 @@ use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
+use Drupal\markaspot_vision\Hook\FileUploadBindingHooks;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Validator\Constraint;
@@ -23,8 +25,10 @@ use Symfony\Component\Validator\ConstraintValidator;
  * Applies to every newly referenced file of a bound field, for accounts
  * without "administer media": the file must not be in use yet, and it must
  * come from this request, from the same upload session or from the current
- * user's own cookie session. References the stored entity already holds are
- * not checked again.
+ * user's own cookie session. File and image fields reference a file by ID;
+ * formatted text fields embed it with a data-entity-uuid attribute, parsed
+ * exactly as the editor module parses it before it records the usage.
+ * References the stored entity already holds are not checked again.
  */
 final class FileUploadBindingConstraintValidator extends ConstraintValidator implements ContainerInjectionInterface {
 
@@ -36,6 +40,13 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
    * jurisdictions, and must not claim another tenant's fresh upload.
    */
   public const BYPASS_PERMISSION = 'administer media';
+
+  /**
+   * Elements whose file the editor module records as used by the entity.
+   *
+   * @see \Drupal\editor\Hook\EditorHooks::parseFileUuids()
+   */
+  public const EMBED_XPATH = '//*[@data-entity-type="file" and @data-entity-uuid]';
 
   /**
    * Constructs the validator.
@@ -74,18 +85,31 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
       return;
     }
 
-    $previous = $this->previousTargets($entity, $value->getName());
-    foreach ($value as $delta => $item) {
+    if (FileUploadBindingHooks::isFormattedTextField($value->getFieldDefinition())) {
+      $this->validateEmbeds($value, $entity, $constraint);
+    }
+    else {
+      $this->validateReferences($value, $entity, $constraint);
+    }
+  }
+
+  /**
+   * Checks the files a file or image field newly references.
+   */
+  protected function validateReferences(FieldItemListInterface $items, FieldableEntityInterface $entity, FileUploadBindingConstraint $constraint): void {
+    $previous = NULL;
+    foreach ($items as $delta => $item) {
       $file = $item->entity ?? NULL;
       // An unsaved file is created by the code that validates, and a missing
       // one is reported by the reference constraints.
       if (!$file instanceof FileInterface || $file->isNew()) {
         continue;
       }
+      $previous ??= $this->previousTargets($entity, $items->getName());
       if (isset($previous[(int) $file->id()])) {
         continue;
       }
-      if ($this->fileUsage->listUsage($file) !== [] || !$this->guard->canClaimFile($file)) {
+      if (!$this->mayAttach($file)) {
         $this->context->buildViolation($constraint->message)
           ->atPath((string) $delta)
           ->addViolation();
@@ -94,15 +118,119 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
   }
 
   /**
-   * Returns the file IDs the stored entity already references in the field.
+   * Checks the files a formatted text field newly embeds.
    *
-   * Every stored translation counts, so editing one translation does not
-   * re-check files another translation already holds.
+   * The editor module concatenates the field's items before it parses them,
+   * so a reference is reported on the field, not on one item. Embeds of
+   * unknown UUIDs record no usage and are skipped like the editor module
+   * skips them.
+   */
+  protected function validateEmbeds(FieldItemListInterface $items, FieldableEntityInterface $entity, FileUploadBindingConstraint $constraint): void {
+    $uuids = self::embeddedFileUuids($items);
+    if ($uuids === []) {
+      return;
+    }
+    $uuids = array_values(array_diff($uuids, $this->previousEmbeds($entity, $items->getName())));
+    if ($uuids === []) {
+      return;
+    }
+    foreach ($this->entityTypeManager->getStorage('file')->loadByProperties(['uuid' => $uuids]) as $file) {
+      if ($file instanceof FileInterface && !$this->mayAttach($file)) {
+        $this->context->buildViolation($constraint->message)->addViolation();
+      }
+    }
+  }
+
+  /**
+   * Whether the current request may add a reference to an existing file.
+   */
+  protected function mayAttach(FileInterface $file): bool {
+    return $this->fileUsage->listUsage($file) === [] && $this->guard->canClaimFile($file);
+  }
+
+  /**
+   * Returns the file UUIDs the editor module finds in a formatted text field.
+   *
+   * Mirrors EditorHooks::getFileUuidsByField() for one field: the raw value
+   * of every item, followed by its summary on text_with_summary fields, in
+   * one string and whatever the text format, parsed with Html::load() and
+   * the same XPath. A text without the attribute name cannot match it, so
+   * it is not parsed.
+   *
+   * @return list<string>
+   *   The embedded file UUIDs, each once.
+   *
+   * @see \Drupal\editor\Hook\EditorHooks::getFileUuidsByField()
+   */
+  public static function embeddedFileUuids(FieldItemListInterface $items): array {
+    $text = '';
+    foreach ($items as $item) {
+      $text .= self::scalar($item->value);
+      if ($item->getFieldDefinition()->getType() === 'text_with_summary') {
+        $text .= self::scalar($item->summary);
+      }
+    }
+    if (stripos($text, 'data-entity-uuid') === FALSE) {
+      return [];
+    }
+    $uuids = [];
+    foreach ((new \DOMXPath(Html::load($text)))->query(self::EMBED_XPATH) as $node) {
+      if ($node instanceof \DOMElement) {
+        $uuids[$node->getAttribute('data-entity-uuid')] = TRUE;
+      }
+    }
+    return array_map('strval', array_keys($uuids));
+  }
+
+  /**
+   * Returns a text property as the string the editor module concatenates.
+   */
+  private static function scalar(mixed $value): string {
+    return is_scalar($value) ? (string) $value : '';
+  }
+
+  /**
+   * Returns the file IDs the stored entity already references in the field.
    *
    * @return array<int, true>
    *   File IDs keyed by ID.
    */
   protected function previousTargets(FieldableEntityInterface $entity, string $field_name): array {
+    $targets = [];
+    foreach ($this->storedTranslations($entity, $field_name) as $translation) {
+      foreach ($translation->get($field_name) as $item) {
+        if ($item->target_id !== NULL && $item->target_id !== '') {
+          $targets[(int) $item->target_id] = TRUE;
+        }
+      }
+    }
+    return $targets;
+  }
+
+  /**
+   * Returns the file UUIDs the stored entity already embeds in the field.
+   *
+   * @return list<string>
+   *   The embedded file UUIDs.
+   */
+  protected function previousEmbeds(FieldableEntityInterface $entity, string $field_name): array {
+    $uuids = [];
+    foreach ($this->storedTranslations($entity, $field_name) as $translation) {
+      array_push($uuids, ...self::embeddedFileUuids($translation->get($field_name)));
+    }
+    return array_values(array_unique($uuids));
+  }
+
+  /**
+   * Returns every stored translation of the entity that has the field.
+   *
+   * Every stored translation counts, so editing one translation does not
+   * re-check files another translation already holds.
+   *
+   * @return list<\Drupal\Core\Entity\FieldableEntityInterface>
+   *   The stored translations, none for a new entity.
+   */
+  protected function storedTranslations(FieldableEntityInterface $entity, string $field_name): array {
     if ($entity->isNew() || $entity->id() === NULL) {
       return [];
     }
@@ -116,15 +244,7 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
         $translations[] = $original->getTranslation($langcode);
       }
     }
-    $targets = [];
-    foreach ($translations as $translation) {
-      foreach ($translation->get($field_name) as $item) {
-        if ($item->target_id !== NULL && $item->target_id !== '') {
-          $targets[(int) $item->target_id] = TRUE;
-        }
-      }
-    }
-    return $targets;
+    return $translations;
   }
 
 }

@@ -13,14 +13,15 @@ use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\file\FileInterface;
 use Drupal\file\Plugin\Field\FieldType\FileItem;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
+use Drupal\text\Plugin\Field\FieldType\TextItemBase;
 
 /**
  * Binds file references to the session that uploaded the file.
  *
- * Every file insert records its upload context, and every file and image
- * field of every content entity type carries the FileUploadBinding
- * constraint that checks it, so JSON:API answers a foreign or reused file
- * with a 422.
+ * Every file insert records its upload context, and every file, image and
+ * formatted text field of every content entity type carries the
+ * FileUploadBinding constraint that checks it, so JSON:API answers a foreign
+ * or reused file with a 422.
  */
 final class FileUploadBindingHooks {
 
@@ -48,7 +49,7 @@ final class FileUploadBindingHooks {
   }
 
   /**
-   * Attaches the upload binding to every configurable file and image field.
+   * Attaches the upload binding to every configurable file reference field.
    *
    * Every content entity type, not a list of known hosts: a tenant overlay
    * or a later module may expose another entity type with a file field to
@@ -58,8 +59,10 @@ final class FileUploadBindingHooks {
    * owner-session paths of the binding.
    *
    * The field type decides, not the field name, so a media type whose source
-   * field has another name is covered as well. Base field overrides arrive
-   * here too, because they do not inherit the base field's constraints.
+   * field has another name is covered as well, and so is every formatted text
+   * field the editor module scans for embedded files. Base field overrides
+   * arrive here too, because they do not inherit the base field's
+   * constraints.
    *
    * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
    *   The bundle field definitions.
@@ -81,10 +84,12 @@ final class FileUploadBindingHooks {
   }
 
   /**
-   * Attaches the upload binding to writable file and image base fields.
+   * Attaches the upload binding to writable file reference base fields.
    *
-   * Read-only and computed base fields are skipped: clients cannot set them,
-   * and media keep their thumbnail, which is the source file itself, there.
+   * File, image and formatted text base fields (taxonomy term descriptions,
+   * for example) are bound like configurable ones. Read-only and computed
+   * base fields are skipped: clients cannot set them, and media keep their
+   * thumbnail, which is the source file itself, there.
    *
    * @param array<string, \Drupal\Core\Field\FieldDefinitionInterface> $fields
    *   The base field definitions.
@@ -108,9 +113,31 @@ final class FileUploadBindingHooks {
 
   /**
    * Whether a field references files the binding has to check.
+   *
+   * File and image fields reference files by ID. Formatted text fields
+   * (subclasses of TextItemBase) reference them through data-entity-uuid
+   * attributes: on every insert and update, the editor module records a file
+   * usage for each such attribute in their raw value, whatever the text
+   * format.
    */
   public static function isBound(FieldDefinitionInterface $field): bool {
+    return self::isFileField($field) || self::isFormattedTextField($field);
+  }
+
+  /**
+   * Whether a field is a file or image field.
+   */
+  public static function isFileField(FieldDefinitionInterface $field): bool {
     return is_a($field->getItemDefinition()->getClass(), FileItem::class, TRUE);
+  }
+
+  /**
+   * Whether the editor module records file usage for a field's text.
+   *
+   * @see \Drupal\editor\Hook\EditorHooks::getFormattedTextFields()
+   */
+  public static function isFormattedTextField(FieldDefinitionInterface $field): bool {
+    return is_subclass_of($field->getItemDefinition()->getClass(), TextItemBase::class);
   }
 
 }

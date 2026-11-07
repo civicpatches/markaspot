@@ -14,7 +14,8 @@ use Symfony\Component\Validator\Constraint as SymfonyConstraint;
  * The citizen frontend uploads the file and creates the request_image media
  * in two requests. Without this binding, another session that learns the file
  * UUID in between could reference the fresh upload first, from its own media
- * of any bundle or from a node file field, and so block the photo's blur.
+ * of any bundle, from a file field of any other content entity or from a
+ * data-entity-uuid embed in formatted text, and so block the photo's blur.
  */
 #[Constraint(
   id: 'FileUploadBinding',
