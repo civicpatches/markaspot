@@ -49,8 +49,10 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
     }
     $this->installSchema('file', ['file_usage']);
     $this->installSchema('user', ['users_data']);
-    // Before the chain: a role save lists every enabled module by name, and
-    // after enableModules() it could not resolve markaspot_nuxt in CI.
+    // installConfig() must run before enableModules(): after it, installing
+    // the core configuration failed in CI with an UnknownExtensionException
+    // for markaspot_nuxt from PermissionHandler::getModuleNames(), although
+    // the chain enables markaspot_nuxt. The cause is not understood.
     $this->installConfig(['system', 'user', 'field', 'file', 'image', 'media']);
     $this->enableModules($this->withDependencies('markaspot_vision'));
 
