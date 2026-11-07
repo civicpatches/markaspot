@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_vision\Kernel;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
+use Drupal\Core\Entity\FieldableEntityInterface;
 use Drupal\Core\StreamWrapper\PrivateStream;
 use Drupal\Core\StreamWrapper\StreamWrapperInterface;
 use Drupal\field\Entity\FieldConfig;
@@ -13,6 +14,7 @@ use Drupal\file\Entity\File;
 use Drupal\file\FileInterface;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_vision\Hook\FileUploadBindingHooks;
+use Drupal\markaspot_vision\Plugin\Validation\Constraint\FileUploadBindingConstraint;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
 use Drupal\media\Entity\Media;
 use Drupal\media\MediaInterface;
@@ -27,6 +29,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\DependencyInjection\Reference;
+use Symfony\Component\Validator\ConstraintViolation;
 
 /**
  * Binds new file references to the session that uploaded the file.
@@ -557,6 +560,42 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
 
     $this->enter($this->request('citizen-token'));
     $this->assertSame(0, $this->bindingViolations($this->media($file), 'field_media_image'), 'The embed does not count as use.');
+  }
+
+  /**
+   * A request without token and session cookie is told what it lacks.
+   *
+   * Uploading again cannot help such a client, so its refusal names the
+   * missing X-CSRF-Token header and session cookie. Other refusals keep the
+   * one message that says nothing about the file.
+   */
+  public function testRefusalNamesTheMissingUploadSession(): void {
+    $this->enter($this->request('citizen-token'));
+    $file = $this->upload('public');
+
+    $this->enter($this->request(NULL));
+    $violation = $this->bindingViolation($this->media($file), 'field_media_image');
+    $this->assertSame(FileUploadBindingConstraint::NO_UPLOAD_SESSION_ERROR, $violation->getCode());
+    $this->assertStringContainsString('X-CSRF-Token', (string) $violation->getMessage());
+
+    $this->enter($this->request('other-token'));
+    $violation = $this->bindingViolation($this->media($file), 'field_media_image');
+    $this->assertSame(FileUploadBindingConstraint::REFUSED_ERROR, $violation->getCode());
+    $this->assertSame('This file cannot be attached. Please upload it again.', (string) $violation->getMessage());
+  }
+
+  /**
+   * Returns the single upload binding violation on a field.
+   */
+  private function bindingViolation(FieldableEntityInterface $entity, string $field_name): ConstraintViolation {
+    $found = [];
+    foreach ($entity->validate()->getByField($field_name) as $violation) {
+      if ($violation instanceof ConstraintViolation && $violation->getConstraint() instanceof FileUploadBindingConstraint) {
+        $found[] = $violation;
+      }
+    }
+    $this->assertCount(1, $found);
+    return $found[0];
   }
 
   /**

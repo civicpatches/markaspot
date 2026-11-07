@@ -19,6 +19,7 @@ use Drupal\markaspot_vision\Utility\UploadFileUsage;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Validator\Constraint;
 use Symfony\Component\Validator\ConstraintValidator;
+use Symfony\Component\Validator\Violation\ConstraintViolationBuilderInterface;
 
 /**
  * Refuses file references whose file another session uploaded or uses.
@@ -96,6 +97,18 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
   }
 
   /**
+   * Starts a refusal, named after what the client can do about it.
+   */
+  protected function refuse(FileUploadBindingConstraint $constraint): ConstraintViolationBuilderInterface {
+    if ($this->guard->hasUploadContext()) {
+      return $this->context->buildViolation($constraint->message)
+        ->setCode(FileUploadBindingConstraint::REFUSED_ERROR);
+    }
+    return $this->context->buildViolation($constraint->noUploadSessionMessage)
+      ->setCode(FileUploadBindingConstraint::NO_UPLOAD_SESSION_ERROR);
+  }
+
+  /**
    * Checks the files a file or image field newly references.
    */
   protected function validateReferences(FieldItemListInterface $items, FieldableEntityInterface $entity, FileUploadBindingConstraint $constraint): void {
@@ -112,7 +125,7 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
         continue;
       }
       if (!$this->mayAttach($file)) {
-        $this->context->buildViolation($constraint->message)
+        $this->refuse($constraint)
           ->atPath((string) $delta)
           ->addViolation();
       }
@@ -138,7 +151,7 @@ final class FileUploadBindingConstraintValidator extends ConstraintValidator imp
     }
     foreach ($this->entityTypeManager->getStorage('file')->loadByProperties(['uuid' => $uuids]) as $file) {
       if ($file instanceof FileInterface && !$this->mayAttach($file)) {
-        $this->context->buildViolation($constraint->message)->addViolation();
+        $this->refuse($constraint)->addViolation();
       }
     }
   }
