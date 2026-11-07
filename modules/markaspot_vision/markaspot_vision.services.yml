@@ -18,8 +18,8 @@ services:
   Drupal\markaspot_vision\Hook\HazardLevelHooks:
     class: Drupal\markaspot_vision\Hook\HazardLevelHooks
     public: true
-  Drupal\markaspot_vision\Hook\RequestImageUploadBindingHooks:
-    class: Drupal\markaspot_vision\Hook\RequestImageUploadBindingHooks
+  Drupal\markaspot_vision\Hook\FileUploadBindingHooks:
+    class: Drupal\markaspot_vision\Hook\FileUploadBindingHooks
     arguments: ['@markaspot_vision.media_analysis_access_guard']
     public: true
   markaspot_vision.image_processing:

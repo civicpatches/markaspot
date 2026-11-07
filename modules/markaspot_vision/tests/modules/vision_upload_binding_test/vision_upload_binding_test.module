@@ -7,7 +7,7 @@
 
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\file\FileInterface;
-use Drupal\markaspot_vision\Plugin\Validation\Constraint\RequestImageUploadBindingConstraint;
+use Drupal\markaspot_vision\Plugin\Validation\Constraint\FileUploadBindingConstraint;
 
 require_once dirname(__DIR__, 3) . '/markaspot_vision.module';
 
@@ -37,12 +37,13 @@ function vision_upload_binding_test_entity_bundle_field_info_alter(array &$field
  *
  * The production plugin belongs to markaspot_vision, which this test does not
  * enable, so its discovered definition would be dropped with its provider.
+ * FileUploadBindingWiringKernelTest covers the production discovery.
  */
 function vision_upload_binding_test_validation_constraint_alter(array &$definitions): void {
-  $definitions['RequestImageUploadBinding'] = [
-    'id' => 'RequestImageUploadBinding',
-    'label' => 'Request image upload binding',
-    'class' => RequestImageUploadBindingConstraint::class,
+  $definitions['FileUploadBinding'] = [
+    'id' => 'FileUploadBinding',
+    'label' => 'File upload binding',
+    'class' => FileUploadBindingConstraint::class,
     'type' => [],
     'provider' => 'vision_upload_binding_test',
   ];

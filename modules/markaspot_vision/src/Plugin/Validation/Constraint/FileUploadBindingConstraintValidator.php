@@ -6,29 +6,34 @@ namespace Drupal\markaspot_vision\Plugin\Validation\Constraint;
 
 use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\Core\Entity\TranslatableInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\file\FileInterface;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Drupal\markaspot_vision\Service\MediaAnalysisAccessGuard;
-use Drupal\media\MediaInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Validator\Constraint;
 use Symfony\Component\Validator\ConstraintValidator;
 
 /**
- * Refuses request images whose file another session uploaded or uses.
+ * Refuses file references whose file another session uploaded or uses.
  *
- * Applies to every newly referenced file of a request_image media, for
- * accounts without "administer media": the file must not be in use yet, and
- * it must come from this request, from the same upload session or from the
- * current user's own cookie session. Unchanged references on an update are
+ * Applies to every newly referenced file of a bound field, for accounts
+ * without "administer media": the file must not be in use yet, and it must
+ * come from this request, from the same upload session or from the current
+ * user's own cookie session. References the stored entity already holds are
  * not checked again.
  */
-final class RequestImageUploadBindingConstraintValidator extends ConstraintValidator implements ContainerInjectionInterface {
+final class FileUploadBindingConstraintValidator extends ConstraintValidator implements ContainerInjectionInterface {
 
   /**
-   * Permission that may attach any existing file to a request image.
+   * Permission that may attach any existing file.
+   *
+   * Deliberately not "edit any request_image media" or "bypass node access":
+   * staff roles hold those globally, also on stacks with several
+   * jurisdictions, and must not claim another tenant's fresh upload.
    */
   public const BYPASS_PERMISSION = 'administer media';
 
@@ -58,18 +63,18 @@ final class RequestImageUploadBindingConstraintValidator extends ConstraintValid
    * {@inheritdoc}
    */
   public function validate(mixed $value, Constraint $constraint): void {
-    if (!$constraint instanceof RequestImageUploadBindingConstraint || !$value instanceof FieldItemListInterface) {
+    if (!$constraint instanceof FileUploadBindingConstraint || !$value instanceof FieldItemListInterface) {
       return;
     }
-    $media = $value->getEntity();
-    if (!$media instanceof MediaInterface || $media->bundle() !== 'request_image') {
+    $entity = $value->getEntity();
+    if (!$entity instanceof FieldableEntityInterface) {
       return;
     }
     if ($this->currentUser->hasPermission(self::BYPASS_PERMISSION)) {
       return;
     }
 
-    $previous = $this->previousTargets($media, $value->getName());
+    $previous = $this->previousTargets($entity, $value->getName());
     foreach ($value as $delta => $item) {
       $file = $item->entity ?? NULL;
       // An unsaved file is created by the code that validates, and a missing
@@ -89,23 +94,34 @@ final class RequestImageUploadBindingConstraintValidator extends ConstraintValid
   }
 
   /**
-   * Returns the file IDs the stored media already references.
+   * Returns the file IDs the stored entity already references in the field.
+   *
+   * Every stored translation counts, so editing one translation does not
+   * re-check files another translation already holds.
    *
    * @return array<int, true>
    *   File IDs keyed by ID.
    */
-  protected function previousTargets(MediaInterface $media, string $field_name): array {
-    if ($media->isNew() || $media->id() === NULL) {
+  protected function previousTargets(FieldableEntityInterface $entity, string $field_name): array {
+    if ($entity->isNew() || $entity->id() === NULL) {
       return [];
     }
-    $original = $this->entityTypeManager->getStorage('media')->loadUnchanged($media->id());
-    if (!$original instanceof MediaInterface || !$original->hasField($field_name)) {
+    $original = $this->entityTypeManager->getStorage($entity->getEntityTypeId())->loadUnchanged($entity->id());
+    if (!$original instanceof FieldableEntityInterface || !$original->hasField($field_name)) {
       return [];
+    }
+    $translations = [$original];
+    if ($original instanceof TranslatableInterface) {
+      foreach (array_keys($original->getTranslationLanguages()) as $langcode) {
+        $translations[] = $original->getTranslation($langcode);
+      }
     }
     $targets = [];
-    foreach ($original->get($field_name) as $item) {
-      if ($item->target_id !== NULL && $item->target_id !== '') {
-        $targets[(int) $item->target_id] = TRUE;
+    foreach ($translations as $translation) {
+      foreach ($translation->get($field_name) as $item) {
+        if ($item->target_id !== NULL && $item->target_id !== '') {
+          $targets[(int) $item->target_id] = TRUE;
+        }
       }
     }
     return $targets;
