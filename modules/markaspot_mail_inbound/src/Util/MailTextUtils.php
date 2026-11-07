@@ -112,9 +112,9 @@ final class MailTextUtils {
    * attribute in its raw value, whatever the text format. A mail is stored
    * without validation, so the upload binding of markaspot_vision never
    * checks its body, and htmlToText() decodes escaped markup into real
-   * markup. Text without these attribute names is returned unchanged.
-   * Removing a match can join the text around it into a new one, so the
-   * removal repeats until nothing matches.
+   * markup. Text without these attribute names is returned unchanged. One
+   * pass replaces every match with a space, so the text around a removed
+   * attribute cannot join into a new one.
    *
    * @param string $text
    *   The plain-text body.
