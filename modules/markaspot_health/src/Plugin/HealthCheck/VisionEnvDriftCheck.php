@@ -32,8 +32,8 @@ require_once dirname(__DIR__, 4) . '/markaspot_ai/src/Utility/BlurPolicy.php';
  * mandatory (strict, or automatic with MARKASPOT_BLUR_URL in the
  * environment) the site switch and the configured URL are ignored, so only
  * the environment URL and key count, and missing ones are an error even
- * without AI analysis, because no image is sent at all. Otherwise the site
- * switch decides, as before.
+ * without AI analysis or vision settings, because no image is sent at all.
+ * Otherwise the site switch decides, as before.
  *
  * @HealthCheck(
  *   id = "vision_env_drift",
@@ -85,22 +85,29 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
     if (!$this->moduleHandler->moduleExists('markaspot_vision')) {
       return $this->pass('markaspot_vision not enabled; check skipped.');
     }
-    $config = $this->configFactory->get('markaspot_vision.settings');
-    if ($config->isNew()) {
-      return $this->pass('markaspot_vision.settings not present; check skipped.');
-    }
 
+    // Mandatory blur depends on the environment only, so it is checked even
+    // when the vision settings are missing.
     $blurLogger = new NullLogger();
     $blurMode = BlurPolicy::mode($blurLogger);
     $blurRequired = BlurPolicy::isRequired($blurLogger);
+    $blurSummary = sprintf(' Blur mode: %s.', $blurMode);
+    if (BlurPolicy::hasUnrecognizedValue()) {
+      $blurSummary .= ' MARKASPOT_BLUR_REQUIRED has an unrecognised value, so blur is enforced.';
+    }
     if ($blurRequired && !BlurPolicy::hasEnvironmentCredentials()) {
       return $this->failWithSeverity(
         'error',
         1,
         sprintf('Blur is mandatory (MARKASPOT_BLUR_REQUIRED mode %s), but ', $blurMode) .
         'MARKASPOT_BLUR_URL or MARKASPOT_BLUR_API_KEY is missing in the ' .
-        'environment; no photo is sent for analysis.',
+        'environment; no photo is sent for analysis.' . $blurSummary,
       );
+    }
+
+    $config = $this->configFactory->get('markaspot_vision.settings');
+    if ($config->isNew()) {
+      return $this->pass('markaspot_vision.settings not present; check skipped.' . $blurSummary);
     }
 
     $aiAnalysisRequired = $context['ai_analysis_required'] ?? NULL;
@@ -194,7 +201,7 @@ class VisionEnvDriftCheck extends HealthCheckPluginBase {
       $message = 'Legacy Vision connection settings are inactive; see AI provider sovereignty for IONOS status.'
         . ($aiAnalysisRequired ? ' Blur wiring checks passed.' : ' AI analysis does not require blur wiring checks.');
     }
-    return $this->pass($message . sprintf(' Blur mode: %s.', $blurMode));
+    return $this->pass($message . $blurSummary);
   }
 
   /**

@@ -255,6 +255,40 @@ class VisionEnvDriftCheckTest extends UnitTestCase {
     yield 'strict wiring, switch off' => ['1', $url, 'synthetic', FALSE, TRUE, TRUE, 'Blur mode: strict.'];
     yield 'off with URL: switch decides' => ['0', $url, '', FALSE, TRUE, FALSE, $disabled];
     yield 'off without analysis' => ['0', $url, '', FALSE, FALSE, TRUE, 'Blur mode: off.'];
+    $unrecognised = 'MARKASPOT_BLUR_REQUIRED has an unrecognised value';
+    $strict = "Blur mode: strict. $unrecognised";
+    yield 'unrecognised value, wiring complete' => ['ture', $url, 'synthetic', FALSE, TRUE, TRUE, $strict];
+    yield 'unrecognised value without wiring' => ['flase', '', '', FALSE, FALSE, FALSE, $unrecognised];
+  }
+
+  /**
+   * Mandatory blur is checked even when the vision settings are missing.
+   */
+  #[DataProvider('modesWithoutSettings')]
+  public function testMandatoryBlurIsCheckedWithoutVisionSettings(?string $required, bool $passed, string $message): void {
+    if ($required !== NULL) {
+      putenv("MARKASPOT_BLUR_REQUIRED=$required");
+    }
+    $modules = $this->createMock(ModuleHandlerInterface::class);
+    $modules->method('moduleExists')->willReturn(TRUE);
+
+    $result = $this->createPlugin($this->createConfigFactory($this->createConfig([], TRUE)), $modules)->run(['ai_analysis_required' => FALSE]);
+
+    $this->assertSame($passed, $result->passed, $result->message);
+    if (!$passed) {
+      $this->assertSame('error', $result->severity);
+    }
+    $this->assertStringContainsString($message, $result->message);
+  }
+
+  /**
+   * Strict mode without credentials fails, the other modes skip.
+   */
+  public static function modesWithoutSettings(): iterable {
+    $skipped = 'markaspot_vision.settings not present; check skipped.';
+    yield 'strict without credentials' => ['1', FALSE, 'mode strict'];
+    yield 'automatic without URL' => [NULL, TRUE, "$skipped Blur mode: auto-unprotected."];
+    yield 'off' => ['0', TRUE, "$skipped Blur mode: off."];
   }
 
   /**
@@ -569,10 +603,12 @@ class VisionEnvDriftCheckTest extends UnitTestCase {
    *
    * @param array<string, mixed> $values
    *   Config values keyed by config name.
+   * @param bool $isNew
+   *   Whether the config object is missing from active storage.
    */
-  private function createConfig(array $values): ImmutableConfig {
+  private function createConfig(array $values, bool $isNew = FALSE): ImmutableConfig {
     $config = $this->createMock(ImmutableConfig::class);
-    $config->method('isNew')->willReturn(FALSE);
+    $config->method('isNew')->willReturn($isNew);
     $config->method('get')->willReturnCallback(
       static fn (string $key): mixed => $values[$key] ?? NULL,
     );

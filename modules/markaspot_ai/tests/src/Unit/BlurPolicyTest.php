@@ -20,6 +20,9 @@ class BlurPolicyTest extends UnitTestCase {
 
   /**
    * Values are normalized identically for every caller; warnings are bounded.
+   *
+   * Exactly the unrecognized values warn, and only those are reported as
+   * unrecognized.
    */
   #[DataProvider('values')]
   public function testRequired(?string $value, bool $required, bool $warning): void {
@@ -34,6 +37,7 @@ class BlurPolicyTest extends UnitTestCase {
       $logger->expects($warning ? $this->once() : $this->never())->method('warning')->with($this->stringContains('MARKASPOT_BLUR_REQUIRED'));
       self::assertSame($required, BlurPolicy::isRequired($logger));
       self::assertSame($required, BlurPolicy::isRequired($logger));
+      self::assertSame($warning, BlurPolicy::hasUnrecognizedValue());
     }
     finally {
       putenv($old === FALSE ? 'MARKASPOT_BLUR_REQUIRED' : 'MARKASPOT_BLUR_REQUIRED=' . $old);
