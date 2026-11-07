@@ -2202,8 +2202,6 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
    */
   public static function invalidExtendedStatusValues(): array {
     return [
-      'empty string' => [''],
-      'whitespace' => ['  '],
       'non-numeric' => ['closed'],
       'numeric prefix' => ['6abc'],
       'zero' => [0],
@@ -2212,7 +2210,6 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
       'negative string' => ['-6'],
       'decimal string' => ['6.0'],
       'float' => [6.0],
-      'null' => [NULL],
       'boolean' => [TRUE],
       'empty array' => [[]],
       'reference array' => [['target_id' => 6]],
@@ -2243,6 +2240,70 @@ class GeoreportProcessorServiceTest extends UnitTestCase {
         ],
       ],
     ], 'update');
+  }
+
+  /**
+   * Values of extended field_status that count as not sent.
+   */
+  public static function blankExtendedStatusValues(): array {
+    return [
+      'empty string' => [''],
+      'whitespace' => ["  \n"],
+      'null' => [NULL],
+    ];
+  }
+
+  /**
+   * A blank extended field_status is ignored and the note still maps.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  #[DataProvider('blankExtendedStatusValues')]
+  public function testUpdateIgnoresBlankExtendedStatus(mixed $status): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $this->termStorage->expects($this->never())->method('load');
+
+    $values = $this->processor->prepareNodeProperties([
+      'extended_attributes' => [
+        'drupal' => [
+          'field_status' => $status,
+          'field_status_notes' => 'Status note',
+        ],
+      ],
+    ], 'update');
+
+    $this->assertArrayNotHasKey('field_status', $values);
+    $this->assertSame('Status note', $values['field_status_notes']);
+  }
+
+  /**
+   * A blank extended field_status leaves a top-level status in place.
+   *
+   * @covers ::prepareNodeProperties
+   */
+  public function testUpdateBlankExtendedStatusKeepsTopLevelStatus(): void {
+    $this->currentUser->method('hasPermission')
+      ->with('access open311 advanced properties')
+      ->willReturn(TRUE);
+    $this->termStorage->expects($this->never())->method('load');
+    $closed = $this->createMock(TermInterface::class);
+    $closed->method('id')->willReturn(7);
+    $this->termStorage->method('loadByProperties')
+      ->with([
+        'vid' => 'service_status',
+        'status' => 1,
+        'field_open311_mapping' => 'closed',
+      ])
+      ->willReturn([7 => $closed]);
+
+    $values = $this->processor->prepareNodeProperties([
+      'status' => 'closed',
+      'extended_attributes' => ['drupal' => ['field_status' => '']],
+    ], 'update');
+
+    $this->assertSame(7, $values['field_status']);
   }
 
   /**
