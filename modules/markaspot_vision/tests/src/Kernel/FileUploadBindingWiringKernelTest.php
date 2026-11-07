@@ -18,9 +18,9 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
  * Runs the file upload binding through the enabled markaspot_vision module.
  *
  * FileUploadBindingKernelTest registers the services and the constraint by
- * hand. This test only enables the module and its dependency chain, so hook
- * discovery, the attribute plugin discovery and the service definitions of
- * markaspot_vision are what bind the upload.
+ * hand. This test only enables the module and the dependency chain its info
+ * files declare, so hook discovery, the attribute plugin discovery and the
+ * service definitions of markaspot_vision are what bind the upload.
  */
 #[Group('markaspot_vision')]
 #[RunTestsInSeparateProcesses]
@@ -30,42 +30,18 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
   use MediaTypeCreationTrait;
 
   /**
-   * {@inheritdoc}
+   * Modules enabled first; setUp() resolves the rest from the info files.
+   *
+   * @var list<string>
    */
-  protected static $modules = [
-    'system',
-    'user',
-    'field',
-    'text',
-    'filter',
-    'node',
-    'file',
-    'image',
-    'media',
-    'taxonomy',
-    'options',
-    'datetime',
-    'language',
-    'color_field',
-    'geolocation',
-    'entity',
-    'entity_reference_revisions',
-    'paragraphs',
-    'flexible_permissions',
-    'group',
-    'gnode',
-    'field_permissions',
-    'markaspot_validation',
-    'markaspot_group',
-    'markaspot_nuxt',
-    'markaspot_vision',
-  ];
+  protected static $modules = ['system', 'user'];
 
   /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     parent::setUp();
+    $this->enableModules($this->withDependencies('markaspot_vision'));
     foreach (['user', 'file', 'media'] as $type) {
       $this->installEntitySchema($type);
     }
@@ -88,6 +64,27 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
   }
 
   /**
+   * Returns a module and every module it requires, as an install enables them.
+   *
+   * Resolved from the info files, so a new dependency of markaspot_vision or
+   * of a module it depends on is enabled here too instead of failing the
+   * container build.
+   *
+   * @return list<string>
+   *   The module names.
+   */
+  private function withDependencies(string $module): array {
+    $list = $this->container->get('extension.list.module')->getList();
+    $this->assertArrayHasKey($module, $list);
+    $modules = array_map('strval', array_keys($list[$module]->requires ?? []));
+    foreach ($modules as $dependency) {
+      $this->assertArrayHasKey($dependency, $list, "$module requires $dependency, which is not in the codebase.");
+    }
+    $modules[] = $module;
+    return $modules;
+  }
+
+  /**
    * The module's hooks and constraint plugin are discovered.
    */
   public function testHooksAndConstraintAreDiscovered(): void {
@@ -102,9 +99,13 @@ final class FileUploadBindingWiringKernelTest extends KernelTestBase {
     $this->assertSame(FileUploadBindingConstraint::class, $definition['class']);
     $this->assertSame('markaspot_vision', $definition['provider']);
 
-    $source = $this->container->get('entity_field.manager')
-      ->getFieldDefinitions('media', 'request_image')['field_media_image'];
-    $this->assertArrayHasKey('FileUploadBinding', $source->getConstraints());
+    $fields = $this->container->get('entity_field.manager');
+    $media = $fields->getFieldDefinitions('media', 'request_image');
+    $this->assertArrayHasKey('FileUploadBinding', $media['field_media_image']->getConstraints());
+    $this->assertArrayNotHasKey('FileUploadBinding', $media['thumbnail']->getConstraints(), 'The read-only thumbnail stays unbound.');
+    // A formatted text base field, bound through the base field hook.
+    $term = $fields->getFieldDefinitions('taxonomy_term', 'tags');
+    $this->assertArrayHasKey('FileUploadBinding', $term['description']->getConstraints());
   }
 
   /**
