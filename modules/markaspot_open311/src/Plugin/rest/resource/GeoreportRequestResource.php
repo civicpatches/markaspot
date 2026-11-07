@@ -1222,7 +1222,11 @@ class GeoreportRequestResource extends ResourceBase {
    * Reduces a status note to its plain text for comparison.
    *
    * Markup, HTML entities and whitespace differences do not make a note
-   * different.
+   * different. Entities are decoded first, so escaped markup from the
+   * top-level status_notes field matches the same markup stored by the
+   * dashboard. Only complete tags are removed: strip_tags() would also cut a
+   * plain "<120 l" to the end of the text and let two different notes look
+   * the same.
    *
    * @param string $text
    *   The stored or submitted note text.
@@ -1231,7 +1235,8 @@ class GeoreportRequestResource extends ResourceBase {
    *   The plain text with collapsed whitespace.
    */
   protected static function normalizeStatusNoteText(string $text): string {
-    $plain = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $plain = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $plain = preg_replace('/<!--.*?-->|<\/?[a-z][^<>]*>/is', ' ', $plain) ?? $plain;
     return trim(preg_replace('/[\s\x{00A0}]+/u', ' ', $plain) ?? $plain);
   }
 
