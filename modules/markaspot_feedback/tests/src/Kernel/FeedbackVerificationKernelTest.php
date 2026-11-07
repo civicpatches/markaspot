@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_feedback\Kernel;
 
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\file\Entity\File;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_feedback\Controller\FeedbackController;
 use Drupal\markaspot_feedback\FeedbackService;
@@ -39,6 +40,9 @@ final class FeedbackVerificationKernelTest extends KernelTestBase {
     'text',
     'node',
     'taxonomy',
+    // Records file usage for embeds in formatted text, as on a site.
+    'file',
+    'editor',
     'markaspot_feedback',
   ];
 
@@ -60,7 +64,9 @@ final class FeedbackVerificationKernelTest extends KernelTestBase {
     $this->installEntitySchema('user');
     $this->installEntitySchema('node');
     $this->installEntitySchema('taxonomy_term');
+    $this->installEntitySchema('file');
     $this->installSchema('node', ['node_access']);
+    $this->installSchema('file', ['file_usage']);
     $this->installConfig(['system', 'user', 'field', 'filter', 'node']);
     User::create(['uid' => 0, 'name' => '', 'status' => 0])->save();
     User::create(['uid' => 1, 'name' => 'fixture-root', 'status' => 1])->save();
@@ -153,6 +159,31 @@ final class FeedbackVerificationKernelTest extends KernelTestBase {
     $this->assertSame('Still dangerous in the morning.', $saved->get('field_feedback')->value);
     $this->assertTrue((bool) $saved->get('field_has_feedback')->value);
     $this->assertSame((int) $this->reopened->id(), (int) $saved->get('field_status')->target_id);
+  }
+
+  /**
+   * Feedback cannot embed a file, so it pins no temporary upload.
+   *
+   * The controller saves without validation, and the editor module would
+   * record a usage for the embed and make the file permanent.
+   */
+  public function testFeedbackDropsFileEmbeds(): void {
+    $upload = File::create(['uri' => 'public://fresh-upload.jpg', 'filename' => 'fresh-upload.jpg']);
+    $upload->setTemporary();
+    $upload->save();
+    $uuid = $upload->uuid();
+
+    $report = $this->report();
+    $response = $this->post($report, [
+      'feedback' => "Still broken. <img data-entity-type=\"file\" DATA-ENTITY-UUID='$uuid'> See photo.",
+      'email_verification' => 'reporter@example.org',
+    ]);
+
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $saved = Node::load($report->id());
+    $this->assertSame('Still broken. <img> See photo.', $saved->get('field_feedback')->value);
+    $this->assertSame([], $this->container->get('file.usage')->listUsage(File::load($upload->id())));
+    $this->assertTrue(File::load($upload->id())->isTemporary(), 'The upload stays temporary.');
   }
 
   /**
