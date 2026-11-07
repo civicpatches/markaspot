@@ -452,7 +452,10 @@ function _service_request_normalize_intake_metadata(EntityInterface $node): void
   }
 
   if ($changed) {
-    $node->set('field_request_attributes', $attributes === [] ? NULL : json_encode($attributes));
+    // The attributes are a formatted text field, and this re-encode runs
+    // after validation. JSON_HEX_TAG keeps a "<"-escaped element escaped,
+    // so it cannot turn into a file embed the upload binding never saw.
+    $node->set('field_request_attributes', $attributes === [] ? NULL : json_encode($attributes, JSON_HEX_TAG));
   }
 }
 
