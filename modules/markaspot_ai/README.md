@@ -113,11 +113,13 @@ mandatory, photos stay unpublished until screening has completed without a
 privacy hold, even when `require_ai_screening` is disabled.
 
 The health check **Vision ENV overrides missing** (`vision_env_drift`)
-reports the resolved mode. It reports an error when blur is mandatory but
-`MARKASPOT_BLUR_URL` or the key is missing from the environment, whether or
-not AI image analysis is enabled, because no photo can be analysed then. In
-the other modes it checks the site switch and the configured blur URL when AI
-image analysis is enabled.
+reports the resolved mode and names an unrecognised `MARKASPOT_BLUR_REQUIRED`
+value, so a typo does not look like a deliberate strict setting. It reports
+an error when blur is mandatory but `MARKASPOT_BLUR_URL` or the key is missing
+from the environment, whether or not AI image analysis is enabled and even
+without vision settings, because no photo can be analysed then. In the other
+modes it checks the site switch and the configured blur URL when AI image
+analysis is enabled.
 
 ### Upgrade note for self-hosted installations
 
