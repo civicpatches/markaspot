@@ -22,6 +22,13 @@ final class MailTextUtils {
   private const CONVERSATION_SEPARATOR = "\n\n---\n";
 
   /**
+   * A data-entity-type or data-entity-uuid attribute, with its value.
+   *
+   * HTML parsers lower-case attribute names, so the match ignores case.
+   */
+  private const FILE_EMBED_ATTRIBUTE = '/\s*\bdata-entity-(?:type|uuid)\b(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s"\'=<>`]+))?/i';
+
+  /**
    * Decodes a MIME encoded-word header (RFC 2047) to UTF-8.
    *
    * @param string $value
@@ -94,6 +101,37 @@ final class MailTextUtils {
     $text = preg_replace('/ ?\n ?/', "\n", $text) ?? '';
     $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? '';
     return trim($text);
+  }
+
+  /**
+   * Removes the attributes that make an element a file embed.
+   *
+   * The inbound_mail body is a formatted text field: on every save the
+   * editor module records a file usage, and makes a temporary file permanent,
+   * for each element with data-entity-type="file" and a data-entity-uuid
+   * attribute in its raw value, whatever the text format. A mail is stored
+   * without validation, so the upload binding of markaspot_vision never
+   * checks its body, and htmlToText() decodes escaped markup into real
+   * markup. Text without these attribute names is returned unchanged.
+   * Removing a match can join the text around it into a new one, so the
+   * removal repeats until nothing matches.
+   *
+   * @param string $text
+   *   The plain-text body.
+   *
+   * @return string
+   *   The body without data-entity-type and data-entity-uuid attributes.
+   */
+  public static function stripFileEmbeds(string $text): string {
+    if (stripos($text, 'data-entity-') === FALSE) {
+      return $text;
+    }
+    do {
+      $previous = $text;
+      $text = preg_replace(self::FILE_EMBED_ATTRIBUTE, '', $text)
+        ?? str_ireplace(['data-entity-uuid', 'data-entity-type'], '', $previous);
+    } while ($text !== $previous);
+    return $text;
   }
 
   /**

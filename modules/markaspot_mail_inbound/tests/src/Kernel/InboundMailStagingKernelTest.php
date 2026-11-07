@@ -318,6 +318,37 @@ class InboundMailStagingKernelTest extends KernelTestBase {
   }
 
   /**
+   * A mail cannot embed a file, neither in plain text nor escaped in HTML.
+   *
+   * The body is a formatted text field stored without validation; the editor
+   * module would record a usage for an embed and make the file permanent.
+   */
+  public function testMailBodyDropsFileEmbeds(): void {
+    $uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    $first = $this->ingest($this->makeRaw('embed-001@example.org', body: "Broken light. <img data-entity-type=\"file\" data-entity-uuid=\"$uuid\"> Near the church."));
+    $this->assertSame(IngestResult::STAGED, $first->status);
+    $this->assertSame('Broken light. <img> Near the church.', $this->loadMail((int) $first->entityId)->getBody());
+
+    // An HTML-only reply: the text conversion decodes the escaped element.
+    $reply = "From: Citizen <citizen@example.org>\r\n"
+      . "To: report@city.example\r\n"
+      . "Subject: Re: Broken light\r\n"
+      . "Message-ID: <embed-reply-001@example.org>\r\n"
+      . "In-Reply-To: <embed-001@example.org>\r\n"
+      . "References: <embed-001@example.org>\r\n"
+      . "Date: Wed, 10 Jun 2026 09:00:00 +0200\r\n"
+      . "Content-Type: text/html; charset=utf-8\r\n"
+      . "\r\n"
+      . "<p>Photo: &lt;img data-entity-type=&quot;file&quot; data-entity-uuid=&quot;$uuid&quot;&gt; still dark.</p>\r\n";
+    $result = $this->ingest($reply);
+    $this->assertSame(IngestResult::REPLY, $result->status);
+
+    $body = $this->loadMail((int) $first->entityId)->getBody();
+    $this->assertStringContainsString('Photo: <img> still dark.', $body);
+    $this->assertStringNotContainsStringIgnoringCase('data-entity', $body);
+  }
+
+  /**
    * An auto-reply (Auto-Submitted) is recorded as discarded, not staged.
    */
   public function testAutoReplyIsDiscarded(): void {
