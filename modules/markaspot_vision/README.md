@@ -123,38 +123,60 @@ The citizen frontend uploads a photo
 (`POST /jsonapi/media/request_image/field_media_image`) and creates its
 `request_image` media in a second request. The file is public on `public://`
 tenants and its UUID can be listed, so another client could reference the
-fresh upload first. Any other user of the file stops the blur of the citizen's
-photo, because blur only runs for the file's oldest media user and never for a
-file a node references directly. The upload binding closes that gap.
+fresh upload first. Any other attachment of the file stops the blur of the
+citizen's photo, because blur only runs for the file's oldest media user and
+never for a file another entity references directly. The upload binding
+closes that gap.
 
 - **What is recorded.** Every new file stores its upload context for 6 hours
   in the expirable key/value collection `markaspot_vision_media_analysis`
   (key `file:<fid>`): an HMAC of the `X-CSRF-Token` header, otherwise of the
   session ID. Requests without either record nothing. Deleting the file
   removes the record.
-- **What is checked.** Every file and image field of media (all bundles) and
-  nodes (all bundles) carries the `FileUploadBinding` constraint. A newly
-  referenced file is accepted only if it is not in use yet and it was created
-  in the same request, or the recorded context matches the current request,
-  or the current user owns the file and the request carries that user's real
-  cookie session. References the stored entity already holds are not checked
-  again, so updates that resend the whole attachment list keep working.
+- **What is checked.** Every file, image and formatted text field of every
+  content entity type carries the `FileUploadBinding` constraint, configurable
+  fields and writable base fields alike (read-only base fields such as the
+  media thumbnail are skipped). File and image fields reference a file by ID.
+  Formatted text fields (`text`, `text_long`, `text_with_summary`) reference it
+  through a `data-entity-type="file"` element with a `data-entity-uuid`
+  attribute: the core editor module records a file usage for every such
+  element in the raw value and summary on each save, whatever the text format,
+  and the binding parses the text the same way. A newly referenced file is
+  accepted only if it is not in use yet and it was created in the same
+  request, or the recorded context matches the current request, or the
+  current user owns the file and the request carries that user's real cookie
+  session. References the stored entity already holds are not checked again,
+  so updates that resend the whole attachment list or an unchanged text keep
+  working.
+- **Embeds are no claim.** Text saved without validation, or rewritten after
+  it (the service request presave re-encodes `field_request_attributes`, the
+  PII redaction of markaspot_ai rewrites the body), can still embed a fresh
+  upload, and the editor module records that usage. Usage of the `editor`
+  module therefore never counts as use of an upload: it does not block the
+  uploading session's attach, the photo's blur or the purge of an orphaned
+  upload.
 - **Who bypasses.** Only accounts with `administer media`. Staff permissions
   such as `edit any request_image media` or `bypass node access` do not
   bypass, because staff roles hold them globally, also on stacks with several
   jurisdictions. Staff uploads pass through the same token or the same cookie
-  session instead.
+  session instead. Pasting markup that embeds somebody else's file is refused
+  for staff without `administer media`.
 - **Server-side paths** pass without a record: the Open311 `media_url`
   import creates the file and its media in one request, tenant demo content
-  validates unsaved files, and the inbound mail promoter saves without
-  validation.
+  saves its fixture files and validates their media in the same request, and
+  the inbound mail promoter saves without validation.
 
-A refusal is a JSON:API 422 on the file field with the message "This file
-cannot be attached. Please upload it again." It does not say whether the file
-exists, is in use or belongs to another upload. Expected cases:
+A refusal is a JSON:API 422 on the field. A request that carries an
+`X-CSRF-Token` header or a session cookie gets "This file cannot be attached.
+Please upload it again." It does not say whether the file exists, is in use or
+belongs to another upload. A request with neither gets a message that names
+the missing header and cookie instead, because uploading again the same way
+cannot help (violation code
+`markaspot_vision.file_upload_binding.no_upload_session`). Expected cases:
 
 - A media create whose upload sent an empty `X-CSRF-Token` and had no session
   cookie, for example because `/session/token` failed when the page loaded.
+  This one gets the second message.
 - A JSON:API client authenticated by API key only (no session, no CSRF token)
   that uploads in one request and references the file in another. A shared
   API-key account is never proof of one upload.
@@ -162,7 +184,9 @@ exists, is in use or belongs to another upload. Expected cases:
   succeeded and the file is in use.
 - The deploy window: a file uploaded before the deploy has no record, so its
   media create after the deploy is refused and the citizen uploads again.
-  Uploads older than 6 hours are refused the same way.
+- An anonymous upload older than 6 hours: its record has expired. A logged-in
+  owner whose request carries the real cookie session can still attach an
+  own upload of any age, as long as nothing uses it yet.
 
 There is no environment variable, configuration or update hook for the
 binding. After a deploy, rebuild caches (`drush deploy` does) so the field
