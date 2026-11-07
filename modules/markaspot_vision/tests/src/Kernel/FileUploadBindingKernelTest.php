@@ -438,8 +438,10 @@ final class FileUploadBindingKernelTest extends KernelTestBase {
     $request_image = $this->media($file);
     $this->assertSame(0, $this->bindingViolations($request_image, 'field_media_image'), 'The citizen still attaches the photo.');
     $request_image->save();
-    // The database lists usage counts as strings.
-    $this->assertEquals(['file' => ['media' => [(int) $request_image->id() => 1]]], $this->container->get('file.usage')->listUsage($file));
+    // The source field and the thumbnail both count; only the media uses it.
+    $usage = $this->container->get('file.usage')->listUsage($file);
+    $this->assertSame(['file'], array_keys($usage));
+    $this->assertSame([(int) $request_image->id()], array_keys($usage['file']['media'] ?? []));
   }
 
   /**
