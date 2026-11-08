@@ -5,6 +5,7 @@ namespace Drupal\markaspot_archive;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Database\DatabaseException;
+use Drupal\Core\Database\Query\SelectInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\FieldableEntityInterface;
@@ -69,6 +70,24 @@ class ArchiveService implements ArchiveServiceInterface {
    * Field types whose plain values revision logs may quote verbatim.
    */
   protected const KNOWN_VALUE_TYPES = ['email', 'telephone', 'string'];
+
+  /**
+   * Field types whose stored values show whether they were anonymized.
+   */
+  protected const DETECTABLE_TYPES = [
+    'email',
+    'telephone',
+    'string',
+    'string_long',
+    'text',
+    'text_long',
+    'text_with_summary',
+  ];
+
+  /**
+   * Field erased to an empty value instead of a token.
+   */
+  protected const ERASED_FIELD = 'field_feedback';
 
   /**
    * Entities anonymized during this request.
@@ -575,14 +594,14 @@ class ArchiveService implements ArchiveServiceInterface {
       return $result;
     }
     $fields = $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'));
-    $detectable = $this->detectableFields($fields);
-    if ($detectable === []) {
+    if ($fields === []) {
       return $result;
     }
+    $detectable = $this->detectableFields($fields);
 
     $cursor = (int) $this->state->get(self::BACKFILL_CURSOR_STATE, 0);
-    $nids = $this->backfillCandidates($archived_status, $detectable, $cursor, $limit);
-    if ($nids === []) {
+    $candidates = $this->backfillCandidates($archived_status, $detectable, $cursor, $limit);
+    if ($candidates === []) {
       // Start over on the next run to catch nodes archived meanwhile.
       if ($cursor > 0) {
         $this->state->set(self::BACKFILL_CURSOR_STATE, 0);
@@ -591,34 +610,16 @@ class ArchiveService implements ArchiveServiceInterface {
     }
 
     $started = microtime(TRUE);
-    foreach ($nids as $nid) {
+    foreach ($candidates as $nid => $plain_contact_data) {
       if (microtime(TRUE) - $started > $time_budget) {
         break;
       }
       $cursor = (int) $nid;
       $result['processed']++;
       try {
-        $changed = $this->changeArchivedRequest((int) $nid, $archived_status, FALSE, function (NodeInterface $node) use ($fields, $detectable): bool {
-          $anonymized_values = $this->anonymize($node, $fields);
-          // A field empty on the current revision may still hold plain data
-          // in previous revisions.
-          foreach ($detectable as $field_name => $type) {
-            if (!isset($anonymized_values[$field_name]) && $node->hasField($field_name)) {
-              $anonymized_values[$field_name] = [
-                'type' => $type,
-                'value' => $this->anonymizedValue($type),
-              ];
-            }
-          }
-          if ($anonymized_values === []) {
-            return FALSE;
-          }
-          // Keep the changed time: anonymizing is no change of the request.
-          $node->setSyncing(TRUE);
-          $node->save();
-          $this->anonymizeRevisions($node, $anonymized_values);
-          return TRUE;
-        });
+        $changed = $this->changeArchivedRequest((int) $nid, $archived_status, FALSE, $plain_contact_data
+          ? fn (NodeInterface $node): bool => $this->anonymizeArchivedRequest($node, $fields, $detectable)
+          : fn (NodeInterface $node): bool => $this->eraseRetainedPersonalData($node, $detectable));
         if ($changed) {
           $result['changed']++;
         }
@@ -638,7 +639,7 @@ class ArchiveService implements ArchiveServiceInterface {
 
     if ($result['changed'] > 0 || $result['failed'] > 0) {
       $this->logger->notice(
-        'Anonymized @count archived service requests with plain contact data (@failed failed, up to node ID @nid).',
+        'Anonymized @count archived service requests with plain personal data (@failed failed, up to node ID @nid).',
         ['@count' => $result['changed'], '@failed' => $result['failed'], '@nid' => $cursor]
       );
     }
@@ -671,20 +672,20 @@ class ArchiveService implements ArchiveServiceInterface {
   public function countBackfillCandidates(): int {
     $config = $this->configFactory->get('markaspot_archive.settings');
     $archived_status = (string) $config->get('status_archived');
-    $detectable = $this->detectableFields(
-      $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'))
-    );
-    if ($archived_status === '' || $detectable === []) {
+    $fields = $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'));
+    if ($archived_status === '' || $fields === []) {
       return 0;
     }
-    return count($this->backfillCandidates($archived_status, $detectable, 0, NULL));
+    return count($this->backfillCandidates($archived_status, $this->detectableFields($fields), 0, NULL));
   }
 
   /**
    * Returns the configured fields whose values reveal plain contact data.
    *
    * E-mail and telephone values show whether they were anonymized; string
-   * values are anonymized to a 10 character hex token.
+   * and text values are anonymized to a 10 character hex token, and
+   * field_feedback to an empty value. Booleans are left out: a plain flag
+   * identifies nobody.
    *
    * @param array $fields
    *   Configured field machine names.
@@ -696,11 +697,52 @@ class ArchiveService implements ArchiveServiceInterface {
     $detectable = [];
     foreach ($this->fieldNames($fields) as $field_name) {
       $type = $this->nodeFieldStorage($field_name)?->getType();
-      if (in_array($type, ['email', 'telephone', 'string'], TRUE)) {
+      if (in_array($type, self::DETECTABLE_TYPES, TRUE)) {
         $detectable[$field_name] = $type;
       }
     }
     return $detectable;
+  }
+
+  /**
+   * Returns archived requests that still hold personal data.
+   *
+   * Three sources: plain values of the configured contact fields in any
+   * revision, revision logs that match the e-mail or telephone patterns, and
+   * data derived from the report that modules report through
+   * hook_markaspot_archive_pending_erasure(), such as the original text PII
+   * redaction retained.
+   *
+   * @param string $archived_status
+   *   The archived status term id.
+   * @param array<string, string> $detectable
+   *   Field types keyed by field machine name.
+   * @param int $cursor
+   *   Only node ids above this one are returned.
+   * @param int|null $limit
+   *   Maximum number of node ids, NULL for all.
+   *
+   * @return array<int, bool>
+   *   TRUE for requests whose contact fields still hold plain values, FALSE
+   *   for those with only revision logs or derived data left, keyed by node
+   *   id in ascending order.
+   */
+  protected function backfillCandidates(string $archived_status, array $detectable, int $cursor, ?int $limit): array {
+    $candidates = [];
+    foreach ($this->contactFieldCandidates($archived_status, $detectable, $cursor, $limit) as $nid) {
+      $candidates[$nid] = TRUE;
+    }
+    $other = [
+      ...$this->revisionLogCandidates($archived_status, $cursor, $limit),
+      ...$this->derivedDataCandidates($archived_status, $cursor, $limit),
+    ];
+    foreach ($other as $nid) {
+      $candidates[(int) $nid] ??= FALSE;
+    }
+    ksort($candidates);
+    // Each source returned its first $limit node ids above the cursor, so the
+    // first $limit of the union are complete.
+    return $limit === NULL ? $candidates : array_slice($candidates, 0, $limit, TRUE);
   }
 
   /**
@@ -721,7 +763,7 @@ class ArchiveService implements ArchiveServiceInterface {
    * @return int[]
    *   Node ids in ascending order.
    */
-  protected function backfillCandidates(string $archived_status, array $detectable, int $cursor, ?int $limit): array {
+  protected function contactFieldCandidates(string $archived_status, array $detectable, int $cursor, ?int $limit): array {
     $storage = $this->entityTypeManager->getStorage('node');
     if (!$storage instanceof SqlContentEntityStorage) {
       return [];
@@ -748,9 +790,11 @@ class ArchiveService implements ArchiveServiceInterface {
         ->condition('s.' . $status_column, $archived_status)
         ->condition('r.entity_id', $cursor, '>')
         ->condition($column, '', '<>');
-      match ($type) {
-        'email' => $query->condition($column, '%' . $this->database->escapeLike('@anonymized.off'), 'NOT LIKE'),
-        'telephone' => $query->condition($column, self::ANONYMIZED_PHONE, '<>'),
+      match (TRUE) {
+        // Any stored text left is plain.
+        $field_name === self::ERASED_FIELD => NULL,
+        $type === 'email' => $query->condition($column, '%' . $this->database->escapeLike('@anonymized.off'), 'NOT LIKE'),
+        $type === 'telephone' => $query->condition($column, self::ANONYMIZED_PHONE, '<>'),
         default => $query->condition($column, '^[0-9a-f]{10}$', 'NOT REGEXP'),
       };
       $query->distinct()->orderBy('r.entity_id');
@@ -762,6 +806,144 @@ class ArchiveService implements ArchiveServiceInterface {
     $nids = array_values(array_unique($nids));
     sort($nids);
     return $limit === NULL ? $nids : array_slice($nids, 0, $limit);
+  }
+
+  /**
+   * Returns archived requests whose revision logs quote contact data.
+   *
+   * Uses the patterns of RevisionLogScrubber, so a scrubbed log is no
+   * candidate any more.
+   *
+   * @return int[]
+   *   Node ids in ascending order.
+   */
+  protected function revisionLogCandidates(string $archived_status, int $cursor, ?int $limit): array {
+    $storage = $this->entityTypeManager->getStorage('node');
+    $archived = $this->archivedRequestsQuery($archived_status);
+    $entity_type = $storage->getEntityType();
+    $table = $entity_type->getRevisionTable();
+    $log_column = $entity_type->getRevisionMetadataKey('revision_log_message');
+    $id_column = $entity_type->getKey('id');
+    if ($archived === NULL || !$table || !$log_column || !$id_column) {
+      return [];
+    }
+    $query = $this->database->select($table, 'r');
+    $query->addField('r', $id_column, 'nid');
+    $query->condition('r.' . $id_column, $archived, 'IN')
+      ->condition('r.' . $id_column, $cursor, '>')
+      ->condition($query->orConditionGroup()
+        ->condition('r.' . $log_column, RevisionLogScrubber::EMAIL_PATTERN, 'REGEXP')
+        ->condition('r.' . $log_column, RevisionLogScrubber::PHONE_PATTERN, 'REGEXP'));
+    $query->distinct()->orderBy('nid');
+    if ($limit !== NULL) {
+      $query->range(0, $limit);
+    }
+    return array_map('intval', $query->execute()->fetchCol());
+  }
+
+  /**
+   * Returns archived requests whose derived data modules still have to erase.
+   *
+   * @return int[]
+   *   Node ids in ascending order.
+   */
+  protected function derivedDataCandidates(string $archived_status, int $cursor, ?int $limit): array {
+    $archived = $this->archivedRequestsQuery($archived_status);
+    if ($this->moduleHandler === NULL || $archived === NULL) {
+      return [];
+    }
+    $nids = [];
+    $this->moduleHandler->invokeAllWith(
+      'markaspot_archive_pending_erasure',
+      function (callable $hook) use (&$nids, $archived, $cursor, $limit): void {
+        foreach ((array) $hook(clone $archived, $cursor, $limit) as $nid) {
+          $nids[] = (int) $nid;
+        }
+      }
+    );
+    $nids = array_values(array_unique($nids));
+    sort($nids);
+    return $nids;
+  }
+
+  /**
+   * Returns a query for the node ids of archived service requests.
+   */
+  protected function archivedRequestsQuery(string $archived_status): ?SelectInterface {
+    $storage = $this->entityTypeManager->getStorage('node');
+    $status = $this->nodeFieldStorage('field_status');
+    if (!$storage instanceof SqlContentEntityStorage || $status === NULL) {
+      return NULL;
+    }
+    $mapping = $storage->getTableMapping();
+    if (!$mapping->requiresDedicatedTableStorage($status)) {
+      return NULL;
+    }
+    return $this->database->select($mapping->getDedicatedDataTableName($status), 'archived')
+      ->fields('archived', ['entity_id'])
+      ->condition('archived.bundle', 'service_request')
+      ->condition('archived.' . $mapping->getFieldColumnName($status, 'target_id'), $archived_status);
+  }
+
+  /**
+   * Anonymizes the contact fields of an archived request in all revisions.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The reloaded, locked request.
+   * @param array<string, string> $fields
+   *   Configured anonymize fields.
+   * @param array<string, string> $detectable
+   *   Field types keyed by field machine name.
+   *
+   * @return bool
+   *   TRUE when the request was anonymized.
+   */
+  protected function anonymizeArchivedRequest(NodeInterface $node, array $fields, array $detectable): bool {
+    $anonymized_values = $this->anonymize($node, $fields);
+    // A field empty on the current revision may still hold plain data in
+    // previous revisions.
+    foreach ($detectable as $field_name => $type) {
+      if (!isset($anonymized_values[$field_name]) && $node->hasField($field_name)) {
+        $anonymized_values[$field_name] = [
+          'type' => $type,
+          'value' => $field_name === self::ERASED_FIELD ? '' : $this->anonymizedValue($type),
+        ];
+      }
+    }
+    if ($anonymized_values === []) {
+      return FALSE;
+    }
+    // Keep the changed time: anonymizing is no change of the request.
+    $node->setSyncing(TRUE);
+    $node->save();
+    $this->anonymizeRevisions($node, $anonymized_values);
+    return TRUE;
+  }
+
+  /**
+   * Erases what is left of an archived request whose contact data is clean.
+   *
+   * Contact fields anonymized earlier, but revision logs or derived data such
+   * as a retained PII original still hold personal data. The request itself
+   * is not saved: no entity hook runs and no revision is added.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The reloaded, locked request.
+   * @param array<string, string> $detectable
+   *   Field types keyed by field machine name.
+   *
+   * @return bool
+   *   TRUE, the erasure ran.
+   */
+  protected function eraseRetainedPersonalData(NodeInterface $node, array $detectable): bool {
+    $this->moduleHandler?->invokeAll('markaspot_report_anonymized', [$node]);
+    $known_values = $this->knownContactValues($node, array_map(
+      static fn (string $type): array => ['type' => $type],
+      $detectable
+    ));
+    $this->scrubRevisionLogs($node, $known_values);
+    $this->entityTypeManager->getStorage('node')->resetCache([$node->id()]);
+    return TRUE;
   }
 
   /**

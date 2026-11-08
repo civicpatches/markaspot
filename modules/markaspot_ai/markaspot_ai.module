@@ -545,6 +545,90 @@ function markaspot_ai_markaspot_report_anonymized(EntityInterface $entity): void
 }
 
 /**
+ * Implements hook_markaspot_archive_pending_erasure().
+ *
+ * Archived reports referencing, in any revision, a retained PII original
+ * that is not erased yet in every revision. A remark is an original when
+ * any revision carries the marker or its default revision is marked, as in
+ * _markaspot_ai_erase_retained_pii_originals().
+ */
+function markaspot_ai_markaspot_archive_pending_erasure(SelectInterface $archived_nids, int $after_nid, ?int $limit): array {
+  $tables = _markaspot_ai_retained_pii_tables();
+  if ($tables === NULL) {
+    return [];
+  }
+  $database = \Drupal::database();
+  $with_marker = $database->select($tables['text'], 'm')
+    ->fields('m', ['entity_id'])
+    ->condition('m.' . $tables['text_value'], '%' . $database->escapeLike(RetainedPiiOriginal::MARKER) . '%', 'LIKE');
+  // RetainedPiiOriginal::mark() stores 'pii_original' => TRUE serialized.
+  $marked = $database->select($tables['paragraph_data'], 'p')
+    ->fields('p', ['id'])
+    ->condition('p.behavior_settings', '%' . $database->escapeLike(serialize('pii_original') . serialize(TRUE)) . '%', 'LIKE');
+
+  $query = $database->select($tables['host'], 'h');
+  $query->join($tables['text'], 't', 't.entity_id = h.' . $tables['host_target']);
+  $query->addField('h', 'entity_id', 'nid');
+  $query->condition('h.entity_id', $archived_nids, 'IN')
+    ->condition('h.entity_id', $after_nid, '>')
+    ->condition('t.' . $tables['text_value'], $tables['erased'], '<>')
+    ->condition($query->orConditionGroup()
+      ->condition('t.entity_id', $with_marker, 'IN')
+      ->condition('t.entity_id', $marked, 'IN'));
+  $query->distinct()->orderBy('nid');
+  if ($limit !== NULL) {
+    $query->range(0, $limit);
+  }
+  return array_map('intval', $query->execute()->fetchCol());
+}
+
+/**
+ * Returns where retained PII originals are stored and their erased text.
+ *
+ * Shared by the erasure and the pending check, so both agree on the tables
+ * and on the text an erased original holds.
+ *
+ * @return array{host: string, host_target: string, text: string, text_data: string, text_value: string, paragraph_data: string, erased: string}|null
+ *   Node revision table of field_internal_remark and its target column, the
+ *   revision and data tables of the remark text and its value column, the
+ *   paragraph data table and the erased text; NULL without remarks.
+ */
+function _markaspot_ai_retained_pii_tables(): ?array {
+  $entity_type_manager = \Drupal::entityTypeManager();
+  if (!$entity_type_manager->hasDefinition('paragraph')) {
+    return NULL;
+  }
+  $node_storage = $entity_type_manager->getStorage('node');
+  $paragraph_storage = $entity_type_manager->getStorage('paragraph');
+  $field_manager = \Drupal::service('entity_field.manager');
+  $host_field = $field_manager->getFieldStorageDefinitions('node')['field_internal_remark'] ?? NULL;
+  $text_field = $field_manager->getFieldStorageDefinitions('paragraph')['field_internal_remark_text'] ?? NULL;
+  if (
+    !$node_storage instanceof SqlContentEntityStorage
+    || !$paragraph_storage instanceof SqlContentEntityStorage
+    || $host_field === NULL
+    || $text_field === NULL
+    || $paragraph_storage->getDataTable() === NULL
+  ) {
+    return NULL;
+  }
+  $node_mapping = $node_storage->getTableMapping();
+  $paragraph_mapping = $paragraph_storage->getTableMapping();
+  if (!$node_mapping->requiresDedicatedTableStorage($host_field) || !$paragraph_mapping->requiresDedicatedTableStorage($text_field)) {
+    return NULL;
+  }
+  return [
+    'host' => $node_mapping->getDedicatedRevisionTableName($host_field),
+    'host_target' => $node_mapping->getFieldColumnName($host_field, 'target_id'),
+    'text' => $paragraph_mapping->getDedicatedRevisionTableName($text_field),
+    'text_data' => $paragraph_mapping->getDedicatedDataTableName($text_field),
+    'text_value' => $paragraph_mapping->getFieldColumnName($text_field, 'value'),
+    'paragraph_data' => $paragraph_storage->getDataTable(),
+    'erased' => RetainedPiiOriginal::erasedText(),
+  ];
+}
+
+/**
  * Overwrites the PII originals retained for a report in every revision.
  *
  * Covers every remark any revision or translation of the report references,
@@ -559,32 +643,15 @@ function markaspot_ai_markaspot_report_anonymized(EntityInterface $entity): void
  *   Number of remarks whose retained original was erased.
  */
 function _markaspot_ai_erase_retained_pii_originals(NodeInterface $node): int {
-  $entity_type_manager = \Drupal::entityTypeManager();
-  if ($node->isNew() || !$node->hasField('field_internal_remark') || !$entity_type_manager->hasDefinition('paragraph')) {
+  $tables = _markaspot_ai_retained_pii_tables();
+  if ($node->isNew() || !$node->hasField('field_internal_remark') || $tables === NULL) {
     return 0;
   }
-  $node_storage = $entity_type_manager->getStorage('node');
-  $paragraph_storage = $entity_type_manager->getStorage('paragraph');
-  $field_manager = \Drupal::service('entity_field.manager');
-  $host_field = $field_manager->getFieldStorageDefinitions('node')['field_internal_remark'] ?? NULL;
-  $text_field = $field_manager->getFieldStorageDefinitions('paragraph')['field_internal_remark_text'] ?? NULL;
-  if (
-    !$node_storage instanceof SqlContentEntityStorage
-    || !$paragraph_storage instanceof SqlContentEntityStorage
-    || $host_field === NULL
-    || $text_field === NULL
-  ) {
-    return 0;
-  }
-  $node_mapping = $node_storage->getTableMapping();
-  $paragraph_mapping = $paragraph_storage->getTableMapping();
-  if (!$node_mapping->requiresDedicatedTableStorage($host_field) || !$paragraph_mapping->requiresDedicatedTableStorage($text_field)) {
-    return 0;
-  }
+  $paragraph_storage = \Drupal::entityTypeManager()->getStorage('paragraph');
 
   $database = \Drupal::database();
-  $remark_ids = $database->select($node_mapping->getDedicatedRevisionTableName($host_field), 'r')
-    ->fields('r', [$node_mapping->getFieldColumnName($host_field, 'target_id')])
+  $remark_ids = $database->select($tables['host'], 'r')
+    ->fields('r', [$tables['host_target']])
     ->condition('r.entity_id', $node->id())
     ->distinct()
     ->execute()
@@ -595,8 +662,8 @@ function _markaspot_ai_erase_retained_pii_originals(NodeInterface $node): int {
 
   // A remark is an original when its default revision is marked or carries
   // the marker, or when any of its revisions carries the marker.
-  $text_revision_table = $paragraph_mapping->getDedicatedRevisionTableName($text_field);
-  $value_column = $paragraph_mapping->getFieldColumnName($text_field, 'value');
+  $text_revision_table = $tables['text'];
+  $value_column = $tables['text_value'];
   $original_ids = array_map('intval', $database->select($text_revision_table, 't')
     ->fields('t', ['entity_id'])
     ->condition('t.entity_id', $remark_ids, 'IN')
@@ -614,8 +681,8 @@ function _markaspot_ai_erase_retained_pii_originals(NodeInterface $node): int {
     return 0;
   }
 
-  $erased = RetainedPiiOriginal::erasedText();
-  foreach ([$paragraph_mapping->getDedicatedDataTableName($text_field), $text_revision_table] as $table) {
+  $erased = $tables['erased'];
+  foreach ([$tables['text_data'], $text_revision_table] as $table) {
     $database->update($table)
       ->fields([$value_column => $erased])
       ->condition('entity_id', $original_ids, 'IN')

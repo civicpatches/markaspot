@@ -187,6 +187,53 @@ final class RetainedPiiArchiveKernelTest extends KernelTestBase {
   }
 
   /**
+   * The backfill erases an original of a report anonymized before.
+   *
+   * The contact fields were anonymized before originals were erased, so only
+   * the original still holds personal data. Its marker survives in no
+   * revision: only the provenance mark identifies it.
+   */
+  public function testBackfillErasesSurvivingOriginalOfAnonymizedReport(): void {
+    $this->config('markaspot_archive.settings')->set('anonymize', 0)->save();
+    $node = $this->submitWithPii();
+    $original = $this->retainedOriginal($node);
+    $original->set('field_internal_remark_text', [
+      'value' => 'Reporter at ' . self::PHONE . ' called again.',
+      'format' => 'plain_text',
+    ]);
+    $node->setNewRevision(TRUE);
+    $node->save();
+    $node->set('field_status', $this->status['archived']);
+    $node->setNewRevision(TRUE);
+    $node->save();
+
+    // An earlier anonymization: contact fields and marked texts only.
+    $database = \Drupal::database();
+    foreach (['node__field_e_mail', 'node_revision__field_e_mail'] as $table) {
+      $database->update($table)->fields(['field_e_mail_value' => 'abc@anonymized.off'])->execute();
+    }
+    foreach (['paragraph__field_internal_remark_text', 'paragraph_revision__field_internal_remark_text'] as $table) {
+      $database->update($table)
+        ->fields(['field_internal_remark_text_value' => RetainedPiiOriginal::erasedText()])
+        ->condition('field_internal_remark_text_value', '%' . $database->escapeLike(RetainedPiiOriginal::MARKER) . '%', 'LIKE')
+        ->execute();
+    }
+    \Drupal::entityTypeManager()->getStorage('node')->resetCache();
+    \Drupal::entityTypeManager()->getStorage('paragraph')->resetCache();
+    $this->assertStringContainsString(self::PHONE, implode(' ', $this->remarkRevisionTexts((int) $original->id())));
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $archive = \Drupal::service('markaspot_archive.archive');
+    $revisions = $database->select('node_revision', 'r')->fields('r', ['vid'])->condition('nid', $node->id())->execute()->fetchCol();
+
+    $this->assertSame(1, $archive->countBackfillCandidates());
+    $this->assertSame(1, $archive->backfillArchived(10, 20)['changed']);
+
+    $this->assertRemarkErased((int) $original->id());
+    $this->assertSame(0, $archive->countBackfillCandidates());
+    $this->assertSame($revisions, $database->select('node_revision', 'r')->fields('r', ['vid'])->condition('nid', $node->id())->execute()->fetchCol());
+  }
+
+  /**
    * Submits a report whose text holds personal data.
    */
   private function submitWithPii(): NodeInterface {

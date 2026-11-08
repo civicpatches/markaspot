@@ -910,6 +910,72 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * The backfill also finds revision logs and text fields with plain data.
+   *
+   * The contact e-mail of all of these requests is already anonymized.
+   */
+  public function testBackfillFindsRevisionLogsFeedbackAndTextFields(): void {
+    $this->createQueueRequest();
+    $this->createNodeField('field_feedback', 'text_long');
+    $this->createNodeField('field_reporter_note', 'string_long');
+    $this->config('markaspot_archive.settings')
+      ->set('anonymize', 0)
+      ->set('anonymize_fields', [
+        'field_e_mail' => 'field_e_mail',
+        'field_reporter_note' => 'field_reporter_note',
+      ])
+      ->save();
+    $archived = $this->archivedStatusId();
+    $done = 'abc@anonymized.off';
+
+    $log_only = Node::create([
+      'type' => 'service_request',
+      'title' => 'Broken streetlight',
+      'field_status' => $archived,
+      'field_e_mail' => $done,
+      'changed' => 1000000000,
+    ]);
+    RevisionLog::setMessage($log_only, 'Call back at 0170 1234567.');
+    $log_only->save();
+    $feedback = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => $done,
+      'field_feedback' => 'Thanks, fixed quickly.',
+    ]);
+    $feedback_revision = (int) $feedback->getRevisionId();
+    $feedback->setNewRevision(TRUE);
+    $feedback->set('field_feedback', NULL);
+    $feedback->save();
+    $note = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => $done,
+      'field_reporter_note' => 'Ring twice, second floor.',
+    ]);
+    $clean = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => $done,
+    ]);
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $service = $this->container->get('markaspot_archive.archive');
+    $log_revisions = $this->nodeRevisionIds((int) $log_only->id());
+    $clean_revision = (int) $clean->getRevisionId();
+
+    self::assertSame(3, $service->countBackfillCandidates());
+    self::assertSame(3, $service->backfillArchived(10, 20)['changed']);
+
+    // Only the log changed: no save, no revision, same changed time.
+    self::assertSame($log_revisions, $this->nodeRevisionIds((int) $log_only->id()));
+    self::assertSame('Call back at [REDACTED phone].', RevisionLog::decode($this->revisionLog($log_revisions[0]))['message']);
+    self::assertSame(1000000000, (int) Node::load($log_only->id())->getChangedTime());
+    self::assertSame('', (string) $this->revisionFieldValue($feedback_revision, 'field_feedback'));
+    self::assertMatchesRegularExpression('/^[0-9a-f]{10}$/', (string) Node::load($note->id())->get('field_reporter_note')->value);
+    self::assertSame($clean_revision, (int) Node::load($clean->id())->getRevisionId());
+
+    self::assertSame(0, $service->countBackfillCandidates());
+    self::assertSame(0, $service->backfillArchived(10, 20)['changed']);
+  }
+
+  /**
    * The backfill honors its limit and starts over once it is exhausted.
    */
   public function testBackfillLimitAndCursorReset(): void {
