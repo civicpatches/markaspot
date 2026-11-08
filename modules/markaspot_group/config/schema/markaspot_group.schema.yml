@@ -12,6 +12,9 @@ markaspot_group.settings:
     single_organisation_assignment:
       type: boolean
       label: 'Restrict service requests to a single organisation'
+    org_notification_via_eca:
+      type: boolean
+      label: 'Leave all organisation notification mail to tenant ECA processes'
 
 markaspot_group.mail:
   type: config_object

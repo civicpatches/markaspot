@@ -6132,6 +6132,17 @@ function _markaspot_group_has_active_org_notification_eca(): bool {
 }
 
 /**
+ * Whether the tenant leaves all organisation notification mail to ECA.
+ *
+ * Reads the optional markaspot_group.settings:org_notification_via_eca
+ * switch. A missing key, as in client config/sync exports that predate it,
+ * means FALSE: the module keeps sending.
+ */
+function _markaspot_group_org_notification_via_eca(): bool {
+  return (bool) \Drupal::config('markaspot_group.settings')->get('org_notification_via_eca');
+}
+
+/**
  * Sends notification email to all or selected assigned organisations.
  *
  * Replaces the email action from the ECA rule process_apply_group. New code
@@ -6328,6 +6339,14 @@ function _markaspot_group_notify_assignee(NodeInterface $node): void {
  *   The assigned organisation group.
  */
 function _markaspot_group_notify_organisation_group(NodeInterface $node, GroupInterface $org_group): void {
+  // Tenants whose own ECA process mails organisations can switch the module
+  // mail off for every path at once: category-derived and explicit
+  // organisations as well as pending team assignments. A missing key keeps
+  // the module mail, next to the per-path ECA detection.
+  if (_markaspot_group_org_notification_via_eca()) {
+    return;
+  }
+
   if ($org_group->bundle() !== _markaspot_group_get_org_group_type()) {
     return;
   }

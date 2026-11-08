@@ -1118,6 +1118,23 @@ final class ServiceRequestAssigneeKernelTest extends KernelTestBase {
   }
 
   /**
+   * The ECA switch silences the team mail that detection alone keeps.
+   */
+  public function testAssignedTeamNotificationSuppressedByEcaSwitch(): void {
+    $request = $this->createServiceRequest($this->organisation);
+    $this->clearCollectedMails();
+    $this->config('markaspot_group.settings')->set('org_notification_via_eca', TRUE)->save();
+
+    $request->set('field_assigned_team', $this->trafficOrganisation->id());
+    $request->set('field_organisation', $this->trafficOrganisation->id());
+    $request->save();
+
+    $this->assertSame([], $this->collectedMails());
+    $request = $this->reloadNode($request);
+    $this->assertSame((int) $this->trafficOrganisation->id(), (int) $request->get('field_assigned_team')->target_id);
+  }
+
+  /**
    * Legacy ECA does not suppress team mail without responsibility sync.
    */
   public function testAssignedTeamNotificationWithEcaAndNoResponsibilitySync(): void {

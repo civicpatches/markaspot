@@ -619,6 +619,44 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
   }
 
   /**
+   * The ECA switch silences the category-derived organisation mail.
+   */
+  public function testEcaSwitchSuppressesTheDerivedMail(): void {
+    [, $hedges] = $this->createCategories();
+    $this->config('markaspot_group.settings')->set('org_notification_via_eca', TRUE)->save();
+
+    $request = $this->createCategoryRequest('Hedge blocks the cycle path', (int) $hedges->id());
+
+    $this->assertSame([(int) $this->parks->id()], $this->relationIds((int) $request->id()));
+    $this->assertSame([], $this->collectedMails());
+  }
+
+  /**
+   * The ECA switch silences the mail for a submitted organisation as well.
+   */
+  public function testEcaSwitchSuppressesTheSubmittedMail(): void {
+    $this->config('markaspot_group.settings')->set('org_notification_via_eca', TRUE)->save();
+
+    $request = $this->createRequest('Bent bollard', [(int) $this->roadWorks->id()]);
+
+    $this->assertSame([(int) $this->roadWorks->id()], $this->relationIds((int) $request->id()));
+    $this->assertSame([], $this->collectedMails());
+  }
+
+  /**
+   * The switch set to FALSE behaves like a missing key.
+   */
+  public function testEcaSwitchOffKeepsTheModuleMail(): void {
+    $this->config('markaspot_group.settings')->set('org_notification_via_eca', FALSE)->save();
+
+    $this->createRequest('Missing manhole cover', [(int) $this->roadWorks->id()]);
+
+    $mails = $this->collectedMails();
+    $this->assertCount(1, $mails);
+    $this->assertSame('roads@example.test', $mails[0]['to']);
+  }
+
+  /**
    * An active legacy notification ECA keeps sending instead of the module.
    */
   public function testActiveLegacyNotificationEcaSuppressesTheDerivedMail(): void {
