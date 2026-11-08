@@ -912,3 +912,26 @@ function markaspot_ai_update_11904(): string {
   }
   return 'Sovereign IONOS model configuration installed; operator policy remains unchanged.';
 }
+
+/**
+ * Adds the shipped token tracking defaults where the settings lack them.
+ *
+ * Sites installed before markaspot_ai shipped token tracking have no
+ * token_tracking key at all, which the code reads as tracking disabled and
+ * no daily limit. Only a missing key is filled; an existing mapping, including
+ * a deliberately disabled tracker, other limits or a vision budget, stays as
+ * it is. The values mirror config/install/markaspot_ai.settings.yml; the
+ * vision budget is left unset (unset and 0 both mean unlimited).
+ */
+function markaspot_ai_update_11905(): string {
+  $config = \Drupal::configFactory()->getEditable('markaspot_ai.settings');
+  if ($config->isNew() || $config->get('token_tracking') !== NULL) {
+    return 'Token tracking settings already present; left unchanged.';
+  }
+  $config
+    ->set('token_tracking.enabled', TRUE)
+    ->set('token_tracking.daily_limit', 100000)
+    ->set('token_tracking.alert_threshold', 0.9)
+    ->save();
+  return 'Token tracking enabled with the shipped defaults: daily text limit 100000 tokens, alert threshold 0.9.';
+}
