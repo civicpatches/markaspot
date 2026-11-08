@@ -258,6 +258,79 @@ final class BoilerplateAccess {
   }
 
   /**
+   * Removes exact duplicate Group relations of templates.
+   *
+   * Tenant setup scripts that inserted relation rows straight from
+   * node_field_data created one relation per translation, so the shipped
+   * translated "000 Received" template ended up with two relations to the same
+   * jurisdiction, and syncRelationship() then refuses every save. Per template
+   * and group the oldest relation stays; the newer ones are deleted through the
+   * entity API in one call, because Group re-saves the template after the
+   * deletion and that save must find exactly one relation. Templates related to
+   * different groups are left alone: that is foreign ownership, not a
+   * duplicate. Safe to run again.
+   *
+   * @return array{templates: int, deleted: int, failed: int}
+   *   Repaired template/group pairs, deleted relations and pairs left as they
+   *   were because the deletion failed.
+   */
+  public static function removeDuplicateRelationships(): array {
+    $result = ['templates' => 0, 'deleted' => 0, 'failed' => 0];
+    $entity_type_manager = \Drupal::entityTypeManager();
+    if (!\Drupal::moduleHandler()->moduleExists('gnode') || !$entity_type_manager->hasDefinition('group_relationship')) {
+      return $result;
+    }
+    $definition = $entity_type_manager->getDefinition('group_relationship');
+    $table = $definition->getDataTable() ?: $definition->getBaseTable();
+    $query = \Drupal::database()->select($table, 'r');
+    $query->addField('r', 'entity_id');
+    $query->addField('r', 'gid');
+    $query->condition('r.plugin_id', 'group_node:boilerplate');
+    $query->groupBy('r.entity_id');
+    $query->groupBy('r.gid');
+    $query->having('COUNT(DISTINCT [r].[id]) > 1');
+    $pairs = $query->execute()->fetchAll();
+
+    $storage = $entity_type_manager->getStorage('group_relationship');
+    foreach ($pairs as $pair) {
+      $ids = $storage->getQuery()
+        ->accessCheck(FALSE)
+        ->condition('plugin_id', 'group_node:boilerplate')
+        ->condition('entity_id', (int) $pair->entity_id)
+        ->condition('gid', (int) $pair->gid)
+        ->execute();
+      $ids = array_map('intval', array_values($ids));
+      sort($ids, SORT_NUMERIC);
+      $kept = array_shift($ids);
+      if ($ids === []) {
+        continue;
+      }
+      try {
+        $storage->delete($storage->loadMultiple($ids));
+        $result['templates']++;
+        $result['deleted'] += count($ids);
+        \Drupal::logger('markaspot_boilerplate')->notice('Removed @count duplicate Group relations of template @nid in group @gid, kept relation @kept.', [
+          '@count' => count($ids),
+          '@nid' => (int) $pair->entity_id,
+          '@gid' => (int) $pair->gid,
+          '@kept' => $kept,
+        ]);
+      }
+      catch (\Throwable $exception) {
+        // The deletion runs in a transaction and is rolled back. Leave this
+        // template for manual review instead of aborting the deployment.
+        $result['failed']++;
+        \Drupal::logger('markaspot_boilerplate')->error('Could not remove duplicate Group relations of template @nid in group @gid: @message', [
+          '@nid' => (int) $pair->entity_id,
+          '@gid' => (int) $pair->gid,
+          '@message' => $exception->getMessage(),
+        ]);
+      }
+    }
+    return $result;
+  }
+
+  /**
    * Restricts SQL node collections before pagination and count calculation.
    */
   public static function alterQuery(SelectInterface $query): void {
