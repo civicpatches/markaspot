@@ -83,6 +83,16 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   private ?int $failingCleanupNid = NULL;
 
   /**
+   * Node whose save makes the catch-up lose its lock, if any.
+   */
+  private ?int $lockLostOnSaveOf = NULL;
+
+  /**
+   * TRUE once the catch-up lock counts as lost.
+   */
+  private bool $lockLost = FALSE;
+
+  /**
    * Category term id.
    */
   private int $categoryTid;
@@ -1663,6 +1673,66 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     self::assertTrue(Node::load($nids[1])->isPublished());
     foreach ($nids as $i => $nid) {
       self::assertSame('plain' . $i . '@example.org', Node::load($nid)->get('field_e_mail')->value);
+    }
+  }
+
+  /**
+   * Losing the lock during the final operation fails the command.
+   *
+   * The final request of a limited run is processed after the last renewal:
+   * the command must notice the loss afterwards, record neither progress nor
+   * the end of the pass, and fail.
+   */
+  public function testBackfillCommandFailsWhenTheLockIsLostInTheFinalOperation(): void {
+    $nids = $this->createArchivedBacklog(1);
+    $state = $this->container->get('state');
+    $this->lockLostOnSaveOf = $nids[0];
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(fn (): bool => !$this->lockLost);
+
+    $result = $this->archiveCommand($this->freshArchiveService(), $lock)
+      ->backfill($this->backfillOptions(['only' => 'unpublish', 'limit' => 1]));
+
+    self::assertTrue($this->lockLost);
+    self::assertFalse(Node::load($nids[0])->isPublished(), 'The operation ran.');
+    self::assertSame(1, $result->getExitCode());
+    $rows = $this->backfillRows($result);
+    self::assertSame(['unpublish', 'on', 1, 1, 1, 0, 0], array_slice(array_values($rows[0]), 0, 7));
+    self::assertStringContainsString('lock', $rows[0]['note']);
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE), 'No progress recorded.');
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+  }
+
+  /**
+   * The unpublish pass does not record its end after the lock was lost.
+   */
+  public function testUnpublishPassEndIsNotRecordedWithoutTheLock(): void {
+    $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    $state = $this->container->get('state');
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    // The command's acquisition and its renewal before the batch succeed;
+    // the lease runs out before the pass records its end.
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      return ++$calls <= 2;
+    });
+
+    $result = $this->archiveCommand($this->freshArchiveService(), $lock)
+      ->backfill($this->backfillOptions(['only' => 'unpublish']));
+
+    self::assertSame(1, $result->getExitCode());
+    self::assertStringContainsString('lock', $this->backfillRows($result)[0]['note']);
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+  }
+
+  /**
+   * Marks the catch-up lock as lost when the chosen node is saved.
+   */
+  #[Hook('node_update')]
+  public function loseLockOnChosenSave(NodeInterface $node): void {
+    if ($this->lockLostOnSaveOf !== NULL && (int) $node->id() === $this->lockLostOnSaveOf) {
+      $this->lockLost = TRUE;
     }
   }
 

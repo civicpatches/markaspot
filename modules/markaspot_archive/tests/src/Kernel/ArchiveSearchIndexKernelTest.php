@@ -246,12 +246,14 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     }));
     $this->assertSame(1, $service->countSearchIndexBacklog());
 
-    // The command: the first acquisition and the renewals of the anonymize
-    // step succeed, the renewal before the first indexing chunk fails.
+    // The command: the first acquisition and the six renewals of the
+    // anonymize step succeed (before the first batch, after each of the two
+    // requests, after that batch and after the empty batch that ends the
+    // step); the renewal before the first indexing chunk fails.
     $calls = 0;
     $lock = $this->createMock(LockBackendInterface::class);
     $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
-      return ++$calls <= 3;
+      return ++$calls <= 6;
     });
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
     $result = $this->command($lock)->backfill($this->options());
@@ -393,6 +395,27 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     // Detaching the server does not remove the tables either.
     Index::load(self::INDEX)->setServer(NULL)->save();
     $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
+  }
+
+  /**
+   * Losing the lock while the final chunk is indexed fails the command.
+   */
+  public function testLockLostInTheFinalIndexingChunkFailsTheCommand(): void {
+    $service = $this->container->get('markaspot_archive.archive');
+    $this->createArchivedRequestWithNote();
+    $this->assertSame(1, $service->countSearchIndexBacklog());
+    // The lease runs out while the only chunk is indexed: every renewal from
+    // then on fails.
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(static fn (): bool => $service->countSearchIndexBacklog() > 0);
+
+    $result = $this->command($lock)->backfill($this->options());
+    $rows = $this->rows($result);
+
+    $this->assertSame(0, $service->countSearchIndexBacklog(), 'The chunk was indexed.');
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertSame(['search index', 'on', 1, 1, 1, 0, 0], array_slice(array_values($rows['search index']), 0, 7));
+    $this->assertStringContainsString('lock', $rows['search index']['note']);
   }
 
   /**

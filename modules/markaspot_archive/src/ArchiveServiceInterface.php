@@ -154,12 +154,16 @@ interface ArchiveServiceInterface {
    *   Maximum number of nodes to process.
    * @param int $time_budget
    *   Seconds after which no further node is started.
+   * @param (callable(): bool)|null $continue
+   *   Called after each node and before the end of the pass is recorded,
+   *   for example to renew a lock. When it returns FALSE the call stops and
+   *   records neither its progress nor the end of the pass.
    *
    * @return array{processed: int, changed: int, failed: int}
    *   Nodes passed, unpublished and failed in this call. Nothing processed
    *   means the setting is off or the pass has ended.
    */
-  public function unpublishArchivedBacklog(int $limit, int $time_budget): array;
+  public function unpublishArchivedBacklog(int $limit, int $time_budget, ?callable $continue = NULL): array;
 
   /**
    * Anonymizes archived requests that still hold plain contact data.
@@ -173,13 +177,16 @@ interface ArchiveServiceInterface {
    *   Maximum number of nodes to process.
    * @param int $time_budget
    *   Seconds after which no further node is started.
+   * @param (callable(): bool)|null $continue
+   *   Called after each node, for example to renew a lock. When it returns
+   *   FALSE the call stops and does not record its progress.
    *
    * @return array{processed: int, changed: int, failed: int}
    *   Nodes passed, anonymized and failed in this call. Nothing processed
    *   means the setting is off or no candidate is left above the cursor; the
    *   next call then starts over at the first node.
    */
-  public function backfillArchived(int $limit, int $time_budget): array;
+  public function backfillArchived(int $limit, int $time_budget, ?callable $continue = NULL): array;
 
   /**
    * Counts the requests the one-time unpublish pass still has to visit.
@@ -235,8 +242,8 @@ interface ArchiveServiceInterface {
    * Indexes the waiting search index items of archived requests now.
    *
    * @param (callable(): bool)|null $continue
-   *   Called before each chunk of items, for example to renew a lock; the
-   *   indexing stops when it returns FALSE.
+   *   Called before the first chunk of items and after each chunk, for
+   *   example to renew a lock; the indexing stops when it returns FALSE.
    *
    * @return array{processed: int, changed: int, failed: int}
    *   Items attempted, indexed and not indexed.

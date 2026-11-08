@@ -181,9 +181,10 @@ final class ArchiveCommands extends DrushCommands {
    * catch-up cannot update, such as a read-only one or a disabled one whose
    * server may still hold its data, is named in the note.
    *
-   * The command renews its lock before each batch and each indexing chunk.
-   * When that fails, cron or another run may hold the lock: the command
-   * stops, skips the later steps and fails.
+   * The command renews its lock before the first batch, after every request
+   * and after every indexing chunk. When that fails, cron or another run may
+   * hold the lock: the command stops without recording further progress,
+   * skips the later steps and fails.
    *
    * Exits with 1 when a request failed, when a step whose setting is on
    * still has requests left although no --limit was given, when a search
@@ -341,7 +342,8 @@ final class ArchiveCommands extends DrushCommands {
       $this->runBatches('Unpublish', $row, $limit, $batch_size,
         fn (int $size): array => $this->archiveService->unpublishArchivedBacklog(
           $size,
-          self::BACKFILL_BATCH_TIME_BUDGET
+          self::BACKFILL_BATCH_TIME_BUDGET,
+          fn (): bool => $this->renewLock()
         ));
       if ($this->lockLost) {
         $row['note'] = self::LOCK_LOST_NOTE;
@@ -382,7 +384,8 @@ final class ArchiveCommands extends DrushCommands {
       $this->runBatches('Anonymize', $row, $limit, $batch_size,
         fn (int $size): array => $this->archiveService->backfillArchived(
           $size,
-          self::BACKFILL_BATCH_TIME_BUDGET
+          self::BACKFILL_BATCH_TIME_BUDGET,
+          fn (): bool => $this->renewLock()
         ));
       $row['note'] = match (TRUE) {
         $this->lockLost => self::LOCK_LOST_NOTE,
@@ -462,6 +465,11 @@ final class ArchiveCommands extends DrushCommands {
   /**
    * Calls one catch-up step batch by batch until it ends or hits the limit.
    *
+   * Lock ownership is checked before the first batch and after every batch;
+   * the batches check it after every request as well. Once it is lost the
+   * step stops: the counts of the work done are kept, nothing more runs and
+   * the command fails.
+   *
    * @param string $label
    *   Step label for the progress log.
    * @param array<string, int|string> $row
@@ -474,18 +482,19 @@ final class ArchiveCommands extends DrushCommands {
    *   Processes one batch of the given size.
    */
   private function runBatches(string $label, array &$row, int $limit, int $batch_size, callable $batch): void {
+    if (!$this->renewLock()) {
+      return;
+    }
     while ($limit === 0 || $row['processed'] < $limit) {
       $size = $limit === 0 ? $batch_size : min($batch_size, $limit - (int) $row['processed']);
-      // Keep the lock for the next batch, or stop.
-      if (!$this->renewLock()) {
-        break;
-      }
       $result = $batch($size);
-      if ($result['processed'] === 0) {
-        break;
-      }
       foreach (['processed', 'changed', 'failed'] as $key) {
         $row[$key] = (int) $row[$key] + $result[$key];
+      }
+      // The lease may have run out during the batch, the final one included:
+      // keep the lock for whatever follows, or stop.
+      if (!$this->renewLock() || $result['processed'] === 0) {
+        break;
       }
       $this->archiveLogger->notice(
         '@step: @processed archived requests processed (@changed changed, @failed failed).',

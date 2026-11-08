@@ -541,6 +541,7 @@ class ArchiveService implements ArchiveServiceInterface {
   public function unpublishArchivedBacklog(
     int $limit = self::BACKFILL_LIMIT,
     int $time_budget = self::BACKFILL_TIME_BUDGET,
+    ?callable $continue = NULL,
   ): array {
     $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $config = $this->configFactory->get('markaspot_archive.settings');
@@ -564,7 +565,7 @@ class ArchiveService implements ArchiveServiceInterface {
       // Every node has been passed once and no failure is left to retry.
       // Later archive transitions unpublish on presave, and a report staff
       // republish afterwards stays published.
-      if ($failed === []) {
+      if ($failed === [] && ($continue === NULL || $continue())) {
         $this->state->set(self::UNPUBLISH_BACKLOG_DONE_STATE, TRUE);
         $this->state->delete(self::UNPUBLISH_BACKLOG_CURSOR_STATE);
         $this->state->delete(self::UNPUBLISH_BACKLOG_FAILED_STATE);
@@ -610,6 +611,11 @@ class ArchiveService implements ArchiveServiceInterface {
           ['@nid' => $nid, '@error' => $e->getMessage()]
         );
       }
+      if ($continue !== NULL && !$continue()) {
+        // Cron or another run may hold the lock now and record its own
+        // progress; the requests left are found again from the old cursor.
+        return $result;
+      }
     }
     $this->state->set(self::UNPUBLISH_BACKLOG_CURSOR_STATE, $cursor);
     if ($failed === []) {
@@ -648,6 +654,7 @@ class ArchiveService implements ArchiveServiceInterface {
   public function backfillArchived(
     int $limit = self::BACKFILL_LIMIT,
     int $time_budget = self::BACKFILL_TIME_BUDGET,
+    ?callable $continue = NULL,
   ): array {
     $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $config = $this->configFactory->get('markaspot_archive.settings');
@@ -695,6 +702,10 @@ class ArchiveService implements ArchiveServiceInterface {
           'Archived node @nid could not be anonymized: @error',
           ['@nid' => $nid, '@error' => $e->getMessage()]
         );
+      }
+      if ($continue !== NULL && !$continue()) {
+        // See ::unpublishArchivedBacklog(): no progress without the lock.
+        return $result;
       }
     }
     $this->state->set(self::BACKFILL_CURSOR_STATE, $cursor);
@@ -755,16 +766,17 @@ class ArchiveService implements ArchiveServiceInterface {
   public function indexSearchIndexBacklog(?callable $continue = NULL): array {
     $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $storage = $this->entityTypeManager->getStorage('search_api_index');
-    foreach ($this->searchIndexBacklog() ?? [] as $index_id => $item_ids) {
+    $backlog = $this->searchIndexBacklog() ?? [];
+    if ($backlog === [] || ($continue !== NULL && !$continue())) {
+      return $result;
+    }
+    foreach ($backlog as $index_id => $item_ids) {
       $index = $storage->load($index_id);
       if (!$index instanceof IndexInterface || $index->isReadOnly()) {
         continue;
       }
       $batch_size = max(1, (int) ($index->getOption('cron_limit', 50) ?: 50));
       foreach (array_chunk($item_ids, $batch_size) as $chunk) {
-        if ($continue !== NULL && !$continue()) {
-          return $result;
-        }
         $result['processed'] += count($chunk);
         try {
           $indexed = count($index->indexSpecificItems($index->loadItemsMultiple($chunk)));
@@ -779,6 +791,11 @@ class ArchiveService implements ArchiveServiceInterface {
         }
         $result['changed'] += $indexed;
         $result['failed'] += count($chunk) - $indexed;
+        // A chunk may outlast the lease: check again after it, so a lock lost
+        // during the final chunk still fails the run.
+        if ($continue !== NULL && !$continue()) {
+          return $result;
+        }
       }
     }
     return $result;
