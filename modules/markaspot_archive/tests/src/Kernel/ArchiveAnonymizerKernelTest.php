@@ -1062,6 +1062,93 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * The catch-up unpublishes archived published reports once, nothing else.
+   */
+  public function testUnpublishBacklogUnpublishesArchivedReportsOnce(): void {
+    $this->listenToArchiveChannel();
+    $open = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('anonymize', 0)->save();
+    $archived = $this->archivedStatusId();
+    // Archived while transition unpublishing did not exist yet: published,
+    // contact data already anonymized.
+    $published = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => 'abc@anonymized.off',
+      'changed' => 1000000000,
+    ]);
+    $hidden = $this->createRequest([
+      'field_status' => $archived,
+      'status' => 0,
+    ]);
+    self::assertTrue(Node::load($published->id())->isPublished());
+    $this->config('markaspot_archive.settings')
+      ->set('unpublish', 1)
+      ->set('anonymize', 1)
+      ->save();
+    $service = $this->container->get('markaspot_archive.archive');
+    $state = $this->container->get('state');
+
+    self::assertSame(1, $service->unpublishArchivedBacklog(10, 20));
+
+    $published = Node::load($published->id());
+    self::assertFalse($published->isPublished());
+    self::assertSame(1000000000, (int) $published->getChangedTime());
+    self::assertSame('abc@anonymized.off', $published->get('field_e_mail')->value);
+    self::assertFalse(Node::load($hidden->id())->isPublished());
+    self::assertTrue(Node::load($open->id())->isPublished());
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    self::assertTrue($this->loggerHasRecord(
+      LogLevel::NOTICE,
+      'Unpublished @count archived service requests that were still published (@failed failed, up to node ID @nid).'
+    ));
+
+    // The next run finds nothing and ends the pass.
+    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20));
+    self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE));
+
+    // A report staff republish after the pass stays published.
+    $published->setPublished();
+    $published->save();
+    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20));
+    self::assertTrue(Node::load($published->id())->isPublished());
+  }
+
+  /**
+   * The catch-up honors its limit and follows the unpublish setting only.
+   */
+  public function testUnpublishBacklogLimitAndSetting(): void {
+    $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('anonymize', 0)->save();
+    $nids = [];
+    foreach (['a', 'b', 'c'] as $name) {
+      $nids[] = (int) $this->createRequest([
+        'field_status' => $this->archivedStatusId(),
+        'field_e_mail' => $name . '@example.org',
+      ])->id();
+    }
+    $service = $this->container->get('markaspot_archive.archive');
+    $state = $this->container->get('state');
+
+    // Unpublish off: nothing happens and the pass stays pending.
+    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20));
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+
+    // Unpublish on, anonymize off: unpublished, contact data untouched.
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    self::assertSame(2, $service->unpublishArchivedBacklog(2, 20));
+    self::assertSame($nids[1], (int) $state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE));
+    self::assertSame(1, $service->unpublishArchivedBacklog(2, 20));
+    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20));
+    self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    foreach ($nids as $i => $nid) {
+      $node = Node::load($nid);
+      self::assertFalse($node->isPublished());
+      self::assertSame(['a', 'b', 'c'][$i] . '@example.org', $node->get('field_e_mail')->value);
+    }
+  }
+
+  /**
    * Returns the archived status term id from the archive settings.
    */
   private function archivedStatusId(): string {

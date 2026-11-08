@@ -32,9 +32,16 @@ function markaspot_archive_help($route_name, RouteMatchInterface $route_match) {
  * Implements hook_cron().
  */
 function markaspot_archive_cron() {
+  $archive = \Drupal::service('markaspot_archive.archive');
+  // Unpublish archived requests that are still published, once per site. It
+  // depends only on the unpublish setting, not on the archive throttle.
+  $archive->unpublishArchivedBacklog(
+    ArchiveService::BACKFILL_LIMIT,
+    ArchiveService::BACKFILL_TIME_BUDGET
+  );
   // Catch up on archived requests that still hold plain contact data on every
   // run. It depends only on the anonymize setting, not on the archive throttle.
-  \Drupal::service('markaspot_archive.archive')->backfillArchived(
+  $archive->backfillArchived(
     ArchiveService::BACKFILL_LIMIT,
     ArchiveService::BACKFILL_TIME_BUDGET
   );

@@ -39,6 +39,12 @@ This module works with:
 - Unpublishes the request on the same transitions when the "Unpublish" setting
   is on, independent of the "Anonymize" setting. Saving an already archived
   request again (for example after staff republished it) leaves it alone.
+- Once per site, cron unpublishes archived requests that are still published
+  (archived before transition unpublishing existed), up to 50 per run and
+  keeping their changed time, when the "Unpublish" setting is on. After one
+  pass over all requests it stops, so requests staff republish later stay
+  published. `drush state:delete markaspot_archive.unpublish_backlog_done`
+  runs the pass again.
 - Every cron run anonymizes up to 50 archived requests that still hold plain
   contact data in the current or a previous revision (archived before this
   existed or while anonymization was off), keeping their changed time. Plain

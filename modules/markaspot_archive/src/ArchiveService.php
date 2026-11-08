@@ -39,6 +39,16 @@ class ArchiveService implements ArchiveServiceInterface {
   public const BACKFILL_CURSOR_STATE = 'markaspot_archive.backfill_last_nid';
 
   /**
+   * State key of the last node id the unpublish catch-up has processed.
+   */
+  public const UNPUBLISH_BACKLOG_CURSOR_STATE = 'markaspot_archive.unpublish_backlog_last_nid';
+
+  /**
+   * State key set once the unpublish catch-up has passed every node.
+   */
+  public const UNPUBLISH_BACKLOG_DONE_STATE = 'markaspot_archive.unpublish_backlog_done';
+
+  /**
    * Telephone value written by ::anonymizedValue().
    */
   protected const ANONYMIZED_PHONE = '+49-0123459995555';
@@ -345,14 +355,7 @@ class ArchiveService implements ArchiveServiceInterface {
     if ($config->get('unpublish') != 1 || !$this->isArchiveTransition($node)) {
       return FALSE;
     }
-    $unpublished = FALSE;
-    foreach ($node->getTranslationLanguages() as $langcode => $language) {
-      $translation = $node->getTranslation($langcode);
-      if ($translation->isPublished()) {
-        $translation->setUnpublished();
-        $unpublished = TRUE;
-      }
-    }
+    $unpublished = $this->unpublishTranslations($node);
     if ($unpublished) {
       $this->logger->notice(
         'Node ID @nid unpublished on transition to the archived status.',
@@ -406,6 +409,74 @@ class ArchiveService implements ArchiveServiceInterface {
     $anonymized_values = $this->pendingRevisionValues[$node];
     unset($this->pendingRevisionValues[$node]);
     return $this->anonymizeRevisions($node, $anonymized_values);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function unpublishArchivedBacklog(
+    int $limit = self::BACKFILL_LIMIT,
+    int $time_budget = self::BACKFILL_TIME_BUDGET,
+  ): int {
+    $config = $this->configFactory->get('markaspot_archive.settings');
+    $archived_status = (string) $config->get('status_archived');
+    if (
+      $config->get('unpublish') != 1
+      || $archived_status === ''
+      || $this->state->get(self::UNPUBLISH_BACKLOG_DONE_STATE)
+    ) {
+      return 0;
+    }
+
+    $cursor = (int) $this->state->get(self::UNPUBLISH_BACKLOG_CURSOR_STATE, 0);
+    $nids = $this->publishedArchivedCandidates($archived_status, $cursor, $limit);
+    if ($nids === []) {
+      // Every node has been passed once. Later archive transitions unpublish
+      // on presave, and a report staff republish afterwards stays published.
+      $this->state->set(self::UNPUBLISH_BACKLOG_DONE_STATE, TRUE);
+      $this->state->delete(self::UNPUBLISH_BACKLOG_CURSOR_STATE);
+      return 0;
+    }
+
+    $storage = $this->entityTypeManager->getStorage('node');
+    $started = microtime(TRUE);
+    $unpublished = 0;
+    $failed = 0;
+    foreach ($nids as $nid) {
+      if (microtime(TRUE) - $started > $time_budget) {
+        break;
+      }
+      $cursor = (int) $nid;
+      try {
+        $node = $storage->load($nid);
+        if (!$node instanceof NodeInterface || !$this->unpublishTranslations($node)) {
+          continue;
+        }
+        // Keep the changed time: unpublishing is no change of the request.
+        $node->setSyncing(TRUE);
+        $node->save();
+        $unpublished++;
+      }
+      catch (DatabaseException $e) {
+        throw $e;
+      }
+      catch (\Throwable $e) {
+        $failed++;
+        $this->logger->warning(
+          'Archived node @nid could not be unpublished: @error',
+          ['@nid' => $nid, '@error' => $e->getMessage()]
+        );
+      }
+    }
+    $this->state->set(self::UNPUBLISH_BACKLOG_CURSOR_STATE, $cursor);
+
+    if ($unpublished > 0 || $failed > 0) {
+      $this->logger->notice(
+        'Unpublished @count archived service requests that were still published (@failed failed, up to node ID @nid).',
+        ['@count' => $unpublished, '@failed' => $failed, '@nid' => $cursor]
+      );
+    }
+    return $unpublished;
   }
 
   /**
@@ -571,6 +642,59 @@ class ArchiveService implements ArchiveServiceInterface {
     $nids = array_values(array_unique($nids));
     sort($nids);
     return array_slice($nids, 0, $limit);
+  }
+
+  /**
+   * Returns published service requests that hold the archived status.
+   *
+   * @param string $archived_status
+   *   The archived status term id.
+   * @param int $cursor
+   *   Only node ids above this one are returned.
+   * @param int $limit
+   *   Maximum number of node ids.
+   *
+   * @return int[]
+   *   Node ids in ascending order.
+   */
+  protected function publishedArchivedCandidates(string $archived_status, int $cursor, int $limit): array {
+    $storage = $this->entityTypeManager->getStorage('node');
+    if (!$storage instanceof SqlContentEntityStorage) {
+      return [];
+    }
+    $mapping = $storage->getTableMapping();
+    $status = $this->nodeFieldStorage('field_status');
+    $data_table = $storage->getDataTable();
+    if ($status === NULL || $data_table === NULL || !$mapping->requiresDedicatedTableStorage($status)) {
+      return [];
+    }
+    $query = $this->database->select($data_table, 'n');
+    $query->join($mapping->getDedicatedDataTableName($status), 's', 's.entity_id = n.nid');
+    $query->addField('n', 'nid');
+    $query->condition('n.type', 'service_request')
+      ->condition('n.status', 1)
+      ->condition('n.nid', $cursor, '>')
+      ->condition('s.' . $mapping->getFieldColumnName($status, 'target_id'), $archived_status);
+    $query->distinct()->orderBy('n.nid')->range(0, $limit);
+    return array_map('intval', $query->execute()->fetchCol());
+  }
+
+  /**
+   * Unpublishes every published translation of a node.
+   *
+   * @return bool
+   *   TRUE when a translation was unpublished.
+   */
+  protected function unpublishTranslations(NodeInterface $node): bool {
+    $unpublished = FALSE;
+    foreach ($node->getTranslationLanguages() as $langcode => $language) {
+      $translation = $node->getTranslation($langcode);
+      if ($translation->isPublished()) {
+        $translation->setUnpublished();
+        $unpublished = TRUE;
+      }
+    }
+    return $unpublished;
   }
 
   /**

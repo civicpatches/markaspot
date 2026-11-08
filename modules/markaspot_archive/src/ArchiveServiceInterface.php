@@ -93,6 +93,25 @@ interface ArchiveServiceInterface {
   public function finishArchiveTransition(NodeInterface $node): int;
 
   /**
+   * Unpublishes archived requests that are still published, once.
+   *
+   * Catches up on requests archived before transition unpublishing existed,
+   * for example by a manual status change. Follows the "unpublish" setting
+   * and keeps the changed time. The pass walks all nodes once and then stops,
+   * so a request staff republish afterwards stays published. Deleting the
+   * state key markaspot_archive.unpublish_backlog_done runs it again.
+   *
+   * @param int $limit
+   *   Maximum number of nodes to process.
+   * @param int $time_budget
+   *   Seconds after which no further node is started.
+   *
+   * @return int
+   *   Number of unpublished nodes.
+   */
+  public function unpublishArchivedBacklog(int $limit, int $time_budget): int;
+
+  /**
    * Anonymizes archived requests that still hold plain contact data.
    *
    * Picks up requests archived before transition anonymization existed or
