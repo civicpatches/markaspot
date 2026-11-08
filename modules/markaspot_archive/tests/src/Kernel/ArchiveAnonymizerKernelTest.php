@@ -1760,83 +1760,52 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
-   * Archiving retries a transaction a deadlock rolled back.
+   * Archiving from the queue does not retry a lock conflict itself.
+   *
+   * Its save runs the hooks of an ordinary status change, which may send
+   * mail a rollback cannot take back; a retry would send it again. One
+   * attempt is made, the transaction is rolled back, and the queue retries
+   * the item on a later run.
    */
-  public function testArchiveRequestRetriesDeadlock(): void {
+  public function testArchiveRequestDoesNotRetryLockConflict(): void {
     $node = $this->createQueueRequest();
     $nid = (int) $node->id();
     $revisions = $this->nodeRevisionIds($nid);
     $service = $this->retryingArchiveService();
     $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 1);
 
-    self::assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
-
-    self::assertSame(1, $this->databaseErrorsThrown);
-    self::assertSame([1], $service->backoffs);
-    $archived = $this->reloadNode($nid);
-    self::assertSame($this->archivedStatusId(), (string) $archived->get('field_status')->target_id);
-    self::assertStringEndsWith('@anonymized.off', (string) $archived->get('field_e_mail')->value);
-    // The failed attempt left nothing behind: one combined revision.
-    self::assertCount(count($revisions) + 1, $this->nodeRevisionIds($nid));
-    foreach ($this->nodeRevisionIds($nid) as $vid) {
-      self::assertNotSame('citizen@example.org', $this->revisionFieldValue($vid, 'field_e_mail'));
-    }
-    self::assertTrue($this->loggerHasRecord(LogLevel::WARNING, self::LOCK_CONFLICT_RETRY));
-  }
-
-  /**
-   * Archiving gives up after three deadlocks; the queue retries the item.
-   */
-  public function testArchiveRequestGivesUpAfterThreeDeadlocks(): void {
-    $node = $this->createQueueRequest();
-    $nid = (int) $node->id();
-    $revisions = $this->nodeRevisionIds($nid);
-    $service = $this->retryingArchiveService();
-    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), PHP_INT_MAX);
-
     try {
       $service->archiveRequest($nid);
-      self::fail('The third deadlock is rethrown.');
+      self::fail('The deadlock is rethrown.');
     }
     catch (EntityStorageException $e) {
       self::assertInstanceOf(DatabaseExceptionWrapper::class, $e->getPrevious());
     }
-    self::assertSame(3, $this->databaseErrorsThrown);
-    self::assertSame([1, 2], $service->backoffs);
+    self::assertSame(1, $this->databaseErrorsThrown, 'Exactly one attempt.');
+    self::assertSame([], $service->backoffs);
+    self::assertFalse($this->loggerHasRecord(LogLevel::WARNING, self::LOCK_CONFLICT_RETRY));
     $this->assertRequestUntouched($nid, $revisions);
 
-    // The queue worker requeues the item for a later run.
-    $this->databaseErrorsThrown = 0;
+    // The queue worker requeues the item for a later run, again after one
+    // attempt.
+    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), PHP_INT_MAX);
     $queue = $this->createMock(QueueInterface::class);
     $queue->expects(self::once())->method('createItem')->with(['nid' => $nid, 'attempts' => 2]);
     $this->archiveQueueWorker($service, $queue)->processItem(['nid' => $nid, 'attempts' => 1]);
-    self::assertSame(3, $this->databaseErrorsThrown);
+    self::assertSame(1, $this->databaseErrorsThrown);
+    self::assertSame([], $service->backoffs);
     $this->assertRequestUntouched($nid, $revisions);
 
-    // Other database errors are not retried.
-    $this->failSavesWith($nid, $this->databaseError('42S02', 1146, "Table 'node__field_x' doesn't exist"), PHP_INT_MAX);
-    try {
-      $service->archiveRequest($nid);
-      self::fail('The database error is rethrown.');
+    // Once the conflict is gone, the later run archives the request in one
+    // combined revision.
+    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 0);
+    self::assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
+    $archived = $this->reloadNode($nid);
+    self::assertSame($this->archivedStatusId(), (string) $archived->get('field_status')->target_id);
+    self::assertCount(count($revisions) + 1, $this->nodeRevisionIds($nid));
+    foreach ($this->nodeRevisionIds($nid) as $vid) {
+      self::assertNotSame('citizen@example.org', $this->revisionFieldValue($vid, 'field_e_mail'));
     }
-    catch (EntityStorageException) {
-    }
-    self::assertSame(1, $this->databaseErrorsThrown);
-
-    // Inside an outer transaction a deadlock rolled back that one as well:
-    // only its owner can retry.
-    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 1);
-    $outer = $this->container->get('database')->startTransaction();
-    try {
-      $service->archiveRequest($nid);
-      self::fail('A nested deadlock is rethrown.');
-    }
-    catch (EntityStorageException) {
-      $outer->rollBack();
-    }
-    unset($outer);
-    self::assertSame(1, $this->databaseErrorsThrown);
-    $this->assertRequestUntouched($nid, $revisions);
   }
 
   /**
@@ -1849,7 +1818,9 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
 
     self::assertSame(['processed' => 2, 'changed' => 2, 'failed' => 0], $service->backfillArchived(10, 20));
     self::assertSame([1], $service->backoffs);
+    self::assertSame(1, $this->databaseErrorsThrown, 'The second attempt succeeded.');
     self::assertStringEndsWith('@anonymized.off', $this->reloadNode($nids[0])->get('field_e_mail')->value);
+    self::assertTrue($this->loggerHasRecord(LogLevel::WARNING, self::LOCK_CONFLICT_RETRY));
 
     // Every attempt fails: the request is counted as failed and stays a
     // candidate for the next run.
@@ -1858,38 +1829,78 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $service = $this->retryingArchiveService();
     self::assertSame(['processed' => 1, 'changed' => 0, 'failed' => 1], $service->backfillArchived(10, 20));
     self::assertSame(3, $this->databaseErrorsThrown);
+    self::assertSame([1, 2], $service->backoffs);
     self::assertSame('plain0@example.org', $this->reloadNode($nids[0])->get('field_e_mail')->value);
     self::assertSame(1, $service->countBackfillCandidates());
+
+    // Other database errors are not retried. Each run below starts over
+    // from the first archived request.
+    $state = $this->container->get('state');
+    $state->delete(ArchiveService::BACKFILL_CURSOR_STATE);
+    $this->failSavesWith($nids[0], $this->databaseError('42S02', 1146, "Table 'node__field_x' doesn't exist"), PHP_INT_MAX);
+    $service = $this->retryingArchiveService();
+    self::assertSame(['processed' => 1, 'changed' => 0, 'failed' => 1], $service->backfillArchived(10, 20));
+    self::assertSame(1, $this->databaseErrorsThrown);
+    self::assertSame([], $service->backoffs);
+
+    // Inside an outer transaction a deadlock rolled back that one as well:
+    // only its owner can retry.
+    $this->failSavesWith($nids[0], $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 1);
+    $service = $this->retryingArchiveService();
+    $state->delete(ArchiveService::BACKFILL_CURSOR_STATE);
+    $outer = $this->container->get('database')->startTransaction();
+    self::assertSame(['processed' => 1, 'changed' => 0, 'failed' => 1], $service->backfillArchived(10, 20));
+    $outer->rollBack();
+    unset($outer);
+    self::assertSame(1, $this->databaseErrorsThrown);
+    self::assertSame([], $service->backoffs);
+    self::assertSame('plain0@example.org', $this->reloadNode($nids[0])->get('field_e_mail')->value);
   }
 
   /**
-   * A real lock wait timeout on the request row is retried.
+   * A real lock wait timeout: the queue gives up, the catch-up retries.
    *
-   * A second connection holds the row lock; the first attempt runs into the
-   * lock wait timeout, the lock is released during the backoff and the next
-   * attempt archives the request.
+   * A second connection holds the row locks. Archiving from the queue runs
+   * into the lock wait timeout once and leaves the request as it was. The
+   * catch-up runs into it as well, the lock is released during its backoff
+   * and the next attempt anonymizes the request.
    */
-  public function testArchiveRequestRetriesRealLockWaitTimeout(): void {
+  public function testRealLockWaitTimeoutIsRetriedOnlyByTheCatchUp(): void {
     $database = $this->container->get('database');
     if ($database->databaseType() !== 'mysql') {
       self::markTestSkipped('Needs InnoDB row locks.');
     }
-    $node = $this->createQueueRequest();
-    $nid = (int) $node->id();
+    $backlog = $this->createArchivedBacklog(1);
+    $queued = (int) $this->createRequest([
+      'field_status' => (int) $this->openStatusId(),
+      'field_e_mail' => 'citizen@example.org',
+    ])->id();
+    $revisions = $this->nodeRevisionIds($queued);
     Database::addConnectionInfo('archive_other', 'default', Database::getConnectionInfo('default')['default']);
     try {
       $other = Database::getConnection('default', 'archive_other');
       $this->heldLock = $other->startTransaction();
-      $other->select('node', 'n')->fields('n', ['nid'])->condition('n.nid', $nid)->forUpdate()->execute()->fetchField();
+      $other->select('node', 'n')->fields('n', ['nid'])->condition('n.nid', [$queued, $backlog[0]], 'IN')->forUpdate()->execute()->fetchCol();
       $database->query('SET SESSION innodb_lock_wait_timeout = 1');
       $service = $this->retryingArchiveService(function (): void {
         // Commits the other connection's transaction.
         $this->heldLock = NULL;
       });
 
-      self::assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
+      try {
+        $service->archiveRequest($queued);
+        self::fail('The lock wait timeout is rethrown.');
+      }
+      catch (DatabaseExceptionWrapper $e) {
+        self::assertStringContainsString('1205', $e->getMessage());
+      }
+      self::assertSame([], $service->backoffs, 'Exactly one attempt.');
+      self::assertNotNull($this->heldLock, 'The other connection still holds the locks.');
+      $this->assertRequestUntouched($queued, $revisions);
+
+      self::assertSame(['processed' => 1, 'changed' => 1, 'failed' => 0], $service->backfillArchived(10, 20));
       self::assertSame([1], $service->backoffs);
-      self::assertSame($this->archivedStatusId(), (string) $this->reloadNode($nid)->get('field_status')->target_id);
+      self::assertStringEndsWith('@anonymized.off', (string) $this->reloadNode($backlog[0])->get('field_e_mail')->value);
     }
     finally {
       $this->heldLock = NULL;

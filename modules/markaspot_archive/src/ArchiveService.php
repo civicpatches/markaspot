@@ -414,16 +414,11 @@ class ArchiveService implements ArchiveServiceInterface {
    * {@inheritdoc}
    */
   public function archiveRequest(int $nid): string {
-    return $this->retryOnLockConflict($nid, fn (): string => $this->archiveRequestOnce($nid));
-  }
-
-  /**
-   * Archives one queued request in one transaction; see ::archiveRequest().
-   *
-   * @return string
-   *   One of the ARCHIVE_* constants.
-   */
-  protected function archiveRequestOnce(int $nid): string {
+    // Runs once, without ::retryOnLockConflict(): the save runs the hooks of
+    // an ordinary status change, which may send mail (the citizen status
+    // notification, ECA models). A rollback cannot take that mail back, so
+    // a retry here would send it again. After a lock conflict the queue
+    // retries the item on a later run.
     $config = $this->configFactory->get('markaspot_archive.settings');
     $archived_status = (string) $config->get('status_archived');
     $archivable = array_map('strval', array_keys((array) $config->get('status_archivable')));
@@ -1445,10 +1440,10 @@ class ArchiveService implements ArchiveServiceInterface {
   }
 
   /**
-   * Runs a transaction again after a deadlock or a lock wait timeout.
+   * Runs a catch-up transaction again after a deadlock or lock wait timeout.
    *
-   * Archiving locks the node row before its paragraphs are saved, while an
-   * ordinary save of a paragraph host locks the paragraph first. Two such
+   * The catch-up locks the node row before its paragraphs are saved, while
+   * an ordinary save of a paragraph host locks the paragraph first. Two such
    * transactions can deadlock; the database then rolls one of them back.
    * The lock order is not changed (see the module README). Instead, the
    * whole transaction runs again, up to LOCK_CONFLICT_ATTEMPTS times with a
@@ -1457,9 +1452,12 @@ class ArchiveService implements ArchiveServiceInterface {
    * conflicts are MySQL errors 1213 (deadlock) and 1205 (lock wait timeout)
    * and SQLSTATE 40001. Inside an outer transaction nothing is retried: a
    * deadlock rolls back the outer transaction as well, so only its owner can
-   * retry. After the last attempt the error is rethrown and the caller's
-   * failure handling applies: the request stays a candidate of the
-   * catch-up, the queue item is retried on a later run.
+   * retry. After the last attempt the error is rethrown and the request
+   * stays a candidate of the catch-up.
+   *
+   * Only the catch-up retries (::changeArchivedRequest()): ECA is off there
+   * and its saves are syncing saves, so a repeated attempt sends no mail.
+   * Archiving from the queue (::archiveRequest()) is not retried here.
    *
    * @param int $nid
    *   The node ID, for the log.

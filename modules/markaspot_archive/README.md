@@ -96,17 +96,30 @@ This module works with:
 - **One combined revision.** The queue archives a report in one save: the
   archived status, unpublishing and anonymization appear as one revision in
   the history, not as two.
-- **Retry after a database lock conflict.** Archiving (queue) and the
-  catch-up run each report in one transaction. When the database aborts it
-  with a deadlock or a lock wait timeout (MySQL errors 1213 and 1205,
-  SQLSTATE 40001), the whole transaction is rolled back and tried again, up
-  to three attempts with a short pause. Each retry is logged as a warning
-  in the `markaspot_archive` log. When the third attempt fails too, nothing
-  of the report has changed: the catch-up tries it again on its next run,
-  the queue item is retried later.
+- **After a database lock conflict.** Archiving (queue) and the catch-up
+  run each report in one transaction. When the database aborts it with a
+  deadlock or a lock wait timeout (MySQL errors 1213 and 1205, SQLSTATE
+  40001), the whole transaction is rolled back and nothing of the report
+  has changed. The catch-up then tries the report again right away, up to
+  three attempts with a short pause, each retry logged as a warning in the
+  `markaspot_archive` log; after the third failed attempt it tries the
+  report again on a later run. Inside an outer database transaction (code
+  that calls the catch-up within its own transaction) nothing is retried:
+  the conflict rolled back the outer transaction too, so only its owner
+  can retry. Archiving from the queue makes one attempt:
+  the queue retries the item on a later cron run (up to three queue
+  attempts), as it does after any other failure.
+- **Known limit: mail before a rollback.** Archiving from the queue saves
+  the report like an ordinary status change, so its save hooks run: the
+  citizen status notification and ECA models may send mail. When a later
+  step of the same archive transaction fails (for example erasing the
+  previous revisions, or a lock conflict), the rollback restores the
+  report but cannot take back mail that was already sent, and the queue
+  retry may send it again. This limit predates the one-transaction archive.
+  The catch-up is not affected: its saves are silent and ECA is off.
 - **Known limit: lock order.** Archiving locks the report before its
   paragraphs, while saving a report with paragraphs (for example a staff
   edit) locks a paragraph first. When both meet at the same moment, the
-  database aborts one of them. The archive side retries as described; a
+  database aborts one of them. The archive side is retried as described; a
   staff save chosen by the database fails with an error and has to be
   saved again. The lock order itself is unchanged.
