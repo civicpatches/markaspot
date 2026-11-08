@@ -1,0 +1,8 @@
+name: 'Mark-a-Spot Archive search test'
+type: module
+description: 'Test support: a Search API tracker whose updates fail silently, as the contrib tracker swallows write errors.'
+package: Testing
+hidden: true
+core_version_requirement: ^11
+dependencies:
+  - search_api:search_api

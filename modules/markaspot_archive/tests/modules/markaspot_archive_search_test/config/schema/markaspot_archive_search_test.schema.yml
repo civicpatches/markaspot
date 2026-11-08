@@ -1,0 +1,3 @@
+plugin.plugin_configuration.search_api_tracker.markaspot_archive_silently_failing:
+  type: plugin.plugin_configuration.search_api_tracker.default
+  label: 'Silently failing tracker configuration'

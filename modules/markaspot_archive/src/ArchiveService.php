@@ -23,6 +23,7 @@ use Drupal\eca\EventSubscriber\DynamicSubscriber;
 use Drupal\node\NodeInterface;
 use Drupal\search_api\IndexInterface;
 use Drupal\search_api\Plugin\search_api\datasource\ContentEntityTrackingManager;
+use Drupal\search_api\Tracker\TrackerPluginBase;
 use Drupal\search_api\Utility\Utility as SearchApiUtility;
 
 /**
@@ -1182,10 +1183,77 @@ class ArchiveService implements ArchiveServiceInterface {
    * until the item is indexed (at the end of the request, on cron or by
    * markaspot:archive:backfill, see ::countSearchIndexBacklog()). Indexes
    * that cannot be updated are reported by ::unprocessableSearchIndexes().
+   *
+   * @throws \RuntimeException
+   *   When an index did not record the change; see
+   *   ::assertTrackedForReindexing().
    */
   protected function trackForReindexing(EntityInterface $entity): void {
     if ($this->searchTracking !== NULL && $entity instanceof ContentEntityInterface && !$entity->isNew()) {
       $this->searchTracking->trackEntityChange($entity);
+      $this->assertTrackedForReindexing($entity);
+    }
+  }
+
+  /**
+   * Throws unless every index holding an entity now waits to reindex it.
+   *
+   * Search API's tracker catches its own write errors and only logs them
+   * (TrackerPluginBase::trackItemsUpdated()), so a failed tracking would go
+   * unnoticed: the erasure would commit while the index keeps the old text
+   * and nothing waits for indexing. Checked are the enabled, writable
+   * indexes with a valid tracker whose datasource covers the entity, the
+   * indexes ::trackForReindexing() tracked it in. None of them may still
+   * mark an item of the entity as indexed. An item without a tracker row
+   * was never indexed. The default tracker is asked through its table, any
+   * other tracker through its remaining items. The exception rolls back the
+   * transaction of the erasure, so the request stays a candidate for the
+   * next run and counts as failed in this one.
+   *
+   * @throws \RuntimeException
+   *   When an index still marks an item of the entity as indexed.
+   */
+  protected function assertTrackedForReindexing(ContentEntityInterface $entity): void {
+    if ($this->searchTracking === NULL) {
+      return;
+    }
+    $entity_type_id = $entity->getEntityTypeId();
+    $datasource_id = 'entity:' . $entity_type_id;
+    $raw_ids = [];
+    foreach (array_keys($entity->getTranslationLanguages()) as $langcode) {
+      $raw_ids[] = ContentEntityTrackingManager::formatItemId($entity_type_id, $entity->id(), (string) $langcode);
+    }
+    foreach ($this->searchTracking->getIndexesForEntity($entity) as $index) {
+      if (!$index->status() || $index->isReadOnly() || !$index->hasValidTracker()) {
+        continue;
+      }
+      $item_ids = array_map(
+        static fn (string $raw_id): string => SearchApiUtility::createCombinedId($datasource_id, $raw_id),
+        ContentEntityTrackingManager::filterValidItemIds($index, $datasource_id, $raw_ids)
+      );
+      if ($item_ids === []) {
+        continue;
+      }
+      $tracker = $index->getTrackerInstance();
+      if ($tracker instanceof TrackerPluginBase) {
+        $indexed = $tracker->getDatabaseConnection()->select('search_api_item', 'sai')
+          ->fields('sai', ['item_id'])
+          ->condition('sai.index_id', $index->id())
+          ->condition('sai.item_id', $item_ids, 'IN')
+          ->condition('sai.status', TrackerPluginBase::STATUS_INDEXED)
+          ->execute()
+          ->fetchCol();
+      }
+      else {
+        $indexed = array_values(array_diff($item_ids, $tracker->getRemainingItems(-1, $datasource_id)));
+      }
+      if ($indexed !== []) {
+        throw new \RuntimeException(sprintf(
+          'Search index %s did not record %s for reindexing, so it would keep the erased text; the change was rolled back.',
+          $index->id(),
+          implode(', ', $indexed)
+        ));
+      }
     }
   }
 

@@ -9,6 +9,7 @@ use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_archive\Drush\Commands\ArchiveCommands;
+use Drupal\markaspot_archive_search_test\Plugin\search_api\tracker\SilentlyFailingTracker;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\search_api\Entity\Index;
@@ -44,6 +45,7 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     'search_api',
     'search_api_test',
     'markaspot_archive',
+    'markaspot_archive_search_test',
   ];
 
   /**
@@ -260,6 +262,59 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
   }
 
   /**
+   * A tracker update that fails silently rolls the erasure back.
+   *
+   * Search API's tracker catches its own write errors and only logs them.
+   * Without a check, the erasure would commit while the indexed document
+   * keeps the old text and nothing waits for indexing: the request would no
+   * longer be a candidate and the old text would stay in the index.
+   */
+  public function testSilentTrackerFailureRollsBackTheErasure(): void {
+    Index::load(self::INDEX)
+      ->set('tracker_settings', ['markaspot_archive_silently_failing' => []])
+      ->save();
+    $noted = $this->createArchivedRequestWithNote();
+    $plain = Node::create([
+      'type' => 'service_request',
+      'title' => 'Pothole',
+      'field_status' => (string) $this->config('markaspot_archive.settings')->get('status_archived'),
+      'field_e_mail' => 'plain@example.org',
+    ]);
+    $plain->save();
+    $index = Index::load(self::INDEX);
+    $index->indexItems();
+    $this->assertSame(['Call Jordan at +44 7700 900123.'], $this->indexedValues('revision_log'));
+    $this->assertContains('plain@example.org', $this->indexedEmails());
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $service = $this->container->get('markaspot_archive.archive');
+    $state = $this->container->get('state');
+
+    $state->set(SilentlyFailingTracker::FAIL_STATE, TRUE);
+    $result = $this->command()->backfill($this->options());
+    $rows = $this->rows($result);
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertSame(['anonymize', 'on', 2, 2, 0, 2, 2], array_slice(array_values($rows['anonymize']), 0, 7));
+    // Both erasures were rolled back: the requests stay candidates.
+    $this->assertSame('Call Jordan at +44 7700 900123.', $this->currentRevisionLog($noted));
+    $this->assertSame('plain@example.org', Node::load($plain->id())->get('field_e_mail')->value);
+    $this->assertSame(2, $service->countBackfillCandidates());
+    $this->assertSame(['Call Jordan at +44 7700 900123.'], $this->indexedValues('revision_log'));
+    $this->assertContains('plain@example.org', $this->indexedEmails());
+
+    // With a working tracker, the next run erases and reindexes both.
+    $state->set(SilentlyFailingTracker::FAIL_STATE, FALSE);
+    $result = $this->command()->backfill($this->options());
+    $rows = $this->rows($result);
+    $this->assertSame(0, $result->getExitCode());
+    $this->assertSame(['anonymize', 'on', 2, 2, 2, 0, 0], array_slice(array_values($rows['anonymize']), 0, 7));
+    $this->assertSame(['search index', 'on', 2, 2, 2, 0, 0], array_slice(array_values($rows['search index']), 0, 7));
+    $this->assertSame(self::PLACEHOLDER, $this->currentRevisionLog($noted));
+    $this->assertNotContains('Call Jordan at +44 7700 900123.', $this->indexedValues('revision_log'));
+    $this->assertNotContains('plain@example.org', $this->indexedEmails());
+    $this->assertSame(0, $service->countBackfillCandidates());
+  }
+
+  /**
    * Creates an archived request with anonymized contact data and a note.
    */
   private function createArchivedRequestWithNote(): Node {
@@ -272,6 +327,18 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     $node->setRevisionLogMessage('Call Jordan at +44 7700 900123.');
     $node->save();
     return $node;
+  }
+
+  /**
+   * Reads the stored revision log of the current revision of a request.
+   */
+  private function currentRevisionLog(Node $node): string {
+    return (string) $this->container->get('database')
+      ->select('node_revision', 'r')
+      ->fields('r', ['revision_log'])
+      ->condition('vid', Node::load($node->id())->getRevisionId())
+      ->execute()
+      ->fetchField();
   }
 
   /**
