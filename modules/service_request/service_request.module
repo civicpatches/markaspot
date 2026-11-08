@@ -593,16 +593,23 @@ function _service_request_handle_update(EntityInterface $node, $config, bool $au
   // [node:latest_status_note] renders localized in citizen mails
   // regardless of recipient language. Falls back to the localized t()
   // string when the status term has no description in that language.
+  // An untranslatable note field holds one value for all translations:
+  // writing per language there let the last language overwrite the text in
+  // the site language (German tenants with Leichte Sprache published
+  // "Status changed."), so the site-language text stays in that case.
+  $noteTranslatable = $paragraph->getFieldDefinition('field_status_note')?->isTranslatable() ?? FALSE;
   foreach ($languageManager->getLanguages() as $lang) {
     $lc = $lang->getId();
     if ($lc === $defaultLangcode || $paragraph->hasTranslation($lc)) {
       continue;
     }
     $translation = $paragraph->addTranslation($lc, $paragraph->toArray());
-    $translation->set('field_status_note', [
-      'value' => _service_request_resolve_status_note_text((int) $newStatus, $lc),
-      'format' => 'plain_text',
-    ]);
+    if ($noteTranslatable) {
+      $translation->set('field_status_note', [
+        'value' => _service_request_resolve_status_note_text((int) $newStatus, $lc),
+        'format' => 'plain_text',
+      ]);
+    }
   }
   $paragraph->save();
 
