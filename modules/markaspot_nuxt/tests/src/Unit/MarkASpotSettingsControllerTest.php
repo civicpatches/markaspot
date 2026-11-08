@@ -528,7 +528,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     $this->assertEquals(6.9, $data['center_lng']);
     $this->assertEquals('DE', $data['geocoding_country']);
     $this->assertSame('self_hosted', $data['operatingMode']);
-    $this->assertSame('11.9.999', $data['profile_version']);
+    $this->assertArrayNotHasKey('profile_version', $data);
     $this->assertContains('config:core.extension', $response->getCacheableMetadata()->getCacheTags());
     $this->assertContains(
       'config:markaspot_sso.settings',
@@ -537,27 +537,27 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
-   * Unversioned development profiles explicitly identify themselves as dev.
+   * The public settings response never carries the profile version.
    */
-  public function testProfileVersionFallback(): void {
+  public function testProfileVersionStaysOutOfPublicSettings(): void {
     $this->profileExtensionList->method('getExtensionInfo')->with('markaspot')->willReturn([]);
     $this->groupStorage->method('load')->willReturn($this->createMockGroup());
     $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings?jurisdiction=14'));
     $this->assertSame(200, $response->getStatusCode());
     $data = json_decode((string) $response->getContent(), TRUE);
-    $this->assertSame('dev', $data['profile_version']);
+    $this->assertArrayNotHasKey('profile_version', $data);
   }
 
   /**
-   * Missing profile extension metadata falls back without failing settings.
+   * Missing profile extension metadata does not affect public settings.
    */
-  public function testMissingProfileVersionFallback(): void {
+  public function testMissingProfileExtensionDoesNotAffectSettings(): void {
     $this->profileExtensionList->method('getExtensionInfo')->with('markaspot')->willThrowException(new UnknownExtensionException('Missing profile'));
     $this->groupStorage->method('load')->willReturn($this->createMockGroup());
     $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings?jurisdiction=14'));
     $this->assertSame(200, $response->getStatusCode());
     $data = json_decode((string) $response->getContent(), TRUE);
-    $this->assertSame('dev', $data['profile_version']);
+    $this->assertArrayNotHasKey('profile_version', $data);
   }
 
   /**
