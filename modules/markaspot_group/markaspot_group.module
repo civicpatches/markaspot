@@ -4559,6 +4559,7 @@ function markaspot_group_node_insert(NodeInterface $node): void {
   //    and child requests both check org field_service_categories before
   //    falling back to the category's field_category_gid.
   $org_derived = FALSE;
+  $filtered_org_ids = [];
   if ($node->hasField('field_organisation') && $node->get('field_organisation')->isEmpty()) {
     $org_jurisdiction_id = _markaspot_group_node_jurisdiction_id($node) ?? ($child_jur_id ?: NULL);
     $org_group_id = _markaspot_group_derive_org_from_category($node, $org_jurisdiction_id);
@@ -4592,7 +4593,8 @@ function markaspot_group_node_insert(NodeInterface $node): void {
 
   // Organisation notifications are emitted when the org relationship is
   // created. That covers dashboard, JSON:API, admin UI, Drush and legacy ECA
-  // writes without double-sending on freshly inserted nodes.
+  // writes without double-sending on freshly inserted nodes. A derived
+  // organisation is the exception, see after the reconciler below.
   // 6. Save the node if org was derived or jurisdiction was set.
   if ($org_derived || $jur_set) {
     // Prevent recursive hooks during this save.
@@ -4611,6 +4613,17 @@ function markaspot_group_node_insert(NodeInterface $node): void {
   // and group relationships end in the same state as regular updates.
   if ($node->hasField('field_jurisdiction') && !$node->get('field_jurisdiction')->isEmpty()) {
     _markaspot_group_reconcile_service_request_relationships($node);
+  }
+
+  // A category-derived organisation reaches storage only with the save in
+  // step 6. The relationship created in step 5 loads the request from storage
+  // in its insert hook, finds no organisation in field_organisation and stays
+  // silent, so citizen reports routed by category never notified their
+  // organisation. Notify here, after the save; the once-guard keeps a writer
+  // that was already notified from receiving a second mail, and an active
+  // legacy notification ECA still sends instead.
+  if ($org_derived && !_markaspot_group_has_active_org_notification_eca()) {
+    _markaspot_group_notify_organisation($node, $filtered_org_ids);
   }
 
   _markaspot_group_notify_pending_assigned_team($node);

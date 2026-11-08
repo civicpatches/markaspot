@@ -574,6 +574,66 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
   }
 
   /**
+   * A report routed by its category notifies the derived organisation once.
+   *
+   * The relationship insert hook loads the request from storage before the
+   * derived organisation is saved and cannot see it, so this path sent no
+   * mail at all until the insert hook notified after its save.
+   */
+  public function testCategoryDerivedOrganisationIsNotifiedOnInsert(): void {
+    [, $hedges] = $this->createCategories();
+    $request = $this->createCategoryRequest('Overgrown hedge at the school', (int) $hedges->id());
+
+    $stored = $this->reloadRequest($request);
+    $parks = (int) $this->parks->id();
+    $this->assertSame([$parks], array_map('intval', array_column($stored->get('field_organisation')->getValue(), 'target_id')));
+    $this->assertSame([$parks], $this->relationIds((int) $request->id()));
+    $mails = $this->collectedMails();
+    $this->assertCount(1, $mails);
+    $this->assertSame('org_notification', $mails[0]['key']);
+    $this->assertSame('parks@example.test', $mails[0]['to']);
+  }
+
+  /**
+   * A submitted organisation is still notified exactly once on insert.
+   */
+  public function testSubmittedOrganisationIsNotifiedOnceOnInsert(): void {
+    $this->createRequest('Damaged road sign', [(int) $this->roadWorks->id()]);
+
+    $mails = $this->collectedMails();
+    $this->assertCount(1, $mails);
+    $this->assertSame('org_notification', $mails[0]['key']);
+    $this->assertSame('roads@example.test', $mails[0]['to']);
+  }
+
+  /**
+   * An active legacy notification ECA keeps sending instead of the module.
+   */
+  public function testActiveLegacyNotificationEcaSuppressesTheDerivedMail(): void {
+    [, $hedges] = $this->createCategories();
+    $this->container->get('config.storage')->write('eca.eca.process_apply_group', [
+      'id' => 'process_apply_group',
+      'status' => TRUE,
+      'actions' => [
+        'notify_org' => [
+          'plugin' => 'action_send_email_action',
+          'configuration' => [
+            'recipient' => '[node:field_organisation:entity:field_head_organisation_e_mail]',
+            'subject' => 'New report',
+            'message' => 'A report was assigned.',
+          ],
+        ],
+      ],
+    ]);
+    $this->container->get('config.factory')->reset('eca.eca.process_apply_group');
+
+    $request = $this->createCategoryRequest('Hedge over the footpath', (int) $hedges->id());
+
+    $this->assertSame([(int) $this->parks->id()], $this->relationIds((int) $request->id()));
+    $this->assertSame([], $this->collectedMails());
+  }
+
+  /**
    * Records entity presave calls while probing.
    */
   #[Hook('entity_presave')]
@@ -787,6 +847,28 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
       'uid' => 1,
       'field_jurisdiction' => [($jurisdiction ?? $this->district)->id()],
       'field_organisation' => $organisations,
+    ]);
+    $node->save();
+    return $node;
+  }
+
+  /**
+   * Creates a citizen-style request that only names its category.
+   *
+   * @param string $title
+   *   Fictional title.
+   * @param int $category
+   *   Service category term ID.
+   */
+  private function createCategoryRequest(string $title, int $category): Node {
+    $this->clearCollectedMails();
+    $node = Node::create([
+      'type' => 'service_request',
+      'title' => $title,
+      'status' => 1,
+      'uid' => 1,
+      'field_jurisdiction' => [$this->district->id()],
+      'field_category' => $category,
     ]);
     $node->save();
     return $node;
