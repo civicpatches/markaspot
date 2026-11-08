@@ -236,3 +236,13 @@ services:
       - '@extension.list.module'
       - '@logger.channel.markaspot_mail'
       - '@stream_wrapper_manager'
+
+  # [node:markaspot_dashboard_url] and [node:markaspot_backend_edit_url]
+  # (hook_token_info and hook_tokens in markaspot_mail.module). Same URL
+  # resolution and frontend guard as the organisation and assignee mail
+  # buttons.
+  markaspot_mail.staff_link_tokens:
+    class: Drupal\markaspot_mail\Token\StaffLinkTokens
+    arguments:
+      - '@markaspot_mail.branding'
+      - '@config.factory'

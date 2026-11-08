@@ -4,13 +4,17 @@
  * @file
  * Module file for markaspot_mail.
  *
- * Thin shim that forwards classic hook_mail_alter + hook_theme to the OO
- * implementation. Attribute-based hooks aren't used for consistency with
- * markaspot_passwordless and other profile modules that still rely on
- * classic hooks.
+ * Thin shim that forwards classic hook_mail_alter, hook_theme and the
+ * token hooks to the OO implementation. Attribute-based hooks aren't used
+ * for consistency with markaspot_passwordless and other profile modules
+ * that still rely on classic hooks.
  */
 
 declare(strict_types=1);
+
+use Drupal\Core\Render\BubbleableMetadata;
+use Drupal\markaspot_mail\Token\StaffLinkTokens;
+use Drupal\node\NodeInterface;
 
 /**
  * Implements hook_theme().
@@ -225,4 +229,40 @@ function markaspot_mail_cron(): void {
   $connection->delete('devel_mail_logger')
     ->condition('timestamp', \Drupal::time()->getRequestTime() - 30 * 86400, '<')
     ->execute();
+}
+
+/**
+ * Implements hook_token_info().
+ *
+ * Staff links of service requests; the replacement logic lives in
+ * \Drupal\markaspot_mail\Token\StaffLinkTokens so mail buttons and tokens
+ * share one URL resolution. Kept in the .module file: hooks in
+ * MODULE.tokens.inc are deprecated since drupal:11.2.0.
+ */
+function markaspot_mail_token_info(): array {
+  $info['tokens']['node'][StaffLinkTokens::DASHBOARD_URL] = [
+    'name' => t('Dashboard request URL'),
+    'description' => t('Staff link to this service request in the dashboard, including the jurisdiction path. Example: https://example.org/amsterdam/dashboard/requests/407-2026. Empty when no frontend base URL is configured.'),
+  ];
+  $info['tokens']['node'][StaffLinkTokens::BACKEND_EDIT_URL] = [
+    'name' => t('Backend edit URL'),
+    'description' => t('Staff link to the Drupal edit form of this service request, from the mail setting platform.staff_backend_base_url or else platform.backend_base_url. Example: https://management.example.org/node/123/edit. Empty when no backend base URL is configured or it points at the frontend host.'),
+  ];
+  return $info;
+}
+
+/**
+ * Implements hook_tokens().
+ */
+function markaspot_mail_tokens($type, $tokens, array $data, array $options, BubbleableMetadata $bubbleable_metadata): array {
+  if ($type !== 'node' || !($data['node'] ?? NULL) instanceof NodeInterface) {
+    return [];
+  }
+  if (!isset($tokens[StaffLinkTokens::DASHBOARD_URL]) && !isset($tokens[StaffLinkTokens::BACKEND_EDIT_URL])) {
+    return [];
+  }
+  $langcode = (string) ($options['langcode'] ?? \Drupal::languageManager()->getCurrentLanguage()->getId());
+  /** @var \Drupal\markaspot_mail\Token\StaffLinkTokens $staff_link_tokens */
+  $staff_link_tokens = \Drupal::service('markaspot_mail.staff_link_tokens');
+  return $staff_link_tokens->replace($tokens, $data['node'], $langcode, $bubbleable_metadata);
 }

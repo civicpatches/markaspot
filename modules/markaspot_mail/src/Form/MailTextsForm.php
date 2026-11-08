@@ -225,7 +225,7 @@ final class MailTextsForm extends ConfigFormBase {
       '#type' => 'container',
       '#weight' => -10,
       'text' => [
-        '#markup' => $this->t('Available tokens include [node:request_id], [node:title], [node:field_category:entity:name], [node:initial_status_note], [node:url]. Enable the "token" module for a browsable token list.'),
+        '#markup' => $this->t('Available tokens include [node:request_id], [node:title], [node:field_category:entity:name], [node:initial_status_note], [node:url], and for staff mails [node:markaspot_dashboard_url] and [node:markaspot_backend_edit_url]. Enable the "token" module for a browsable token list.'),
       ],
     ];
   }
