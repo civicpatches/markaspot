@@ -51,6 +51,16 @@ final class MailTextsService implements MailTextsServiceInterface {
    */
   private const SLOTS = ['subject', 'headline', 'intro', 'body_blocks', 'cta_label', 'preheader'];
 
+  /**
+   * Stored fields this API does not edit but must keep on save.
+   *
+   * The field backend_cta_label labels the Drupal backend link of the two
+   * staff mails (markaspot_mail.settings:staff_links both) and is edited in
+   * the Drupal mail texts form. Rebuilding a text from SLOTS alone would
+   * drop it.
+   */
+  private const PRESERVED_FIELDS = ['backend_cta_label'];
+
   private const KEY_PATTERN = '/^[a-z0-9_]{3,64}$/';
 
   /**
@@ -276,7 +286,10 @@ final class MailTextsService implements MailTextsServiceInterface {
         : trim((string) $slots[$slot]);
     }
 
-    $config->set($key, $current);
+    $preserved = is_array($existing)
+      ? array_intersect_key($existing, array_flip(self::PRESERVED_FIELDS))
+      : [];
+    $config->set($key, $current + $preserved);
     $config->save();
 
     $this->logger->info('Mail text "@key" @action by uid @uid.', [

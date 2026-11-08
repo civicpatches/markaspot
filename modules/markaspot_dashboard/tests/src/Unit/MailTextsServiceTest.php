@@ -530,6 +530,33 @@ class MailTextsServiceTest extends UnitTestCase {
   }
 
   /**
+   * @covers ::saveText
+   */
+  public function testSaveTextKeepsTheBackendLinkLabelOfStaffMails(): void {
+    $config = $this->buildEditableConfig([
+      'group_assignment' => [
+        'subject' => 'Old subject',
+        'headline' => '',
+        'intro' => '',
+        'body_blocks' => [],
+        'cta_label' => '',
+        'backend_cta_label' => 'In der Verwaltung bearbeiten',
+        'preheader' => '',
+      ],
+    ]);
+    $config->expects(self::once())->method('set')->with('group_assignment', self::callback(
+      fn(array $slots): bool => $slots['subject'] === 'New subject'
+        && ($slots['backend_cta_label'] ?? NULL) === 'In der Verwaltung bearbeiten',
+    ))->willReturnSelf();
+    $config->expects(self::once())->method('save');
+    $this->configFactory->method('getEditable')->with('markaspot_mail.texts')->willReturn($config);
+
+    $result = $this->buildService()->saveText('group_assignment', ['subject' => 'New subject'], $this->account);
+
+    self::assertArrayNotHasKey('backend_cta_label', $result['text']);
+  }
+
+  /**
    * @covers ::deleteText
    */
   public function testDeleteTextThrowsNotFoundForMissingKey(): void {
