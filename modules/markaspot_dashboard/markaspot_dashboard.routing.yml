@@ -54,25 +54,6 @@ markaspot_dashboard.hazard_statistics:
     _format: 'json'
 
 # AI Duplicate Detection Routes
-markaspot_dashboard.duplicates:
-  path: '/ai/duplicates/{nid}'
-  defaults:
-    _controller: '\Drupal\markaspot_dashboard\Controller\DuplicateController::getDuplicates'
-  requirements:
-    # Aligned with markaspot_ai.duplicates permission (access ai insights).
-    _permission: 'access ai insights'
-    nid: \d+
-  methods: [GET]
-
-markaspot_dashboard.duplicates_pending:
-  path: '/ai/duplicates/pending'
-  defaults:
-    _controller: '\Drupal\markaspot_dashboard\Controller\DuplicateController::getPendingDuplicates'
-  requirements:
-    # Aligned with markaspot_ai.duplicate_pending permission (review ai duplicates).
-    _permission: 'review ai duplicates'
-  methods: [GET]
-
 markaspot_dashboard.duplicates_review:
   # Owns the browser-facing /api path: the markaspot_ai twin route pointed at
   # a service that only flips the match row (no auto-close, no 409), so the

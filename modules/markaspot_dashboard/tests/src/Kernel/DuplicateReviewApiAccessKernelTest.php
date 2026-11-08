@@ -15,9 +15,8 @@ use Symfony\Component\HttpFoundation\Request;
 /**
  * Duplicate match access on the browser-facing dashboard API.
  *
- * /api/ai/duplicates/{match_id}/review, /ai/duplicates/{nid} and
- * /ai/duplicates/pending are served by the dashboard controller, which must
- * apply the same DuplicateMatchAccessPolicy as the markaspot_ai form.
+ * /api/ai/duplicates/{match_id}/review is served by the dashboard controller.
+ * It must apply the same DuplicateMatchAccessPolicy as the markaspot_ai form.
  */
 #[TestGroup('markaspot_dashboard')]
 #[RunTestsInSeparateProcesses]
@@ -101,36 +100,6 @@ final class DuplicateReviewApiAccessKernelTest extends DuplicateAccessKernelTest
     $response = $this->controller()->reviewMatch($matchId, $this->reviewRequest('rejected'));
     $this->assertSame(200, $response->getStatusCode());
     $this->assertSame('rejected', $this->matchRow($matchId)['status']);
-  }
-
-  /**
-   * Read endpoints list only matches whose both reports are accessible.
-   */
-  public function testReadEndpointsHideForeignMatches(): void {
-    $source = $this->request($this->tenantA, 'Own source');
-    $this->createMatch($source, $this->request($this->tenantA, 'Own duplicate'));
-    $this->createMatch($source, $this->request($this->tenantB, 'Foreign duplicate'));
-    $foreignSource = $this->request($this->tenantB, 'Foreign source');
-    $this->createMatch($foreignSource, $this->request($this->tenantB, 'Foreign twin'));
-    $this->actAs($this->adminA);
-
-    $own = json_decode((string) $this->controller()->getDuplicates((int) $source->id())->getContent(), TRUE);
-    $this->assertSame(['Own duplicate'], array_column($own['duplicates'], 'title'));
-
-    $foreign = $this->controller()->getDuplicates((int) $foreignSource->id());
-    $this->assertSame(403, $foreign->getStatusCode());
-    $this->assertStringNotContainsString('Foreign', (string) $foreign->getContent());
-
-    $pending = json_decode((string) $this->controller()->getPendingDuplicates(
-      Request::create('/', 'GET', ['jurisdiction_id' => (string) $this->tenantA->id()]),
-    )->getContent(), TRUE);
-    $this->assertSame(['Own duplicate'], array_column($pending['matches'], 'match_title'));
-    $this->assertStringNotContainsString('Foreign', json_encode($pending));
-
-    $denied = json_decode((string) $this->controller()->getPendingDuplicates(
-      Request::create('/', 'GET', ['jurisdiction_id' => (string) $this->tenantB->id()]),
-    )->getContent(), TRUE);
-    $this->assertSame([], $denied['matches']);
   }
 
   /**

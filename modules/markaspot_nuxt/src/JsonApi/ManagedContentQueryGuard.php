@@ -12,8 +12,7 @@ use Drupal\jsonapi\Access\TemporaryQueryGuard;
 use Drupal\jsonapi\JsonApiFilter;
 use Drupal\jsonapi\Query\EntityCondition;
 use Drupal\jsonapi\Query\EntityConditionGroup;
-use Drupal\markaspot_tenant_admin\TenantAdminHelper;
-use Drupal\markaspot_group\Service\TenantAdminHelper as GroupTenantAdminHelper;
+use Drupal\markaspot_group\Service\TenantAdminHelper;
 
 /**
  * Mirrors scoped draft access for managed template and taxonomy collections.
@@ -64,7 +63,7 @@ final class ManagedContentQueryGuard extends TemporaryQueryGuard {
       $member_ids = $tenant_admin_enabled
         ? TenantAdminHelper::getUserMemberJurisdictionIds($account)
         : (in_array('tenant_admin', $account->getRoles(), TRUE)
-          ? GroupTenantAdminHelper::getUserJurisdictionIds($account) : []);
+          ? TenantAdminHelper::getUserJurisdictionIds($account) : []);
       $jurisdiction_ids = $member_ids;
       $vocabularies = ['service_status', 'service_category'];
       if ($tenant_admin_enabled) {

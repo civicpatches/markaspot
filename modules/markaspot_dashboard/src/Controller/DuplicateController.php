@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_dashboard\Controller;
 
-use Drupal\Core\Cache\CacheableJsonResponse;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Component\Datetime\TimeInterface;
@@ -22,15 +21,9 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
- * Controller for AI duplicate detection endpoints.
- *
- * Provides REST endpoints for:
- * - Fetching duplicates for a specific service request
- * - Reviewing duplicate matches (confirm/reject)
- * - Fetching all pending duplicates system-wide.
+ * Controller for reviewing duplicate matches (confirm/reject).
  */
 class DuplicateController extends ControllerBase {
 
@@ -111,155 +104,6 @@ class DuplicateController extends ControllerBase {
         ? $container->get('markaspot_ai.duplicate_match_access')
         : NULL,
     );
-  }
-
-  /**
-   * Get duplicates for a specific service request.
-   *
-   * @param int $nid
-   *   The node ID of the source service request.
-   *
-   * @return \Drupal\Core\Cache\CacheableJsonResponse
-   *   JSON response with duplicates data.
-   */
-  public function getDuplicates(int $nid): CacheableJsonResponse {
-    // Load the source node.
-    $node = $this->entityTypeManager->getStorage('node')->load($nid);
-    if (!$node || $node->bundle() !== 'service_request') {
-      throw new NotFoundHttpException('Service request not found');
-    }
-
-    if (!$this->isDuplicateDetectionEnabled() || !$this->canAccessNode($node, 'view')) {
-      return $this->scopedDuplicateResponse([
-        'error' => 'Duplicate data is disabled for this jurisdiction.',
-      ], 403, ['node:' . $nid]);
-    }
-
-    // Query for duplicate matches.
-    $query = $this->database->select('markaspot_ai_duplicate_matches', 'm')
-      ->fields('m', [
-        'id',
-        'match_nid',
-        'similarity_score',
-        'distance_meters',
-        'status',
-        'created',
-      ])
-      ->condition('source_nid', $nid)
-      ->orderBy('similarity_score', 'DESC');
-
-    $results = $query->execute()->fetchAll();
-
-    // Build duplicates array with node data.
-    $duplicates = [];
-    foreach ($results as $row) {
-      $match_node = $this->entityTypeManager->getStorage('node')->load($row->match_nid);
-      if (!$match_node || $match_node->bundle() !== 'service_request') {
-        continue;
-      }
-      if (!$this->canAccessNode($match_node, 'view')) {
-        continue;
-      }
-
-      $duplicates[] = $this->formatDuplicateMatch($row, $match_node);
-    }
-
-    return $this->scopedDuplicateResponse([
-      'node' => [
-        'nid' => $node->id(),
-        'title' => $node->getTitle(),
-        'created' => $node->getCreatedTime(),
-      ],
-      'duplicates' => $duplicates,
-      'count' => count($duplicates),
-    ], 200, ['node:' . $nid]);
-  }
-
-  /**
-   * Get all pending duplicate matches system-wide.
-   *
-   * @param \Symfony\Component\HttpFoundation\Request $request
-   *   The request object.
-   *
-   * @return \Drupal\Core\Cache\CacheableJsonResponse
-   *   JSON response with pending duplicates.
-   */
-  public function getPendingDuplicates(Request $request): CacheableJsonResponse {
-    $limit = $request->query->get('limit', 50);
-    $offset = $request->query->get('offset', 0);
-    $limit = min(max((int) $limit, 1), 100);
-    $offset = max((int) $offset, 0);
-
-    if (!$this->isDuplicateDetectionEnabled()) {
-      return $this->scopedDuplicateResponse([
-        'matches' => [],
-        'total_counts' => $this->emptyMatchCounts(),
-        'limit' => $limit,
-        'offset' => $offset,
-        'jurisdiction_id' => NULL,
-      ], 200, ['markaspot_ai_duplicates'], [
-        'url.query_args:jurisdiction_id',
-        'url.query_args:limit',
-        'url.query_args:offset',
-      ]);
-    }
-
-    $jurisdictionId = $this->resolveJurisdictionFilter($request);
-    $nodeIds = $this->getAccessibleAiEnabledNodeIds($jurisdictionId, 'view');
-    if (empty($nodeIds)) {
-      return $this->scopedDuplicateResponse([
-        'matches' => [],
-        'total_counts' => $this->emptyMatchCounts(),
-        'limit' => $limit,
-        'offset' => $offset,
-        'jurisdiction_id' => $jurisdictionId,
-      ], 200, ['markaspot_ai_duplicates'], [
-        'url.query_args:jurisdiction_id',
-        'url.query_args:limit',
-        'url.query_args:offset',
-      ]);
-    }
-
-    $total_counts = $this->getDuplicateMatchCounts($nodeIds);
-    $results = $this->getPendingDuplicateMatches($nodeIds, $limit, $offset);
-
-    // Build matches array with node data.
-    $matches = [];
-    foreach ($results as $row) {
-      $source_node = $this->entityTypeManager->getStorage('node')->load($row->source_nid);
-      $match_node = $this->entityTypeManager->getStorage('node')->load($row->match_nid);
-
-      if (!$source_node || !$match_node) {
-        continue;
-      }
-      if (!$this->canAccessNode($source_node, 'view') || !$this->canAccessNode($match_node, 'view')) {
-        continue;
-      }
-
-      $matches[] = [
-        'id' => $row->id,
-        'source_nid' => $row->source_nid,
-        'source_title' => $source_node->getTitle(),
-        'match_nid' => $row->match_nid,
-        'match_title' => $match_node->getTitle(),
-        'similarity_score' => (float) $row->similarity_score,
-        'distance_meters' => $row->distance_meters ? (float) $row->distance_meters : NULL,
-        'status' => $row->status,
-        'created' => (int) $row->created,
-      ];
-    }
-
-    return $this->scopedDuplicateResponse([
-      'matches' => $matches,
-      'total_counts' => $total_counts,
-      'limit' => $limit,
-      'offset' => $offset,
-      'jurisdiction_id' => $jurisdictionId,
-    ], 200, ['markaspot_ai_duplicates'], [
-      'url.query_args:jurisdiction_id',
-      'url.query_args:limit',
-      'url.query_args:offset',
-    ]);
   }
 
   /**
@@ -367,177 +211,10 @@ class DuplicateController extends ControllerBase {
   }
 
   /**
-   * Builds a user-scoped duplicate response.
-   */
-  protected function scopedDuplicateResponse(
-    array $data,
-    int $status = 200,
-    array $tags = [],
-    array $contexts = [],
-  ): CacheableJsonResponse {
-    $response = new CacheableJsonResponse($data, $status);
-    $response->getCacheableMetadata()
-      ->addCacheContexts(array_values(array_unique(array_merge(['user'], $contexts))))
-      ->addCacheTags($tags)
-      ->setCacheMaxAge(0);
-
-    return $response;
-  }
-
-  /**
-   * Resolves the requested jurisdiction scope for the current user.
-   */
-  protected function resolveJurisdictionFilter(Request $request): ?int {
-    $resolved = $this->resolveJurisdictionId($request->query->get('jurisdiction_id'));
-    if ($this->currentUserCanSeeAllJurisdictions()) {
-      return $resolved;
-    }
-    if ($resolved === NULL) {
-      return -1;
-    }
-
-    return $this->currentUserCanAccessJurisdiction($resolved) ? $resolved : -1;
-  }
-
-  /**
-   * Checks whether the current user may see all jurisdictions.
-   */
-  protected function currentUserCanSeeAllJurisdictions(): bool {
-    return $this->duplicateAccessPolicy !== NULL
-      && $this->duplicateAccessPolicy->canSeeAllJurisdictions($this->currentUser);
-  }
-
-  /**
-   * Checks node access, tenant membership and tenant AI opt-in.
-   */
-  protected function canAccessNode(NodeInterface $node, string $operation): bool {
-    if (!$this->isDuplicateDetectionEnabled()) {
-      return FALSE;
-    }
-
-    return $this->duplicateAccessPolicy->canAccessNode($node, $operation, $this->currentUser);
-  }
-
-  /**
    * Resolves a service request node's jurisdiction ID via the shared policy.
    */
   protected function getJurisdictionIdForNode(NodeInterface $node): ?int {
     return $this->duplicateAccessPolicy?->jurisdictionIdForNode($node);
-  }
-
-  /**
-   * Checks if the current user administers the requested jurisdiction scope.
-   */
-  protected function currentUserCanAccessJurisdiction(?int $jurisdiction_id): bool {
-    return $this->duplicateAccessPolicy !== NULL
-      && $this->duplicateAccessPolicy->canAccessJurisdiction($jurisdiction_id, $this->currentUser);
-  }
-
-  /**
-   * Gets service request IDs accessible to the current user and AI-enabled.
-   */
-  protected function getAccessibleAiEnabledNodeIds(?int $jurisdiction_id, string $operation): array {
-    if ($jurisdiction_id !== NULL && !$this->currentUserCanAccessJurisdiction($jurisdiction_id)) {
-      return [];
-    }
-
-    if ($jurisdiction_id !== NULL && $this->hierarchyResolver) {
-      $node_ids = $this->hierarchyResolver->getNodeIdsInJurisdiction($jurisdiction_id);
-    }
-    elseif ($jurisdiction_id !== NULL) {
-      $query = $this->database
-        ->select('group_relationship_field_data', 'gr')
-        ->fields('gr', ['entity_id'])
-        ->condition('gr.plugin_id', 'group_node:service_request');
-      $query->innerJoin('groups_field_data', 'grp', 'gr.gid = grp.id AND grp.default_langcode = 1');
-      $query->condition('grp.type', $this->getJurisdictionGroupType());
-      $query->condition('grp.id', $jurisdiction_id);
-      $node_ids = $query->execute()->fetchCol();
-    }
-    else {
-      if (!$this->currentUserCanSeeAllJurisdictions()) {
-        return [];
-      }
-      $node_ids = $this->entityTypeManager
-        ->getStorage('node')
-        ->getQuery()
-        ->accessCheck(FALSE)
-        ->condition('type', 'service_request')
-        ->execute();
-    }
-
-    if (empty($node_ids)) {
-      return [];
-    }
-
-    $nodes = $this->entityTypeManager->getStorage('node')->loadMultiple($node_ids);
-    $enabled = [];
-    foreach ($nodes as $node) {
-      if (!$node instanceof NodeInterface || $node->bundle() !== 'service_request') {
-        continue;
-      }
-      if ($this->canAccessNode($node, $operation)) {
-        $enabled[] = (int) $node->id();
-      }
-    }
-
-    return $enabled;
-  }
-
-  /**
-   * Gets duplicate match counts for an already scoped node set.
-   */
-  protected function getDuplicateMatchCounts(array $node_ids): array {
-    if (empty($node_ids)) {
-      return $this->emptyMatchCounts();
-    }
-
-    $query = $this->database->select('markaspot_ai_duplicate_matches', 'd')
-      ->fields('d', ['status'])
-      ->condition('d.source_nid', $node_ids, 'IN')
-      ->condition('d.match_nid', $node_ids, 'IN');
-    $query->addExpression('COUNT(*)', 'count');
-    $query->groupBy('d.status');
-    $results = $query->execute()->fetchAllKeyed();
-
-    return [
-      'pending' => (int) ($results['pending'] ?? 0),
-      'confirmed' => (int) ($results['confirmed'] ?? 0),
-      'rejected' => (int) ($results['rejected'] ?? 0),
-      'total' => array_sum(array_map('intval', $results)),
-    ];
-  }
-
-  /**
-   * Gets pending duplicate matches for an already scoped node set.
-   */
-  protected function getPendingDuplicateMatches(array $node_ids, int $limit, int $offset): array {
-    if (empty($node_ids)) {
-      return [];
-    }
-
-    $query = $this->database->select('markaspot_ai_duplicate_matches', 'm')
-      ->fields('m')
-      ->condition('m.status', 'pending')
-      ->condition('m.source_nid', $node_ids, 'IN')
-      ->condition('m.match_nid', $node_ids, 'IN')
-      ->orderBy('m.similarity_score', 'DESC')
-      ->orderBy('m.created', 'DESC')
-      ->range($offset, $limit);
-
-    return $query->execute()->fetchAll();
-  }
-
-  /**
-   * Returns the empty duplicate count shape.
-   */
-  protected function emptyMatchCounts(): array {
-    return [
-      'pending' => 0,
-      'confirmed' => 0,
-      'rejected' => 0,
-      'total' => 0,
-    ];
   }
 
   /**
@@ -666,38 +343,6 @@ class DuplicateController extends ControllerBase {
       return $matches[1];
     }
     return (string) $node->id();
-  }
-
-  /**
-   * Format a duplicate match record for API response.
-   *
-   * @param object $row
-   *   The database row from markaspot_ai_duplicate_matches.
-   * @param \Drupal\node\NodeInterface $match_node
-   *   The matched service request node.
-   *
-   * @return array
-   *   Formatted duplicate match data.
-   */
-  protected function formatDuplicateMatch(object $row, NodeInterface $match_node): array {
-    // Extract service request ID from title.
-    $service_request_id = $this->getServiceRequestId($match_node);
-
-    // Build URL for the request.
-    $url = $match_node->toUrl('canonical', ['absolute' => TRUE])->toString();
-
-    return [
-      'match_id' => (int) $row->id,
-      'nid' => (int) $match_node->id(),
-      'service_request_id' => $service_request_id,
-      'title' => $match_node->getTitle(),
-      'similarity_score' => (float) $row->similarity_score,
-      'distance_meters' => $row->distance_meters ? (float) $row->distance_meters : NULL,
-      'status' => $row->status,
-      'created' => (int) $row->created,
-      'node_created' => $match_node->getCreatedTime(),
-      'url' => $url,
-    ];
   }
 
 }

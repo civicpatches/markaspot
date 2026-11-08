@@ -6,7 +6,7 @@ namespace Drupal\markaspot_tenant_admin\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Url;
-use Drupal\markaspot_tenant_admin\TenantAdminHelper;
+use Drupal\markaspot_group\Service\TenantAdminHelper;
 
 /**
  * Controller for the tenant admin overview page.

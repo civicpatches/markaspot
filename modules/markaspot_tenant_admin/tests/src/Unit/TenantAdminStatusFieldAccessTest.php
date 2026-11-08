@@ -14,6 +14,8 @@ use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
+require_once dirname(__DIR__, 4) . '/markaspot_group/src/Service/TenantAdminHelper.php';
+
 /**
  * Tests which node bundles get the tenant-scoped status field access.
  */

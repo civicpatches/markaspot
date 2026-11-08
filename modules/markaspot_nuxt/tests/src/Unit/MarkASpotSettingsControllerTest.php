@@ -15,6 +15,7 @@ use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Extension\ProfileExtensionList;
 use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -146,6 +147,11 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   protected MarkASpotSettingsController $controller;
 
   /**
+   * The profile metadata service.
+   */
+  protected ProfileExtensionList $profileExtensionList;
+
+  /**
    * The effective feature resolver used by the controller.
    */
   protected FeatureScopeResolver $featureScopeResolver;
@@ -260,6 +266,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     $container->set('cache_contexts_manager', $cacheContextsManager);
     \Drupal::setContainer($container);
 
+    $this->profileExtensionList = $this->createMock(ProfileExtensionList::class);
     $this->controller = new MarkASpotSettingsController(
       $this->entityTypeManager,
       $this->configFactory,
@@ -271,6 +278,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->statusTermScope,
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->profileExtensionList,
     );
   }
 
@@ -393,6 +401,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->statusTermScope,
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
   }
 
@@ -477,6 +486,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $data = json_decode($controller->getJurisdictions()->getContent(), TRUE);
@@ -492,6 +502,8 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
    * @covers ::getMarkASpotSettings
    */
   public function testGetSettingsReturnsBaseConfig(): void {
+    $this->profileExtensionList->method('getExtensionInfo')->with('markaspot')
+      ->willReturn(['version' => '11.9.999']);
     // No jurisdiction param, default group query returns empty.
     $query = $this->createMock(QueryInterface::class);
     $query->method('accessCheck')->willReturnSelf();
@@ -515,10 +527,24 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     $this->assertEquals(6.9, $data['center_lng']);
     $this->assertEquals('DE', $data['geocoding_country']);
     $this->assertSame('self_hosted', $data['operatingMode']);
+    $this->assertSame('11.9.999', $data['profile_version']);
+    $this->assertContains('config:core.extension', $response->getCacheableMetadata()->getCacheTags());
     $this->assertContains(
       'config:markaspot_sso.settings',
       $response->getCacheableMetadata()->getCacheTags()
     );
+  }
+
+  /**
+   * Unversioned development profiles explicitly identify themselves as dev.
+   */
+  public function testProfileVersionFallback(): void {
+    $this->profileExtensionList->method('getExtensionInfo')->with('markaspot')->willReturn([]);
+    $this->groupStorage->method('load')->willReturn($this->createMockGroup());
+    $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings?jurisdiction=14'));
+    $this->assertSame(200, $response->getStatusCode());
+    $data = json_decode((string) $response->getContent(), TRUE);
+    $this->assertSame('dev', $data['profile_version']);
   }
 
   /**
@@ -553,6 +579,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings', 'GET');
@@ -623,6 +650,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
@@ -779,6 +807,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->statusTermScope,
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
@@ -1372,6 +1401,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->statusTermScope,
       $this->languageManager,
       $resolver,
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
@@ -2057,6 +2087,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
 
     $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');

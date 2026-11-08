@@ -7,6 +7,7 @@ namespace Drupal\markaspot_health\Controller;
 use Drupal\Core\Cache\CacheableJsonResponse;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Extension\ProfileExtensionList;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_health\HealthCheckPluginManager;
 use Drupal\markaspot_health\HealthCheckResult;
@@ -26,6 +27,7 @@ class HealthCheckController extends ControllerBase {
    */
   public function __construct(
     protected HealthCheckPluginManager $pluginManager,
+    protected ProfileExtensionList $profileExtensionList,
   ) {}
 
   /**
@@ -34,6 +36,7 @@ class HealthCheckController extends ControllerBase {
   public static function create(ContainerInterface $container) {
     return new static(
       $container->get('plugin.manager.markaspot_health_check'),
+      $container->get('extension.list.profile'),
     );
   }
 
@@ -56,6 +59,7 @@ class HealthCheckController extends ControllerBase {
     $results = $this->pluginManager->runAll($context);
 
     $response = new CacheableJsonResponse([
+      'profile_version' => $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev',
       'checked_at' => gmdate('c'),
       'summary' => $this->buildSummary($results),
       'checks' => array_map(
@@ -66,6 +70,7 @@ class HealthCheckController extends ControllerBase {
 
     $cache = (new CacheableMetadata())
       ->setCacheContexts(['user.permissions', 'url.query_args:jurisdiction'])
+      ->setCacheTags(['config:core.extension'])
       ->setCacheMaxAge(0);
     $response->addCacheableDependency($cache);
 
