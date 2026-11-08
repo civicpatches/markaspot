@@ -104,7 +104,10 @@ This module works with:
   free text cannot be told apart reliably, so all of it is replaced. The
   structured history (status and field changes, author, date) stays.
 - **Later notes are replaced too.** A note staff add to a report that is
-  already archived is replaced on the next cron run or backfill run.
+  already archived is replaced by a later catch-up pass, not necessarily
+  the next cron run: cron works through the archived reports in bounded
+  batches from a cursor, so it may take several runs to come back to the
+  report. `markaspot:archive:backfill` covers all of them in one go.
 - **One combined revision.** The queue archives a report in one save: the
   archived status, unpublishing and anonymization appear as one revision in
   the history, not as two.
@@ -118,9 +121,9 @@ This module works with:
   report again on a later run. Inside an outer database transaction (code
   that calls the catch-up within its own transaction) nothing is retried:
   the conflict rolled back the outer transaction too, so only its owner
-  can retry. Archiving from the queue makes one attempt:
-  the queue retries the item on a later cron run (up to three queue
-  attempts), as it does after any other failure.
+  can retry. Archiving from the queue makes one attempt and is not retried
+  right away; the queue processes the item again on a later cron run, as
+  after any other failure.
 - **Known limit: mail before a rollback.** Archiving from the queue saves
   the report like an ordinary status change, so its save hooks run: the
   citizen status notification and ECA models may send mail. When a later
