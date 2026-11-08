@@ -740,7 +740,7 @@ class ArchiveService implements ArchiveServiceInterface {
   /**
    * {@inheritdoc}
    */
-  public function indexSearchIndexBacklog(): array {
+  public function indexSearchIndexBacklog(?callable $continue = NULL): array {
     $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $storage = $this->entityTypeManager->getStorage('search_api_index');
     foreach ($this->searchIndexBacklog() ?? [] as $index_id => $item_ids) {
@@ -750,6 +750,9 @@ class ArchiveService implements ArchiveServiceInterface {
       }
       $batch_size = max(1, (int) ($index->getOption('cron_limit', 50) ?: 50));
       foreach (array_chunk($item_ids, $batch_size) as $chunk) {
+        if ($continue !== NULL && !$continue()) {
+          return $result;
+        }
         $result['processed'] += count($chunk);
         try {
           $indexed = count($index->indexSpecificItems($index->loadItemsMultiple($chunk)));

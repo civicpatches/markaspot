@@ -9,6 +9,7 @@ use Consolidation\AnnotatedCommand\CommandResult;
 use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
 use Drupal\Core\Database\DatabaseExceptionWrapper;
 use Drupal\Core\Hook\Attribute\Hook;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannel;
 use Drupal\Core\Logger\RfcLogLevel;
 use Drupal\Core\Queue\QueueFactory;
@@ -1637,6 +1638,35 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * The command stops and fails once it cannot renew the catch-up lock.
+   *
+   * Cron or another run may hold the lock after the lease ran out; going on
+   * would overlap with it.
+   */
+  public function testBackfillCommandStopsWhenTheLockIsLost(): void {
+    $nids = $this->createArchivedBacklog(3);
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    // The first acquisition and one renewal succeed, every later one fails.
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      return ++$calls <= 2;
+    });
+
+    $result = $this->archiveCommand(NULL, $lock)->backfill($this->backfillOptions(['batch-size' => 1]));
+
+    self::assertSame(1, $result->getExitCode());
+    $rows = $this->backfillRows($result);
+    self::assertCount(1, $rows, 'No further step runs.');
+    self::assertSame(['unpublish', 'on', 3, 1, 1, 0, 2], array_slice(array_values($rows[0]), 0, 7));
+    self::assertStringContainsString('lock', $rows[0]['note']);
+    self::assertFalse(Node::load($nids[0])->isPublished());
+    self::assertTrue(Node::load($nids[1])->isPublished());
+    foreach ($nids as $i => $nid) {
+      self::assertSame('plain' . $i . '@example.org', Node::load($nid)->get('field_e_mail')->value);
+    }
+  }
+
+  /**
    * The backfill command dry run counts both steps and writes nothing.
    */
   public function testBackfillCommandDryRunCountsWithoutWriting(): void {
@@ -2014,7 +2044,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   /**
    * Builds the staff anonymization command under test.
    */
-  private function archiveCommand(?ArchiveService $service = NULL): ArchiveCommands {
+  private function archiveCommand(?ArchiveService $service = NULL, ?LockBackendInterface $lock = NULL): ArchiveCommands {
     return new ArchiveCommands(
       $service ?? $this->archiveService,
       $this->container->get('config.factory'),
@@ -2023,7 +2053,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       $this->testLogger(),
       $this->container->get('database'),
       $this->container->get('state'),
-      $this->container->get('lock'),
+      $lock ?? $this->container->get('lock'),
       NULL
     );
   }

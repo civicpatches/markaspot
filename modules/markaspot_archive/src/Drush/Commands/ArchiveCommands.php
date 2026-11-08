@@ -48,12 +48,22 @@ final class ArchiveCommands extends DrushCommands {
   private const FAILED_NOTE = 'Some requests failed: a later run retries them. The markaspot_archive log names them and the reason.';
 
   /**
+   * Note of a catch-up step stopped because the lock could not be renewed.
+   */
+  private const LOCK_LOST_NOTE = 'Stopped: the catch-up lock could not be renewed, so cron or another run may be working on the same requests. Later steps did not run; run the command again.';
+
+  /**
    * TRUE when the running catch-up could not finish its work.
    *
    * Set for causes no row count shows, such as a search index the catch-up
-   * cannot update.
+   * cannot update or the loss of the catch-up lock.
    */
   private bool $incomplete = FALSE;
+
+  /**
+   * TRUE once the running catch-up could not renew its lock.
+   */
+  private bool $lockLost = FALSE;
 
   public function __construct(
     protected readonly ArchiveServiceInterface $archiveService,
@@ -170,9 +180,14 @@ final class ArchiveCommands extends DrushCommands {
    * counted in index items, only with Search API). A search index the
    * catch-up cannot update, such as a read-only one, is named in the note.
    *
+   * The command renews its lock before each batch and each indexing chunk.
+   * When that fails, cron or another run may hold the lock: the command
+   * stops, skips the later steps and fails.
+   *
    * Exits with 1 when a request failed, when a step whose setting is on
-   * still has requests left although no --limit was given, or when a search
-   * index cannot be updated. A dry run always exits with 0.
+   * still has requests left although no --limit was given, when a search
+   * index cannot be updated or when the lock was lost. A dry run always
+   * exits with 0.
    */
   #[CLI\Command(
     name: 'markaspot:archive:backfill',
@@ -247,6 +262,7 @@ final class ArchiveCommands extends DrushCommands {
     }
     $dry_run = !empty($options['dry-run']);
     $this->incomplete = FALSE;
+    $this->lockLost = FALSE;
 
     if (!$dry_run && !$this->lock->acquire(
       ArchiveService::CATCH_UP_LOCK,
@@ -261,10 +277,11 @@ final class ArchiveCommands extends DrushCommands {
       if ($only !== 'anonymize') {
         $rows[] = $this->unpublishStep($dry_run, $limit, $batch_size);
       }
-      if ($only !== 'unpublish') {
+      // Without the lock, cron or another run may work on the same requests.
+      if ($only !== 'unpublish' && !$this->lockLost) {
         $rows[] = $this->anonymizeStep($dry_run, $limit, $batch_size);
       }
-      $search = $this->searchIndexStep($dry_run);
+      $search = $this->lockLost ? NULL : $this->searchIndexStep($dry_run);
       if ($search !== NULL) {
         $rows[] = $search;
       }
@@ -325,7 +342,10 @@ final class ArchiveCommands extends DrushCommands {
           $size,
           self::BACKFILL_BATCH_TIME_BUDGET
         ));
-      if ($row['failed'] > 0) {
+      if ($this->lockLost) {
+        $row['note'] = self::LOCK_LOST_NOTE;
+      }
+      elseif ($row['failed'] > 0) {
         $row['note'] = self::FAILED_NOTE;
       }
       elseif ($this->state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE)) {
@@ -363,7 +383,11 @@ final class ArchiveCommands extends DrushCommands {
           $size,
           self::BACKFILL_BATCH_TIME_BUDGET
         ));
-      $row['note'] = $row['failed'] > 0 ? self::FAILED_NOTE : '';
+      $row['note'] = match (TRUE) {
+        $this->lockLost => self::LOCK_LOST_NOTE,
+        $row['failed'] > 0 => self::FAILED_NOTE,
+        default => '',
+      };
     }
     $row['remaining'] = $this->archiveService->countBackfillCandidates();
     if ($row['note'] === '' && $row['remaining'] > 0) {
@@ -388,12 +412,17 @@ final class ArchiveCommands extends DrushCommands {
       $row['note'] = 'Dry run: nothing was changed.';
     }
     elseif ($pending > 0) {
-      $result = $this->archiveService->indexSearchIndexBacklog();
+      $result = $this->archiveService->indexSearchIndexBacklog(
+        fn (): bool => $this->renewLock()
+      );
       foreach (['processed', 'changed', 'failed'] as $key) {
         $row[$key] = $result[$key];
       }
       $row['remaining'] = (int) $this->archiveService->countSearchIndexBacklog();
-      if ($row['failed'] > 0 || $row['remaining'] > 0) {
+      if ($this->lockLost) {
+        $row['note'] = self::LOCK_LOST_NOTE;
+      }
+      elseif ($row['failed'] > 0 || $row['remaining'] > 0) {
         $row['note'] = 'Items failed to index: Search API retries them on cron. The markaspot_archive and search_api logs name the reason.';
       }
     }
@@ -446,11 +475,10 @@ final class ArchiveCommands extends DrushCommands {
   private function runBatches(string $label, array &$row, int $limit, int $batch_size, callable $batch): void {
     while ($limit === 0 || $row['processed'] < $limit) {
       $size = $limit === 0 ? $batch_size : min($batch_size, $limit - (int) $row['processed']);
-      // Keep the lock for the next batch.
-      $this->lock->acquire(
-        ArchiveService::CATCH_UP_LOCK,
-        self::BACKFILL_BATCH_TIME_BUDGET + 60
-      );
+      // Keep the lock for the next batch, or stop.
+      if (!$this->renewLock()) {
+        break;
+      }
       $result = $batch($size);
       if ($result['processed'] === 0) {
         break;
@@ -468,6 +496,29 @@ final class ArchiveCommands extends DrushCommands {
         ]
       );
     }
+  }
+
+  /**
+   * Renews the catch-up lock for the next batch or indexing chunk.
+   *
+   * A batch may take its whole time budget; the lease covers it plus a
+   * minute. Once the lease ran out, cron or another run may have taken the
+   * lock: then the renewal fails and the catch-up must stop.
+   *
+   * @return bool
+   *   TRUE while this run holds the lock.
+   */
+  private function renewLock(): bool {
+    if ($this->lockLost) {
+      return FALSE;
+    }
+    if ($this->lock->acquire(ArchiveService::CATCH_UP_LOCK, self::BACKFILL_BATCH_TIME_BUDGET + 60)) {
+      return TRUE;
+    }
+    $this->lockLost = TRUE;
+    $this->incomplete = TRUE;
+    $this->archiveLogger->error('The archive catch-up lost its lock and stopped; run markaspot:archive:backfill again.');
+    return FALSE;
   }
 
   /**

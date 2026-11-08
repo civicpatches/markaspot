@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_archive\Kernel;
 
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\KernelTests\KernelTestBase;
@@ -224,6 +225,41 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
   }
 
   /**
+   * Indexing stops, and the command fails, once the lock cannot be renewed.
+   */
+  public function testIndexingStopsWhenTheLockIsLost(): void {
+    $index = Index::load(self::INDEX);
+    $index->setOption('cron_limit', 1)->save();
+    $service = $this->container->get('markaspot_archive.archive');
+    $this->createArchivedRequestWithNote();
+    $this->createArchivedRequestWithNote();
+    $this->assertSame(2, $service->countSearchIndexBacklog());
+
+    $this->assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $service->indexSearchIndexBacklog(static fn (): bool => FALSE));
+    $this->assertSame(2, $service->countSearchIndexBacklog());
+    $chunks = 0;
+    $this->assertSame(['processed' => 1, 'changed' => 1, 'failed' => 0], $service->indexSearchIndexBacklog(static function () use (&$chunks): bool {
+      return ++$chunks <= 1;
+    }));
+    $this->assertSame(1, $service->countSearchIndexBacklog());
+
+    // The command: the first acquisition and the renewals of the anonymize
+    // step succeed, the renewal before the first indexing chunk fails.
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      return ++$calls <= 3;
+    });
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $result = $this->command($lock)->backfill($this->options());
+    $rows = $this->rows($result);
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertSame(['anonymize', 'on', 2, 2, 2, 0, 0], array_slice(array_values($rows['anonymize']), 0, 7));
+    $this->assertSame(['search index', 'on', 2, 0, 0, 0, 2], array_slice(array_values($rows['search index']), 0, 7));
+    $this->assertStringContainsString('lock', $rows['search index']['note']);
+  }
+
+  /**
    * Creates an archived request with anonymized contact data and a note.
    */
   private function createArchivedRequestWithNote(): Node {
@@ -265,7 +301,10 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
   /**
    * Returns the backfill command with the container services.
    */
-  private function command(): ArchiveCommands {
+  private function command(?LockBackendInterface $lock = NULL): ArchiveCommands {
+    if ($lock !== NULL) {
+      $this->container->set('lock', $lock);
+    }
     return ArchiveCommands::create($this->container);
   }
 

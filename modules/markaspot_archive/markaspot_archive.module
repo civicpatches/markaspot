@@ -46,11 +46,14 @@ function markaspot_archive_cron() {
       );
       // Catch up on archived requests that still hold plain contact data on
       // every run. It depends only on the anonymize setting, not on the
-      // archive throttle.
-      $archive->backfillArchived(
-        ArchiveService::BACKFILL_LIMIT,
-        ArchiveService::BACKFILL_TIME_BUDGET
-      );
+      // archive throttle. A slow first step may have used up the lease: go
+      // on only while this run still holds the lock.
+      if ($lock->acquire(ArchiveService::CATCH_UP_LOCK, ArchiveService::BACKFILL_TIME_BUDGET + 30)) {
+        $archive->backfillArchived(
+          ArchiveService::BACKFILL_LIMIT,
+          ArchiveService::BACKFILL_TIME_BUDGET
+        );
+      }
     }
     finally {
       $lock->release(ArchiveService::CATCH_UP_LOCK);

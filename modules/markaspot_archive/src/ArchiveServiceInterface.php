@@ -232,10 +232,14 @@ interface ArchiveServiceInterface {
   /**
    * Indexes the waiting search index items of archived requests now.
    *
+   * @param (callable(): bool)|null $continue
+   *   Called before each chunk of items, for example to renew a lock; the
+   *   indexing stops when it returns FALSE.
+   *
    * @return array{processed: int, changed: int, failed: int}
    *   Items attempted, indexed and not indexed.
    */
-  public function indexSearchIndexBacklog(): array;
+  public function indexSearchIndexBacklog(?callable $continue = NULL): array;
 
   /**
    * Updates previous revision field tables with anonymized values.
