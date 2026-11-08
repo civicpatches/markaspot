@@ -8,6 +8,7 @@ use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_archive\ArchiveService;
 use Drupal\markaspot_archive\ArchiveServiceInterface;
 use Drupal\markaspot_archive\Drush\Commands\ArchiveCommands;
 use Drupal\markaspot_archive_search_test\Plugin\search_api\tracker\SilentlyFailingTracker;
@@ -247,15 +248,15 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     }));
     $this->assertSame(1, $service->countSearchIndexBacklog());
 
-    // The command: the first acquisition and the six renewals of the
-    // anonymize step succeed (before the first batch, after each of the two
-    // requests, after that batch, before the empty batch that ends the step
-    // resets the cursor, and after it); the renewal before the first
-    // indexing chunk fails.
+    // The command: the first acquisition and the seven renewals of the
+    // anonymize step succeed (before the cursor reset, before the first
+    // batch, after each of the two requests, after that batch, before the
+    // empty batch that ends the step resets the cursor, and after it); the
+    // renewal before the first indexing chunk fails.
     $calls = 0;
     $lock = $this->createMock(LockBackendInterface::class);
     $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
-      return ++$calls <= 7;
+      return ++$calls <= 8;
     });
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
     $result = $this->command($lock)->backfill($this->options());
@@ -264,6 +265,29 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     $this->assertSame(['anonymize', 'on', 2, 2, 2, 0, 0], array_slice(array_values($rows['anonymize']), 0, 7));
     $this->assertSame(['search index', 'on', 2, 0, 0, 0, 2], array_slice(array_values($rows['search index']), 0, 7));
     $this->assertStringContainsString('lock', $rows['search index']['note']);
+  }
+
+  /**
+   * A run that lost its lock while counting leaves the shared cursor alone.
+   */
+  public function testLockLostWhileCountingKeepsTheCursor(): void {
+    $this->createArchivedRequestWithNote();
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $state = $this->container->get('state');
+    // Another run (cron) owns the catch-up now and has advanced the cursor.
+    $state->set(ArchiveService::BACKFILL_CURSOR_STATE, 900);
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      // The first acquisition succeeds, the renewal after counting fails.
+      return ++$calls <= 1;
+    });
+    $result = $this->command($lock)->backfill($this->options());
+    $rows = $this->rows($result);
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertSame(900, $state->get(ArchiveService::BACKFILL_CURSOR_STATE));
+    $this->assertStringContainsString('lock', $rows['anonymize']['note']);
+    $this->assertArrayNotHasKey('search index', $rows);
   }
 
   /**

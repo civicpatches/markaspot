@@ -378,6 +378,11 @@ final class ArchiveCommands extends DrushCommands {
     elseif ($dry_run) {
       $row['note'] = 'Dry run: nothing was changed.';
     }
+    // Counting can outlast the lock lease. Only an owner of the catch-up may
+    // reset the shared cursor, or it would undo another run's progress.
+    elseif (!$this->renewLock()) {
+      $row['note'] = self::LOCK_LOST_NOTE;
+    }
     else {
       // One full pass from the first archived request, wherever cron stopped.
       $this->state->set(ArchiveService::BACKFILL_CURSOR_STATE, 0);
