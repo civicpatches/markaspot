@@ -62,22 +62,44 @@ final class StaffLinkTokens {
    *   Replacements keyed by original token text.
    */
   public function replace(array $tokens, NodeInterface $node, string $langcode, BubbleableMetadata $metadata): array {
+    $ownTokens = array_intersect_key($tokens, [
+      self::DASHBOARD_URL => TRUE,
+      self::BACKEND_EDIT_URL => TRUE,
+    ]);
+    if ($ownTokens === []) {
+      return [];
+    }
+    $this->addCacheableDependencies($node, $metadata);
+
     $replacements = [];
-    foreach ($tokens as $name => $original) {
-      if ($name !== self::DASHBOARD_URL && $name !== self::BACKEND_EDIT_URL) {
-        continue;
-      }
-      $metadata->addCacheableDependency($this->configFactory->get('markaspot_mail.settings'));
-      $metadata->addCacheableDependency($node);
-      $jurisdiction = $this->resolveJurisdictionGroupFromNode($node);
-      if ($jurisdiction !== NULL) {
-        $metadata->addCacheableDependency($jurisdiction);
-      }
+    foreach ($ownTokens as $name => $original) {
       $replacements[$original] = $name === self::DASHBOARD_URL
         ? $this->dashboardUrl($node, $langcode)
         : $this->backendEditUrl($node, $langcode);
     }
     return $replacements;
+  }
+
+  /**
+   * Adds everything the staff link URLs depend on.
+   *
+   * Besides the node, its jurisdiction and the mail settings, the URLs
+   * depend on the jurisdiction bundle (markaspot_open311.settings) and on
+   * the list of jurisdictions: their number decides whether dashboard links
+   * carry the /<slug> prefix and whether a request without a jurisdiction
+   * is branded by the only one. The bundle list tag is invalidated when a
+   * jurisdiction is created, deleted or saved, so it also covers a change
+   * to that implicit fallback jurisdiction.
+   */
+  private function addCacheableDependencies(NodeInterface $node, BubbleableMetadata $metadata): void {
+    $metadata->addCacheableDependency($node);
+    $metadata->addCacheableDependency($this->configFactory->get('markaspot_mail.settings'));
+    $metadata->addCacheableDependency($this->configFactory->get('markaspot_open311.settings'));
+    $metadata->addCacheTags(['group_list:' . $this->resolvedJurisdictionGroupType()]);
+    $jurisdiction = $this->resolveJurisdictionGroupFromNode($node);
+    if ($jurisdiction !== NULL) {
+      $metadata->addCacheableDependency($jurisdiction);
+    }
   }
 
   /**

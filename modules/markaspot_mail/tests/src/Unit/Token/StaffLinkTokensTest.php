@@ -56,6 +56,24 @@ final class StaffLinkTokensTest extends UnitTestCase {
     ], $replacements);
     $this->assertContains('config:markaspot_mail.settings', $metadata->getCacheTags());
     $this->assertContains('group:18', $metadata->getCacheTags());
+    $this->assertContains('node:123', $metadata->getCacheTags());
+    // The jurisdiction bundle and the number of jurisdictions (/<slug>
+    // prefix, implicit fallback jurisdiction) shape the URLs as well.
+    $this->assertContains('config:markaspot_open311.settings', $metadata->getCacheTags());
+    $this->assertContains('group_list:jur', $metadata->getCacheTags());
+  }
+
+  /**
+   * Tests other tokens add no cacheability.
+   */
+  public function testReplaceIgnoresOtherTokens(): void {
+    $metadata = new BubbleableMetadata();
+
+    $replacements = $this->tokens($this->brandingService(self::BONN_BRANDING, NULL))
+      ->replace(['title' => '[node:title]'], $this->node(), 'de', $metadata);
+
+    $this->assertSame([], $replacements);
+    $this->assertSame([], $metadata->getCacheTags());
   }
 
   /**
@@ -130,6 +148,9 @@ final class StaffLinkTokensTest extends UnitTestCase {
     $config->method('getCacheMaxAge')->willReturn(-1);
     $open311 = $this->createMock(ImmutableConfig::class);
     $open311->method('get')->willReturn('jur');
+    $open311->method('getCacheTags')->willReturn(['config:markaspot_open311.settings']);
+    $open311->method('getCacheContexts')->willReturn([]);
+    $open311->method('getCacheMaxAge')->willReturn(-1);
     $configFactory = $this->createMock(ConfigFactoryInterface::class);
     $configFactory->method('get')->willReturnMap([
       ['markaspot_mail.settings', $config],
