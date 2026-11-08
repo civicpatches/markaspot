@@ -34,7 +34,7 @@ final class DeprecatedStatsAliasSubscriber implements EventSubscriberInterface {
       return;
     }
     $request->attributes->set('_stats_alias_logged', TRUE);
-    $this->logger->notice('Deprecated statistics alias: use @route; this alias will be removed in the release after 11.9.247.', ['@route' => $replacement]);
+    $this->logger->notice('Deprecated statistics alias: use @route; this alias will be removed in the release after 11.9.249.', ['@route' => $replacement]);
   }
 
   /**
