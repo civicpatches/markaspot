@@ -1,5 +1,16 @@
 # Changelog
 
+## [11.9.248](https://github.com/markaspot/markaspot/compare/11.9.247...11.9.248) (2026-11-08)
+
+### Features
+
+* **mail:** let staff mail links open the Drupal backend instead of the dashboard ([cb590dd](https://github.com/markaspot/markaspot/commit/cb590dd8968263ade0629361280ec703000110e3))
+
+### Bug Fixes
+
+* **group:** notify the organisation derived from the category of a new report ([0580ca8](https://github.com/markaspot/markaspot/commit/0580ca81bb67d95660f62a9cddc8c399db9b45bc))
+* **service_request:** keep the site-language status note when the note field is not translatable ([6eae39d](https://github.com/markaspot/markaspot/commit/6eae39dccf6910aa13f887e4ccc7f0328f84aefc))
+
 ## [11.9.247](https://github.com/markaspot/markaspot/compare/11.9.246...11.9.247) (2026-11-07)
 
 ### Bug Fixes
