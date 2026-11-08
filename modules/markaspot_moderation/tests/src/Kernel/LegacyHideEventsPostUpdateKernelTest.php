@@ -53,42 +53,66 @@ final class LegacyHideEventsPostUpdateKernelTest extends KernelTestBase {
    * Exact legacy messages and stored translations convert; nothing else does.
    */
   public function testLegacyHideMessagesBecomeHoldEvents(): void {
+    $this->translate('Automatically hidden: flag threshold (@count) reached.', 'Nach @count Meldungen automatisch ausgeblendet.');
+    $this->translate('Hidden by moderator due to content flags.', 'Wegen Meldungen vom Moderator ausgeblendet.');
+
+    $expected = [];
+    foreach ([
+      ['Hidden by moderator due to content flags.', 'moderation_hidden'],
+      ['Automatically hidden: flag threshold (5) reached.', 'moderation_auto_hidden'],
+      ['Nach 12 Meldungen automatisch ausgeblendet.', 'moderation_auto_hidden'],
+      ['Wegen Meldungen vom Moderator ausgeblendet.', 'moderation_hidden'],
+    ] as [$message, $event]) {
+      $expected[$this->report($message)] = [$event, $message];
+    }
+    $untouched = [];
+    foreach ([
+      'Hidden by moderator due to content flags. Reviewed again later.',
+      'Automatically hidden: flag threshold raised to 10.',
+      'Automatically hidden: flag threshold (many) reached.',
+      'Nach Prüfung automatisch ausgeblendet.',
+      'Edited by staff.',
+    ] as $log) {
+      $untouched[$this->report($log)] = $log;
+    }
+    $ids = array_merge(array_keys($expected), array_keys($untouched));
+
+    $hold = $this->container->get(PublicationHold::class);
+    $this->assertSame([], $hold->heldIds($ids), 'Prose alone must not hold before the conversion.');
+
+    // A small batch size proves the vid cursor across several batches.
+    $this->assertStringContainsString('Converted 4 ', $this->runPostUpdate(2));
+
+    $this->assertEqualsCanonicalizing(array_keys($expected), $hold->heldIds($ids));
+    foreach ($expected as $nid => [$event, $message]) {
+      $decoded = RevisionLog::decode($this->log($nid));
+      $this->assertSame([$event], $decoded['events'], $message);
+      $this->assertSame($message, $decoded['message']);
+    }
+    foreach ($untouched as $nid => $log) {
+      $this->assertSame($log, $this->log($nid));
+    }
+
+    // A second run finds nothing left to convert.
+    $this->assertStringContainsString('Converted 0 ', $this->runPostUpdate());
+  }
+
+  /**
+   * Stores a German interface translation for a legacy source string.
+   */
+  private function translate(string $source, string $translation): void {
     $database = $this->container->get('database');
     $lid = (int) $database->insert('locales_source')->fields([
-      'source' => 'Automatically hidden: flag threshold (@count) reached.',
+      'source' => $source,
       'context' => '',
       'version' => 'none',
     ])->execute();
     $database->insert('locales_target')->fields([
       'lid' => $lid,
       'language' => 'de',
-      'translation' => 'Automatisch ausgeblendet: Schwelle (@count) erreicht.',
+      'translation' => $translation,
       'customized' => 1,
     ])->execute();
-
-    $manual = $this->report('Hidden by moderator due to content flags.');
-    $automatic = $this->report('Automatically hidden: flag threshold (5) reached.');
-    $translated = $this->report('Automatisch ausgeblendet: Schwelle (4) erreicht.');
-    $similar = $this->report('Hidden by moderator due to content flags. Reviewed again later.');
-    $unrelated = $this->report('Edited by staff.');
-    $ids = [$manual, $automatic, $translated, $similar, $unrelated];
-
-    $hold = $this->container->get(PublicationHold::class);
-    $this->assertSame([], $hold->heldIds($ids), 'Prose alone must not hold before the conversion.');
-
-    $this->assertStringContainsString('Converted 3 ', $this->runPostUpdate());
-
-    $this->assertEqualsCanonicalizing([$manual, $automatic, $translated], $hold->heldIds($ids));
-    $decoded = RevisionLog::decode($this->log($automatic));
-    $this->assertSame(['moderation_auto_hidden'], $decoded['events']);
-    $this->assertSame('Automatically hidden: flag threshold (5) reached.', $decoded['message']);
-    $this->assertSame(['moderation_hidden'], RevisionLog::decode($this->log($manual))['events']);
-    $this->assertSame(['moderation_auto_hidden'], RevisionLog::decode($this->log($translated))['events']);
-    $this->assertSame('Hidden by moderator due to content flags. Reviewed again later.', $this->log($similar));
-    $this->assertSame('Edited by staff.', $this->log($unrelated));
-
-    // A second run finds nothing left to convert.
-    $this->assertStringContainsString('Converted 0 ', $this->runPostUpdate());
   }
 
   /**
@@ -120,8 +144,8 @@ final class LegacyHideEventsPostUpdateKernelTest extends KernelTestBase {
   /**
    * Runs the post update to completion and returns its final message.
    */
-  private function runPostUpdate(): string {
-    $sandbox = [];
+  private function runPostUpdate(int $limit = 200): string {
+    $sandbox = ['limit' => $limit];
     do {
       $message = markaspot_moderation_post_update_legacy_hide_events($sandbox);
     } while (($sandbox['#finished'] ?? 1) < 1);
