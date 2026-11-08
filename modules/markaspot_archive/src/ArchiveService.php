@@ -68,6 +68,11 @@ class ArchiveService implements ArchiveServiceInterface {
   public const UNPUBLISH_BACKLOG_FAILED_STATE = 'markaspot_archive.unpublish_backlog_failed';
 
   /**
+   * Attempts of a transaction that runs into a database lock conflict.
+   */
+  public const LOCK_CONFLICT_ATTEMPTS = 3;
+
+  /**
    * Key-value collection in which search_api_db keeps the indexes it holds.
    *
    * Search API's database backend stores the tables of each index there and
@@ -409,6 +414,16 @@ class ArchiveService implements ArchiveServiceInterface {
    * {@inheritdoc}
    */
   public function archiveRequest(int $nid): string {
+    return $this->retryOnLockConflict($nid, fn (): string => $this->archiveRequestOnce($nid));
+  }
+
+  /**
+   * Archives one queued request in one transaction; see ::archiveRequest().
+   *
+   * @return string
+   *   One of the ARCHIVE_* constants.
+   */
+  protected function archiveRequestOnce(int $nid): string {
     $config = $this->configFactory->get('markaspot_archive.settings');
     $archived_status = (string) $config->get('status_archived');
     $archivable = array_map('strval', array_keys((array) $config->get('status_archivable')));
@@ -1388,6 +1403,15 @@ class ArchiveService implements ArchiveServiceInterface {
    *   TRUE when the request was changed.
    */
   protected function changeArchivedRequest(int $nid, string $archived_status, bool $published, callable $change): bool {
+    return $this->retryOnLockConflict($nid, fn (): bool => $this->changeArchivedRequestOnce($nid, $archived_status, $published, $change));
+  }
+
+  /**
+   * Changes one archived request in one transaction.
+   *
+   * See ::changeArchivedRequest() for the parameters and the return value.
+   */
+  protected function changeArchivedRequestOnce(int $nid, string $archived_status, bool $published, callable $change): bool {
     $transaction = $this->database->startTransaction();
     try {
       return $this->withoutEca(function () use ($nid, $archived_status, $published, $change): bool {
@@ -1410,12 +1434,98 @@ class ArchiveService implements ArchiveServiceInterface {
     }
     catch (\Throwable $e) {
       $transaction->rollBack();
+      // The caches may hold the rolled back change.
+      $this->entityTypeManager->getStorage('node')->resetCache([$nid]);
       throw $e;
     }
     finally {
       // Commits, or ends the rolled back transaction.
       unset($transaction);
     }
+  }
+
+  /**
+   * Runs a transaction again after a deadlock or a lock wait timeout.
+   *
+   * Archiving locks the node row before its paragraphs are saved, while an
+   * ordinary save of a paragraph host locks the paragraph first. Two such
+   * transactions can deadlock; the database then rolls one of them back.
+   * The lock order is not changed (see the module README). Instead, the
+   * whole transaction runs again, up to LOCK_CONFLICT_ATTEMPTS times with a
+   * short backoff: each attempt starts its own transaction, reloads the
+   * request and is rolled back completely before the next one. Lock
+   * conflicts are MySQL errors 1213 (deadlock) and 1205 (lock wait timeout)
+   * and SQLSTATE 40001. Inside an outer transaction nothing is retried: a
+   * deadlock rolls back the outer transaction as well, so only its owner can
+   * retry. After the last attempt the error is rethrown and the caller's
+   * failure handling applies: the request stays a candidate of the
+   * catch-up, the queue item is retried on a later run.
+   *
+   * @param int $nid
+   *   The node ID, for the log.
+   * @param callable(): T $attempt
+   *   Runs the whole transaction once.
+   *
+   * @return T
+   *   The result of the successful attempt.
+   *
+   * @template T
+   */
+  protected function retryOnLockConflict(int $nid, callable $attempt): mixed {
+    $retry = !$this->database->inTransaction();
+    $try = 1;
+    while (TRUE) {
+      try {
+        return $attempt();
+      }
+      catch (\Throwable $e) {
+        if (!$retry || $try >= self::LOCK_CONFLICT_ATTEMPTS || !static::isLockConflict($e)) {
+          throw $e;
+        }
+        $this->logger->warning(
+          'Node ID @nid hit a database lock conflict (attempt @attempt of @max) and is tried again: @error',
+          [
+            '@nid' => $nid,
+            '@attempt' => $try,
+            '@max' => self::LOCK_CONFLICT_ATTEMPTS,
+            '@error' => $e->getMessage(),
+          ]
+        );
+        $this->lockConflictBackoff($try);
+        $try++;
+      }
+    }
+  }
+
+  /**
+   * Returns TRUE for a deadlock or a lock wait timeout of the database.
+   *
+   * Drupal wraps the PDOException of the driver (DatabaseExceptionWrapper)
+   * and entity saves wrap that again (EntityStorageException), so the whole
+   * chain is searched.
+   */
+  protected static function isLockConflict(\Throwable $exception): bool {
+    for ($error = $exception; $error !== NULL; $error = $error->getPrevious()) {
+      if (!$error instanceof \PDOException) {
+        continue;
+      }
+      $info = is_array($error->errorInfo) ? $error->errorInfo : [];
+      $sqlstate = (string) ($info[0] ?? $error->getCode());
+      if ($sqlstate === '40001' || in_array((int) ($info[1] ?? 0), [1205, 1213], TRUE)) {
+        return TRUE;
+      }
+    }
+    return FALSE;
+  }
+
+  /**
+   * Waits a moment before the next attempt after a lock conflict.
+   *
+   * @param int $attempt
+   *   The attempt that failed, from 1.
+   */
+  protected function lockConflictBackoff(int $attempt): void {
+    usleep(100000 * $attempt + random_int(0, 50000));
   }
 
   /**

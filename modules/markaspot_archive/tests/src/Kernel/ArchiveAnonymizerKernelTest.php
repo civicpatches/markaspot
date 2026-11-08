@@ -7,7 +7,10 @@ namespace Drupal\Tests\markaspot_archive\Kernel;
 use Drupal\service_request\RevisionLog;
 use Consolidation\AnnotatedCommand\CommandResult;
 use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+use Drupal\Core\Database\Database;
 use Drupal\Core\Database\DatabaseExceptionWrapper;
+use Drupal\Core\Database\Transaction;
+use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannel;
@@ -93,6 +96,31 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   private bool $lockLost = FALSE;
 
   /**
+   * Node whose saves fail with a database error, if any.
+   */
+  private ?int $databaseErrorNid = NULL;
+
+  /**
+   * Database error the chosen node's saves fail with.
+   */
+  private ?\Throwable $databaseError = NULL;
+
+  /**
+   * Saves of the chosen node that still fail.
+   */
+  private int $databaseErrorsLeft = 0;
+
+  /**
+   * Saves of the chosen node that failed.
+   */
+  private int $databaseErrorsThrown = 0;
+
+  /**
+   * Transaction of a second connection holding a row lock, if any.
+   */
+  private ?Transaction $heldLock = NULL;
+
+  /**
    * Category term id.
    */
   private int $categoryTid;
@@ -107,6 +135,11 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
    * Text that replaces the free-text message of an anonymized report's logs.
    */
   private const PLACEHOLDER = 'Message removed when the report was anonymized.';
+
+  /**
+   * Warning logged before a transaction is retried after a lock conflict.
+   */
+  private const LOCK_CONFLICT_RETRY = 'Node ID @nid hit a database lock conflict (attempt @attempt of @max) and is tried again: @error';
 
   /**
    * Critical message when archive queue retries are exhausted.
@@ -1727,6 +1760,144 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * Archiving retries a transaction a deadlock rolled back.
+   */
+  public function testArchiveRequestRetriesDeadlock(): void {
+    $node = $this->createQueueRequest();
+    $nid = (int) $node->id();
+    $revisions = $this->nodeRevisionIds($nid);
+    $service = $this->retryingArchiveService();
+    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 1);
+
+    self::assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
+
+    self::assertSame(1, $this->databaseErrorsThrown);
+    self::assertSame([1], $service->backoffs);
+    $archived = $this->reloadNode($nid);
+    self::assertSame($this->archivedStatusId(), (string) $archived->get('field_status')->target_id);
+    self::assertStringEndsWith('@anonymized.off', (string) $archived->get('field_e_mail')->value);
+    // The failed attempt left nothing behind: one combined revision.
+    self::assertCount(count($revisions) + 1, $this->nodeRevisionIds($nid));
+    foreach ($this->nodeRevisionIds($nid) as $vid) {
+      self::assertNotSame('citizen@example.org', $this->revisionFieldValue($vid, 'field_e_mail'));
+    }
+    self::assertTrue($this->loggerHasRecord(LogLevel::WARNING, self::LOCK_CONFLICT_RETRY));
+  }
+
+  /**
+   * Archiving gives up after three deadlocks; the queue retries the item.
+   */
+  public function testArchiveRequestGivesUpAfterThreeDeadlocks(): void {
+    $node = $this->createQueueRequest();
+    $nid = (int) $node->id();
+    $revisions = $this->nodeRevisionIds($nid);
+    $service = $this->retryingArchiveService();
+    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), PHP_INT_MAX);
+
+    try {
+      $service->archiveRequest($nid);
+      self::fail('The third deadlock is rethrown.');
+    }
+    catch (EntityStorageException $e) {
+      self::assertInstanceOf(DatabaseExceptionWrapper::class, $e->getPrevious());
+    }
+    self::assertSame(3, $this->databaseErrorsThrown);
+    self::assertSame([1, 2], $service->backoffs);
+    $this->assertRequestUntouched($nid, $revisions);
+
+    // The queue worker requeues the item for a later run.
+    $this->databaseErrorsThrown = 0;
+    $queue = $this->createMock(QueueInterface::class);
+    $queue->expects(self::once())->method('createItem')->with(['nid' => $nid, 'attempts' => 2]);
+    $this->archiveQueueWorker($service, $queue)->processItem(['nid' => $nid, 'attempts' => 1]);
+    self::assertSame(3, $this->databaseErrorsThrown);
+    $this->assertRequestUntouched($nid, $revisions);
+
+    // Other database errors are not retried.
+    $this->failSavesWith($nid, $this->databaseError('42S02', 1146, "Table 'node__field_x' doesn't exist"), PHP_INT_MAX);
+    try {
+      $service->archiveRequest($nid);
+      self::fail('The database error is rethrown.');
+    }
+    catch (EntityStorageException) {
+    }
+    self::assertSame(1, $this->databaseErrorsThrown);
+
+    // Inside an outer transaction a deadlock rolled back that one as well:
+    // only its owner can retry.
+    $this->failSavesWith($nid, $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), 1);
+    $outer = $this->container->get('database')->startTransaction();
+    try {
+      $service->archiveRequest($nid);
+      self::fail('A nested deadlock is rethrown.');
+    }
+    catch (EntityStorageException) {
+      $outer->rollBack();
+    }
+    unset($outer);
+    self::assertSame(1, $this->databaseErrorsThrown);
+    $this->assertRequestUntouched($nid, $revisions);
+  }
+
+  /**
+   * The catch-up retries a deadlock and leaves the request a candidate.
+   */
+  public function testCatchUpRetriesDeadlock(): void {
+    $nids = $this->createArchivedBacklog(2);
+    $service = $this->retryingArchiveService();
+    $this->failSavesWith($nids[0], $this->databaseError('HY000', 1205, 'Lock wait timeout exceeded; try restarting transaction'), 1);
+
+    self::assertSame(['processed' => 2, 'changed' => 2, 'failed' => 0], $service->backfillArchived(10, 20));
+    self::assertSame([1], $service->backoffs);
+    self::assertStringEndsWith('@anonymized.off', $this->reloadNode($nids[0])->get('field_e_mail')->value);
+
+    // Every attempt fails: the request is counted as failed and stays a
+    // candidate for the next run.
+    $nids = $this->createArchivedBacklog(1);
+    $this->failSavesWith($nids[0], $this->databaseError('40001', 1213, 'Deadlock found when trying to get lock'), PHP_INT_MAX);
+    $service = $this->retryingArchiveService();
+    self::assertSame(['processed' => 1, 'changed' => 0, 'failed' => 1], $service->backfillArchived(10, 20));
+    self::assertSame(3, $this->databaseErrorsThrown);
+    self::assertSame('plain0@example.org', $this->reloadNode($nids[0])->get('field_e_mail')->value);
+    self::assertSame(1, $service->countBackfillCandidates());
+  }
+
+  /**
+   * A real lock wait timeout on the request row is retried.
+   *
+   * A second connection holds the row lock; the first attempt runs into the
+   * lock wait timeout, the lock is released during the backoff and the next
+   * attempt archives the request.
+   */
+  public function testArchiveRequestRetriesRealLockWaitTimeout(): void {
+    $database = $this->container->get('database');
+    if ($database->databaseType() !== 'mysql') {
+      self::markTestSkipped('Needs InnoDB row locks.');
+    }
+    $node = $this->createQueueRequest();
+    $nid = (int) $node->id();
+    Database::addConnectionInfo('archive_other', 'default', Database::getConnectionInfo('default')['default']);
+    try {
+      $other = Database::getConnection('default', 'archive_other');
+      $this->heldLock = $other->startTransaction();
+      $other->select('node', 'n')->fields('n', ['nid'])->condition('n.nid', $nid)->forUpdate()->execute()->fetchField();
+      $database->query('SET SESSION innodb_lock_wait_timeout = 1');
+      $service = $this->retryingArchiveService(function (): void {
+        // Commits the other connection's transaction.
+        $this->heldLock = NULL;
+      });
+
+      self::assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
+      self::assertSame([1], $service->backoffs);
+      self::assertSame($this->archivedStatusId(), (string) $this->reloadNode($nid)->get('field_status')->target_id);
+    }
+    finally {
+      $this->heldLock = NULL;
+      Database::removeConnection('archive_other');
+    }
+  }
+
+  /**
    * Marks the catch-up lock as lost when the chosen node is saved.
    */
   #[Hook('node_update')]
@@ -1734,6 +1905,83 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     if ($this->lockLostOnSaveOf !== NULL && (int) $node->id() === $this->lockLostOnSaveOf) {
       $this->lockLost = TRUE;
     }
+  }
+
+  /**
+   * Fails the saves of the chosen node with the chosen database error.
+   */
+  #[Hook('node_presave')]
+  public function failChosenSaveWithDatabaseError(NodeInterface $node): void {
+    if (
+      $this->databaseErrorNid !== NULL
+      && $this->databaseError !== NULL
+      && (int) $node->id() === $this->databaseErrorNid
+      && $this->databaseErrorsLeft > 0
+    ) {
+      $this->databaseErrorsLeft--;
+      $this->databaseErrorsThrown++;
+      throw $this->databaseError;
+    }
+  }
+
+  /**
+   * Makes the next saves of a node fail with a database error.
+   */
+  private function failSavesWith(int $nid, \Throwable $error, int $count): void {
+    $this->databaseErrorNid = $nid;
+    $this->databaseError = $error;
+    $this->databaseErrorsLeft = $count;
+    $this->databaseErrorsThrown = 0;
+  }
+
+  /**
+   * Builds a database error the way the MySQL driver wraps it.
+   */
+  private function databaseError(string $sqlstate, int $code, string $message): DatabaseExceptionWrapper {
+    $pdo = new \PDOException(sprintf('SQLSTATE[%s]: General error: %d %s', $sqlstate, $code, $message));
+    $pdo->errorInfo = [$sqlstate, $code, $message];
+    return new DatabaseExceptionWrapper($pdo->getMessage(), 0, $pdo);
+  }
+
+  /**
+   * Returns an archive service that records its lock conflict backoffs.
+   */
+  private function retryingArchiveService(?\Closure $on_backoff = NULL): ArchiveService {
+    return new class(
+      $on_backoff,
+      $this->container->get('entity_type.manager'),
+      $this->container->get('config.factory'),
+      $this->container->get('state'),
+      $this->testLogger(),
+      $this->container->get('database'),
+      $this->container->get('module_handler'),
+    ) extends ArchiveService {
+
+      /**
+       * Attempts after which the service backed off.
+       *
+       * @var int[]
+       */
+      public array $backoffs = [];
+
+      public function __construct(
+        private readonly ?\Closure $onBackoff,
+        mixed ...$arguments,
+      ) {
+        parent::__construct(...$arguments);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      protected function lockConflictBackoff(int $attempt): void {
+        $this->backoffs[] = $attempt;
+        if ($this->onBackoff !== NULL) {
+          ($this->onBackoff)();
+        }
+      }
+
+    };
   }
 
   /**
