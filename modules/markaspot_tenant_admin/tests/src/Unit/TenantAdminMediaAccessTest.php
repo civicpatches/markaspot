@@ -20,6 +20,8 @@ use Drupal\Tests\UnitTestCase;
 use Drupal\user\UserInterface;
 use Psr\Log\LoggerInterface;
 
+require_once dirname(__DIR__, 4) . '/markaspot_group/src/Service/TenantAdminHelper.php';
+
 /**
  * Tests request_image media access scoping for tenant staff.
  *

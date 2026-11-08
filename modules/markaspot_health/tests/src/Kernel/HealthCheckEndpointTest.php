@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_health\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\Core\Extension\ProfileExtensionList;
 use Drupal\markaspot_health\Controller\HealthCheckController;
 use Drupal\markaspot_health\HealthCheckPluginManager;
 use Drupal\markaspot_health\HealthCheckResult;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+
+require_once dirname(__DIR__, 3) . '/src/Controller/HealthCheckController.php';
 
 /**
  * Tests the /api/admin/health-check endpoint wiring.
@@ -77,7 +80,9 @@ class HealthCheckEndpointTest extends KernelTestBase {
       ->getMock();
     $manager->method('runAll')->willReturn([$resultPassed, $resultFailed]);
 
-    $controller = new HealthCheckController($manager);
+    $profiles = $this->createMock(ProfileExtensionList::class);
+    $profiles->method('getExtensionInfo')->with('markaspot')->willReturn(['version' => '11.9.999']);
+    $controller = new HealthCheckController($manager, $profiles);
     // Intentionally no jurisdiction query: this test only asserts the
     // documented JSON shape. Jurisdiction-resolution requires the group
     // module which is not installed in this kernel test.
@@ -90,6 +95,7 @@ class HealthCheckEndpointTest extends KernelTestBase {
     $this->assertArrayHasKey('checks', $payload);
     $this->assertArrayHasKey('summary', $payload);
     $this->assertArrayHasKey('checked_at', $payload);
+    $this->assertSame('11.9.999', $payload['profile_version']);
     $this->assertCount(2, $payload['checks']);
     $this->assertSame([
       'errors' => 1,

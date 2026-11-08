@@ -30,12 +30,14 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\markaspot\Access\SystemWriteContext;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
-use Drupal\markaspot_tenant_admin\TenantAdminHelper;
+use Drupal\markaspot_group\Service\TenantAdminHelper;
 use Drupal\taxonomy\TermInterface;
 use Drupal\Tests\UnitTestCase;
 use Drupal\user\UserInterface;
 
 require_once dirname(__DIR__, 5) . '/src/Access/SystemWriteContext.php';
+
+require_once dirname(__DIR__, 4) . '/markaspot_group/src/Service/TenantAdminHelper.php';
 
 /**
  * Tests taxonomy term access query alter for tenant admins.
@@ -57,7 +59,7 @@ class TenantAdminTaxonomyAccessTest extends UnitTestCase {
     parent::setUp();
     require_once __DIR__ . '/../../../markaspot_tenant_admin.module';
     // Reset drupal_static cache to prevent test ordering dependencies.
-    // TenantAdminHelper::getUserJurisdictionIds() uses drupal_static().
+    // Membership and publish-capability helpers use drupal_static().
     drupal_static_reset();
   }
 

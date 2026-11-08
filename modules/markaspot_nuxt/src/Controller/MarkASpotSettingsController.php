@@ -1,8 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Drupal\markaspot_nuxt\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Extension\ProfileExtensionList;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Site\Settings;
 use Drupal\Core\StreamWrapper\PublicStream;
@@ -122,6 +125,8 @@ class MarkASpotSettingsController extends ControllerBase {
    *   The language manager.
    * @param \Drupal\markaspot_nuxt\Image\LogoDimensionResolver $logo_dimension_resolver
    *   The logo dimension resolver.
+   * @param \Drupal\Core\Extension\ProfileExtensionList $profileExtensionList
+   *   The profile extension list.
    */
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
@@ -134,6 +139,7 @@ class MarkASpotSettingsController extends ControllerBase {
     StatusTermScope $status_term_scope,
     LanguageManagerInterface $language_manager,
     LogoDimensionResolver $logo_dimension_resolver,
+    protected ProfileExtensionList $profileExtensionList,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->configFactory = $config_factory;
@@ -162,6 +168,7 @@ class MarkASpotSettingsController extends ControllerBase {
       $container->get('markaspot_group.status_term_scope'),
       $container->get('language_manager'),
       $container->get('markaspot_nuxt.logo_dimension_resolver'),
+      $container->get('extension.list.profile'),
     );
   }
 
@@ -198,7 +205,8 @@ class MarkASpotSettingsController extends ControllerBase {
     // Load the 'markaspot_nuxt.settings' configuration.
     $nuxt_config = $this->configFactory->get('markaspot_nuxt.settings');
     // Add config cache tag. 'config:core.extension' invalidates when modules
-    // are installed/uninstalled (ensures feature flags update immediately).
+    // are installed/uninstalled. Code-only profile updates refresh extension
+    // metadata and this response through Drupal's deployment cache rebuild.
     $cache_metadata->addCacheTags([
       'config:markaspot_nuxt.settings',
       'config:markaspot_sso.settings',
@@ -224,6 +232,7 @@ class MarkASpotSettingsController extends ControllerBase {
     // intentionally excluded. API keys must stay server-side (Nuxt ENV).
     // See: markaspot/markaspot-ui#133.
     $settings = [
+      'profile_version' => $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev',
       // Map configuration - styles only, no keys.
       'mapbox_style' => $nuxt_config->get('mapbox_style'),
       'mapbox_style_dark' => $nuxt_config->get('mapbox_style_dark'),

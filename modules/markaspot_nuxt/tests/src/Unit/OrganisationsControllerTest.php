@@ -14,6 +14,7 @@ use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Extension\ProfileExtensionList;
 use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -240,6 +241,7 @@ class OrganisationsControllerTest extends UnitTestCase {
       $this->createMock(StatusTermScope::class),
       $this->languageManager,
       $this->createMock(LogoDimensionResolver::class),
+      $this->createMock(ProfileExtensionList::class),
     );
   }
 

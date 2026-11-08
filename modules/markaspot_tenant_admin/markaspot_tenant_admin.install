@@ -11,7 +11,7 @@ use Drupal\user\UserInterface;
 use Drupal\user\Entity\Role;
 use Drupal\group\Entity\GroupMembership;
 use Drupal\group\Entity\GroupRelationshipInterface;
-use Drupal\markaspot_tenant_admin\TenantAdminHelper;
+use Drupal\markaspot_group\Service\TenantAdminHelper;
 use Drupal\user\Entity\User;
 
 /**
@@ -173,7 +173,7 @@ function markaspot_tenant_admin_install(): void {
 /**
  * Grant field_sentiment view permissions to tenant_admin.
  *
- * field_sentiment uses field_permissions with permission_type: custom,
+ * The field uses field_permissions with permission_type: custom,
  * generating discrete "view field_sentiment" / "view own field_sentiment"
  * permissions. Without these, JSON:API omits the sentiment value from the
  * node--service_request collection response even when the user holds the
