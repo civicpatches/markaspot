@@ -127,6 +127,18 @@ function markaspot_archive_node_presave(NodeInterface $node) {
 }
 
 /**
+ * Implements hook_ENTITY_TYPE_insert() for node entities.
+ *
+ * A request created in the archived status, for example by an import or an
+ * Open311 client, is anonymized in presave; derived data and revision logs
+ * are cleaned once it is stored.
+ */
+function markaspot_archive_node_insert(NodeInterface $node) {
+  \Drupal::service('markaspot_archive.archive')
+    ->finishArchiveTransition($node);
+}
+
+/**
  * Implements hook_ENTITY_TYPE_update() for node entities.
  */
 function markaspot_archive_node_update(NodeInterface $node) {

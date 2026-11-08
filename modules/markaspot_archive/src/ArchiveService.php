@@ -448,9 +448,10 @@ class ArchiveService implements ArchiveServiceInterface {
     if ($anonymized_values === []) {
       return [];
     }
-    if (!$node->isNew()) {
-      $this->pendingRevisionValues[$node] = $anonymized_values;
-    }
+    // Completed after the save: a request created in the archived status
+    // gets its derived data, such as the original text PII redaction keeps,
+    // only during the save, and its revision log is stored then.
+    $this->pendingRevisionValues[$node] = $anonymized_values;
     $this->logger->notice(
       'Node ID @nid anonymized on transition to the archived status: @fields',
       [

@@ -82,7 +82,11 @@ interface ArchiveServiceInterface {
   public function anonymizeOnArchiveTransition(NodeInterface $node): array;
 
   /**
-   * Anonymizes previous revisions after an archive transition was saved.
+   * Completes an archive transition once the node is stored.
+   *
+   * Called from the insert and update hooks: anonymizes previous revisions,
+   * scrubs revision logs and lets modules erase derived data
+   * (::anonymizeRevisions()), for new and existing nodes alike.
    *
    * @param \Drupal\node\NodeInterface $node
    *   The saved node.

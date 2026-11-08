@@ -187,6 +187,37 @@ final class RetainedPiiArchiveKernelTest extends KernelTestBase {
   }
 
   /**
+   * A report created in the archived status keeps no original either.
+   *
+   * Imports and Open311 clients can create a report that is archived from
+   * the start; PII redaction retains the original during that very save.
+   */
+  public function testInsertAsArchivedErasesRetainedOriginal(): void {
+    $node = Node::create([
+      'type' => 'service_request',
+      'title' => 'Pothole',
+      'body' => [
+        'value' => 'Deep pothole outside number 4. Call me at ' . self::PHONE . ' or write to ' . self::EMAIL . '.',
+        'format' => 'plain_text',
+      ],
+      'field_e_mail' => self::EMAIL,
+      'field_status' => $this->status['archived'],
+      'field_jurisdiction' => $this->jurisdiction->id(),
+    ]);
+    $node->setRevisionLogMessage('Taken over the phone, call back at ' . self::PHONE . '.');
+    $node->save();
+
+    $original = $this->retainedOriginal($node);
+    $this->assertNotNull($original, 'Redaction retained the original as an internal remark.');
+    $this->assertRemarkErased((int) $original->id());
+    $stored = Node::load($node->id());
+    $this->assertFalse($stored->isPublished());
+    $this->assertStringEndsWith('@anonymized.off', (string) $stored->get('field_e_mail')->value);
+    $this->assertSame('Taken over the phone, call back at [REDACTED phone].', $stored->getRevisionLogMessage());
+    $this->assertSame(0, \Drupal::service('markaspot_archive.archive')->countBackfillCandidates());
+  }
+
+  /**
    * The backfill erases an original of a report anonymized before.
    *
    * The contact fields were anonymized before originals were erased, so only
