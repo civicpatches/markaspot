@@ -16,6 +16,8 @@ use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\StringTranslation\TranslatableMarkup;
+use Drupal\Core\StringTranslation\TranslationInterface;
 use Drupal\Component\Utility\EmailValidatorInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRelationshipInterface;
@@ -659,6 +661,93 @@ class GroupSyncMultiOrgTest extends UnitTestCase {
   }
 
   /**
+   * Tests the English fallback keeps its plain text output byte for byte.
+   *
+   * The lines go through placeholders, which escape HTML. A plain text mail
+   * must still show the organisation name as written.
+   */
+  public function testOrganisationFallbackKeepsPlainEnglishText(): void {
+    $node = $this->serviceRequestNode();
+    $group = $this->organisationGroup(label: 'Parks & "Green" <Spaces>');
+    $relationship = $this->relationship($node, $group);
+    $sent = [];
+    $mailManager = $this->createMock(MailManagerInterface::class);
+    $mailManager->expects($this->once())
+      ->method('mail')
+      ->willReturnCallback(static function (string $module, string $key, string $to, string $langcode, array $params) use (&$sent): array {
+        $sent = $params;
+        return ['result' => TRUE];
+      });
+    $this->installNotificationContainer($mailManager);
+
+    _markaspot_group_notify_service_request_org_relationship($relationship, TRUE);
+
+    // The sanitizer strips tag-like text from labels; entities never appear.
+    $this->assertSame('Request #REQ-1 assigned to Parks & "Green" ', $sent['subject']);
+    $this->assertSame(implode("\n", [
+      'Hello,',
+      '',
+      'A citizen request has been assigned to your organisation.',
+      '',
+      'Request: #REQ-1',
+      'Category: Radbuegel',
+      'Location: Teststrasse 1, 12345 Teststadt, NRW, DE',
+      'Organisation: Parks & "Green" ',
+      'Description: A short body',
+      '',
+      'This is an automatically generated email and cannot be replied to.',
+    ]), $sent['message']);
+  }
+
+  /**
+   * Tests the fallback lines are translated in the mail language.
+   */
+  public function testOrganisationFallbackIsTranslatedInMailLanguage(): void {
+    $node = $this->serviceRequestNode(
+      jurisdictionId: 18,
+      jurisdictionGroup: $this->jurisdictionGroup(id: 18, defaultLangcode: 'de'),
+    );
+    $group = $this->organisationGroup(jurisdictionId: 18, label: 'Grünflächen & Parks');
+    $relationship = $this->relationship($node, $group);
+    $german = [
+      'Hello,' => 'Hallo,',
+      'Category: @category' => 'Kategorie: @category',
+      'Organisation: @organisation' => 'Organisation: @organisation',
+      'Request #@request_id assigned to @organisation' => 'Meldung #@request_id an @organisation zugewiesen',
+    ];
+    $langcodes = [];
+    $translation = $this->createMock(TranslationInterface::class);
+    $translation->method('translateString')
+      ->willReturnCallback(static function (TranslatableMarkup $markup) use ($german, &$langcodes): string {
+        $langcode = $markup->getOption('langcode');
+        $langcodes[] = $langcode;
+        $source = $markup->getUntranslatedString();
+        return $langcode === 'de' ? ($german[$source] ?? $source) : $source;
+      });
+    $sent = [];
+    $mailManager = $this->createMock(MailManagerInterface::class);
+    $mailManager->expects($this->once())
+      ->method('mail')
+      ->with('markaspot_group', 'org_notification', 'org@example.test', 'de')
+      ->willReturnCallback(static function (string $module, string $key, string $to, string $langcode, array $params) use (&$sent): array {
+        $sent = $params;
+        return ['result' => TRUE];
+      });
+    $this->installNotificationContainer($mailManager, translation: $translation);
+
+    _markaspot_group_notify_service_request_org_relationship($relationship, TRUE);
+
+    $this->assertSame(['de'], array_values(array_unique($langcodes)));
+    $this->assertSame('Meldung #REQ-1 an Grünflächen & Parks zugewiesen', $sent['subject']);
+    $lines = explode("\n", $sent['message']);
+    $this->assertSame('Hallo,', $lines[0]);
+    $this->assertContains('Kategorie: Radbuegel', $lines);
+    $this->assertContains('Organisation: Grünflächen & Parks', $lines);
+    // Untranslated strings fall back to English, still as plain text.
+    $this->assertContains('Request: #REQ-1', $lines);
+  }
+
+  /**
    * Tests org notification langcode follows jurisdiction Nuxt config.
    */
   public function testOrgRelationshipUsesJurisdictionDefaultLanguage(): void {
@@ -1118,6 +1207,7 @@ class GroupSyncMultiOrgTest extends UnitTestCase {
     ?EntityTypeManagerInterface $entityTypeManager = NULL,
     ?AccountInterface $currentUser = NULL,
     ?bool $isGroupMember = NULL,
+    ?TranslationInterface $translation = NULL,
   ): void {
     $requestStack = new RequestStack();
     $requestStack->push(Request::create('https://dashboard.example.test'));
@@ -1160,6 +1250,7 @@ class GroupSyncMultiOrgTest extends UnitTestCase {
     $container->set('email.validator', $emailValidator);
     $container->set('markaspot_group.hierarchy_resolver', $hierarchyResolver);
     $container->set('language_manager', $languageManager);
+    $container->set('string_translation', $translation ?? $this->getStringTranslationStub());
     if ($currentUser !== NULL) {
       $container->set('current_user', $currentUser);
     }
@@ -1265,7 +1356,7 @@ class GroupSyncMultiOrgTest extends UnitTestCase {
   /**
    * Creates an organisation group mock with jurisdiction and mail fields.
    */
-  private function organisationGroup(int $id = 100, int $jurisdictionId = 1, string $email = 'org@example.test', ?bool $notifications = NULL): GroupInterface {
+  private function organisationGroup(int $id = 100, int $jurisdictionId = 1, string $email = 'org@example.test', ?bool $notifications = NULL, string $label = 'Organisation'): GroupInterface {
     $emailValues = $email === '' ? [] : [['value' => $email]];
     $fields = [
       'field_jurisdiction' => $this->field([['target_id' => $jurisdictionId]], ['target_id' => $jurisdictionId]),
@@ -1279,7 +1370,7 @@ class GroupSyncMultiOrgTest extends UnitTestCase {
     $group = $this->createMock(GroupInterface::class);
     $group->method('id')->willReturn($id);
     $group->method('bundle')->willReturn('org');
-    $group->method('label')->willReturn('Organisation');
+    $group->method('label')->willReturn($label);
     $group->method('hasField')
       ->willReturnCallback(static fn(string $fieldName): bool => array_key_exists($fieldName, $fields));
     $group->method('get')

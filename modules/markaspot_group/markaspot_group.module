@@ -19,6 +19,7 @@ use Drupal\service_request\Plugin\Action\OrganisationAwareEmailAction;
 use Drupal\Core\Action\Plugin\Action\EmailAction;
 use Drupal\service_request\OrganisationNotificationPolicy;
 use Drupal\Core\Cache\Cache;
+use Drupal\Component\Render\PlainTextOutput;
 use Drupal\Core\Url;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
@@ -6376,7 +6377,7 @@ function _markaspot_group_notify_organisation_group(NodeInterface $node, GroupIn
 
   /** @var \Drupal\Core\Mail\MailManagerInterface $mail_manager */
   $mail_manager = \Drupal::service('plugin.manager.mail');
-  $fallback_message = _markaspot_group_build_organisation_notification_fallback($node, $org_group);
+  $fallback_message = _markaspot_group_build_organisation_notification_fallback($node, $org_group, $langcode);
 
   foreach ($recipients as $email) {
     $result = $mail_manager->mail('markaspot_group', 'org_notification', $email, $langcode, [
@@ -6404,10 +6405,22 @@ function _markaspot_group_notify_organisation_group(NodeInterface $node, GroupIn
  * localized HTML. Keep the original Drupal mail actionable so render failures
  * still notify the organisation with enough context to process the request.
  *
+ * Every line goes through the translation layer in the mail language. The
+ * placeholders escape HTML, which a plain text mail must not carry, so each
+ * line is turned back into plain text: the English output stays exactly the
+ * same as before the strings became translatable.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The assigned service request.
+ * @param \Drupal\group\Entity\GroupInterface $org_group
+ *   The notified organisation.
+ * @param string|null $langcode
+ *   The mail language. NULL resolves it like the sender does.
+ *
  * @return array{subject: string, message: string}
  *   Fallback mail subject and body.
  */
-function _markaspot_group_build_organisation_notification_fallback(NodeInterface $node, GroupInterface $org_group): array {
+function _markaspot_group_build_organisation_notification_fallback(NodeInterface $node, GroupInterface $org_group, ?string $langcode = NULL): array {
   $context = _markaspot_group_build_assignment_notification_context($node);
   $request_id = $context['request_id'];
   $organisation = _markaspot_group_sanitize_for_email((string) $org_group->label());
@@ -6416,35 +6429,44 @@ function _markaspot_group_build_organisation_notification_fallback(NodeInterface
   $description = $context['description'];
 
   $edit_url = _markaspot_group_assignment_notification_edit_url($node);
+  $options = ['langcode' => $langcode ?? _markaspot_group_organisation_notification_langcode($node)];
+  $text = static fn (string $markup): string => PlainTextOutput::renderFromHtml($markup);
 
   $lines = [
-    'Hello,',
+    $text((string) t('Hello,', [], $options)),
     '',
-    'A citizen request has been assigned to your organisation.',
+    $text((string) t('A citizen request has been assigned to your organisation.', [], $options)),
     '',
-    'Request: #' . $request_id,
+    $text((string) t('Request: #@request_id', ['@request_id' => $request_id], $options)),
   ];
   if ($category !== '') {
-    $lines[] = 'Category: ' . $category;
+    $lines[] = $text((string) t('Category: @category', ['@category' => $category], $options));
   }
   if ($address !== '') {
-    $lines[] = 'Location: ' . $address;
+    $lines[] = $text((string) t('Location: @address', ['@address' => $address], $options));
   }
   if ($organisation !== '') {
-    $lines[] = 'Organisation: ' . $organisation;
+    $lines[] = $text((string) t('Organisation: @organisation', ['@organisation' => $organisation], $options));
   }
   if ($description !== '') {
-    $lines[] = 'Description: ' . $description;
+    $lines[] = $text((string) t('Description: @description', ['@description' => $description], $options));
   }
   if ($edit_url !== '') {
     $lines[] = '';
-    $lines[] = 'Open request: ' . $edit_url;
+    $lines[] = $text((string) t('Open request: @url', ['@url' => $edit_url], $options));
   }
   $lines[] = '';
-  $lines[] = 'This is an automatically generated email and cannot be replied to.';
+  $lines[] = $text((string) t('This is an automatically generated email and cannot be replied to.', [], $options));
+
+  $subject = $organisation !== ''
+    ? t('Request #@request_id assigned to @organisation', [
+      '@request_id' => $request_id,
+      '@organisation' => $organisation,
+    ], $options)
+    : t('Request #@request_id assigned to your organisation', ['@request_id' => $request_id], $options);
 
   return [
-    'subject' => 'Request #' . $request_id . ' assigned to ' . ($organisation !== '' ? $organisation : 'your organisation'),
+    'subject' => $text((string) $subject),
     'message' => implode("\n", $lines),
   ];
 }
