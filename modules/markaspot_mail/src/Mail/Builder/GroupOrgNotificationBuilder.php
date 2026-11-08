@@ -79,7 +79,7 @@ final class GroupOrgNotificationBuilder implements MailBuilderInterface {
     $category = $this->resolveCategoryLabel($node);
     $address = $this->resolveAddressText($node);
     $description = $this->resolveBodyText($node);
-    $requestUrl = $this->resolveRequestUrl($requestId, $branding);
+    $requestUrl = $this->resolveRequestUrl($requestId, $branding, $node);
 
     $defaultSubject = (string) $this->t('Request #@request_id assigned to @organisation', [
       '@request_id' => $requestId,
@@ -228,8 +228,13 @@ final class GroupOrgNotificationBuilder implements MailBuilderInterface {
    * Organisation members act on the report, so the link opens the edit
    * form. The dashboard (markaspot-ui edit page) sends members without
    * edit access on to the read-only view; ship that UI no later than this.
+   * Tenants whose staff work in the Drupal backend get its edit form.
    */
-  private function resolveRequestUrl(string $requestId, array $branding): string {
+  private function resolveRequestUrl(string $requestId, array $branding, NodeInterface $node): string {
+    $staffLinkBase = rtrim((string) ($branding['staff_link_base'] ?? ''), '/');
+    if ($staffLinkBase !== '' && $node->id()) {
+      return $staffLinkBase . '/node/' . (int) $node->id() . '/edit';
+    }
     $frontendBase = rtrim((string) ($branding['frontend_base_url'] ?? ''), '/');
     if ($frontendBase === '' || $requestId === '') {
       return '';

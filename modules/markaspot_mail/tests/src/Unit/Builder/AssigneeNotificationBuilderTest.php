@@ -177,6 +177,25 @@ final class AssigneeNotificationBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Tests tenants whose staff work in the backend get its request view.
+   */
+  public function testBuildLinksToTheBackendWhenConfigured(): void {
+    $branding = $this->createMock(MailBrandingService::class);
+    $branding->method('getBranding')->willReturn([
+      'frontend_base_url' => 'https://bonn-mobility.example',
+      'jurisdiction_slug' => 'bonn',
+      'frontend_uses_jurisdiction_path' => TRUE,
+      'staff_link_base' => 'https://management.bonn-mobility.example',
+    ]);
+    $message = $this->buildBuilder(branding: $branding)->build(
+      $this->buildContext(['node' => $this->buildNode()], 'de'),
+    );
+
+    $this->assertNotNull($message);
+    $this->assertSame('https://management.bonn-mobility.example/node/123', $message->content['cta_url']);
+  }
+
+  /**
    * Builds a mail context.
    */
   private function buildContext(array $params, string $langcode = 'en'): MailContext {

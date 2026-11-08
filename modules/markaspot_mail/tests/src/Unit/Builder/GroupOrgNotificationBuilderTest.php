@@ -223,6 +223,27 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Tests tenants whose staff work in the backend get its edit form.
+   */
+  public function testBuildLinksToTheBackendEditFormWhenConfigured(): void {
+    $branding = $this->createMock(MailBrandingService::class);
+    $branding->method('getBranding')->willReturn([
+      'frontend_base_url' => 'https://bonn-mobility.example',
+      'jurisdiction_slug' => 'bonn',
+      'frontend_uses_jurisdiction_path' => TRUE,
+      'staff_link_base' => 'https://management.bonn-mobility.example/',
+    ]);
+    $builder = $this->buildBuilder(branding: $branding);
+    $msg = $builder->build($this->buildContext([
+      'node' => $this->buildNode(),
+      'organisation' => $this->buildOrganisation(),
+    ], 'de'));
+
+    $this->assertNotNull($msg);
+    $this->assertSame('https://management.bonn-mobility.example/node/123/edit', $msg->content['cta_url']);
+  }
+
+  /**
    * Builds a MailContext with sensible test defaults.
    */
   private function buildContext(array $params, string $langcode = 'en'): MailContext {

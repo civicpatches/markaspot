@@ -39,6 +39,13 @@ markaspot_mail.settings:
         backend_base_url:
           type: string
           label: 'Public origin of this Drupal install for mail assets and generated URLs. When empty, already public URLs are preserved and internal URLs fall back to relative paths. Operators set this via settings.php from an environment variable.'
+    staff_links:
+      type: string
+      label: 'Where links in staff mails open: dashboard (markaspot-ui) or backend (Drupal edit form at platform.backend_base_url)'
+      constraints:
+        Choice:
+          - dashboard
+          - backend
     features:
       type: mapping
       label: 'Feature flags'

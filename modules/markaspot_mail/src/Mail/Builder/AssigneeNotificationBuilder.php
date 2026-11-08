@@ -65,7 +65,7 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
     $category = $this->resolveCategoryLabel($node);
     $address = $this->resolveAddressText($node);
     $description = $this->resolveBodyText($node);
-    $requestUrl = $this->resolveRequestUrl($requestId, $branding);
+    $requestUrl = $this->resolveRequestUrl($requestId, $branding, $node);
     $assignee = $ctx->params['assignee'] ?? NULL;
     $assigneeName = $assignee instanceof UserInterface
       ? trim($assignee->getDisplayName())
@@ -209,8 +209,14 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
 
   /**
    * Builds the dashboard URL from resolved mail branding.
+   *
+   * Tenants whose staff work in the Drupal backend get the backend view.
    */
-  private function resolveRequestUrl(string $requestId, array $branding): string {
+  private function resolveRequestUrl(string $requestId, array $branding, NodeInterface $node): string {
+    $staffLinkBase = rtrim((string) ($branding['staff_link_base'] ?? ''), '/');
+    if ($staffLinkBase !== '' && $node->id()) {
+      return $staffLinkBase . '/node/' . (int) $node->id();
+    }
     $frontendBase = rtrim((string) ($branding['frontend_base_url'] ?? ''), '/');
     if ($frontendBase === '' || $requestId === '') {
       return '';

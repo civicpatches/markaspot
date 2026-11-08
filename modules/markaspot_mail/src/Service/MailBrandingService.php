@@ -200,6 +200,8 @@ class MailBrandingService {
    *   - jurisdiction_label (string|null)
    *   - tenant_display_name (string|null)
    *   - platform_footer (array)
+   *   - staff_link_base (string|null, backend origin when staff links open
+   *     the Drupal backend instead of the dashboard)
    */
   public function getBranding(?int $jurisdictionId, string $mode, string $langcode): array {
     $mode = $mode === 'jurisdiction' ? 'jurisdiction' : 'platform';
@@ -256,6 +258,7 @@ class MailBrandingService {
       'tenant_display_name' => NULL,
       'platform_footer' => $showPlatformFooter ? $this->getPlatformFooter() : NULL,
       'show_platform_footer' => $showPlatformFooter,
+      'staff_link_base' => $this->resolveStaffLinkBase(),
     ];
 
     // In self-hosted single-jurisdiction installs the tenant is the platform.
@@ -674,6 +677,28 @@ class MailBrandingService {
    */
   private function resolveGeneratedFileUrl(string $url): ?string {
     return $this->ensureAbsolute($url);
+  }
+
+  /**
+   * Returns the Drupal backend origin when staff links open the backend.
+   *
+   * Tenants whose staff work in the Drupal backend instead of the dashboard
+   * set markaspot_mail.settings:staff_links to "backend". The link then uses
+   * the configured backend origin; without one it stays on the dashboard.
+   */
+  private function resolveStaffLinkBase(): ?string {
+    $choice = (string) ($this->configFactory
+      ->get('markaspot_mail.settings')
+      ->get('staff_links') ?? 'dashboard');
+    if ($choice !== 'backend') {
+      return NULL;
+    }
+    $base = $this->resolveAbsoluteBaseUrl();
+    if ($base === '') {
+      $this->logger->warning('markaspot_mail.settings.staff_links is "backend", but platform.backend_base_url is not set: staff links keep opening the dashboard.');
+      return NULL;
+    }
+    return $base;
   }
 
   /**

@@ -1243,6 +1243,52 @@ final class MailBrandingServiceTest extends UnitTestCase {
   }
 
   /**
+   * Staff links stay on the dashboard unless the tenant opts into the backend.
+   */
+  public function testStaffLinkBaseIsEmptyByDefault(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $branding = $this->buildService(NULL, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+
+    $this->assertNull($branding['staff_link_base']);
+  }
+
+  /**
+   * The backend choice exposes the configured backend origin.
+   */
+  public function testStaffLinkBaseUsesTheBackendOrigin(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $overrides['staff_links'] = 'backend';
+    $branding = $this->buildService(NULL, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame('https://management.example.com', $branding['staff_link_base']);
+  }
+
+  /**
+   * The backend choice without a backend origin keeps the dashboard and warns.
+   */
+  public function testStaffLinkBaseWithoutBackendOriginFallsBackAndWarns(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    unset($overrides['platform.backend_base_url']);
+    $overrides['staff_links'] = 'backend';
+    $warnings = [];
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->method('warning')->willReturnCallback(
+      static function (string $message) use (&$warnings): void {
+        $warnings[] = $message;
+      },
+    );
+    $branding = $this->buildService(NULL, logger: $logger, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+
+    $this->assertNull($branding['staff_link_base']);
+    $this->assertContains(
+      'markaspot_mail.settings.staff_links is "backend", but platform.backend_base_url is not set: staff links keep opening the dashboard.',
+      $warnings,
+    );
+  }
+
+  /**
    * Builds a MailBrandingService with mocked dependencies.
    */
   private function buildService(

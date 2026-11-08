@@ -10,6 +10,7 @@ platform:
   frontend_base_url: ''
   tenant_frontend_base_template: ''
   backend_base_url: ''
+staff_links: dashboard
 features:
   show_platform_footer: true
   tier_gating: false
