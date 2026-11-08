@@ -8,6 +8,7 @@ use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_archive\ArchiveServiceInterface;
 use Drupal\markaspot_archive\Drush\Commands\ArchiveCommands;
 use Drupal\markaspot_archive_search_test\Plugin\search_api\tracker\SilentlyFailingTracker;
 use Drupal\node\Entity\Node;
@@ -315,6 +316,55 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     $this->assertNotContains('Call Jordan at +44 7700 900123.', $this->indexedValues('revision_log'));
     $this->assertNotContains('plain@example.org', $this->indexedEmails());
     $this->assertSame(0, $service->countBackfillCandidates());
+  }
+
+  /**
+   * Archiving succeeds on an index whose tracker the module cannot check.
+   *
+   * A tracker other than the default one must ignore the update of an item
+   * it never tracked (for example while its initial tracking still runs),
+   * so an item that does not wait for indexing need not be indexed. The
+   * archive module cannot tell the two apart there: it archives and logs a
+   * warning once per run instead of rolling back.
+   */
+  public function testTrackerWithoutItemTableDoesNotBlockArchiving(): void {
+    $logger = new ArchiveAnonymizerTestLogger();
+    $this->container->get('logger.channel.markaspot_archive')->addLogger($logger);
+    // Search API's test tracker conforms to the contract and tracks nothing.
+    Index::load(self::INDEX)->set('tracker_settings', ['search_api_test' => []])->save();
+    $open = Term::create(['vid' => 'service_status', 'name' => 'Open']);
+    $open->save();
+    $this->config('markaspot_archive.settings')
+      ->set('status_archivable', [(int) $open->id() => (string) $open->id()])
+      ->set('anonymize', 1)
+      ->save();
+    $nids = [];
+    foreach (['first', 'second'] as $name) {
+      $node = Node::create([
+        'type' => 'service_request',
+        'title' => 'Broken streetlight',
+        'field_status' => (string) $open->id(),
+        'field_e_mail' => $name . '@example.org',
+      ]);
+      $node->save();
+      $nids[] = (int) $node->id();
+    }
+    $this->assertSame([], Index::load(self::INDEX)->getTrackerInstance()->getRemainingItems(), 'The requests were never tracked.');
+    $service = $this->container->get('markaspot_archive.archive');
+    $storage = $this->container->get('entity_type.manager')->getStorage('node');
+
+    foreach ($nids as $nid) {
+      $this->assertSame(ArchiveServiceInterface::ARCHIVE_DONE, $service->archiveRequest($nid));
+      $node = $storage->loadUnchanged($nid);
+      $this->assertSame($this->config('markaspot_archive.settings')->get('status_archived'), (string) $node->get('field_status')->target_id);
+      $this->assertStringEndsWith('@anonymized.off', (string) $node->get('field_e_mail')->value);
+    }
+    $warnings = array_values(array_filter(
+      $logger->records,
+      static fn (array $record): bool => str_contains((string) $record['message'], 'which the archive module cannot check')
+    ));
+    $this->assertCount(1, $warnings, 'One warning per run.');
+    $this->assertSame(self::INDEX, $warnings[0]['context']['@index']);
   }
 
   /**

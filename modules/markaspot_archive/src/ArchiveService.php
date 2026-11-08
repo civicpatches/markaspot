@@ -129,6 +129,15 @@ class ArchiveService implements ArchiveServiceInterface {
   protected array $unpublishFailedThisRequest = [];
 
   /**
+   * Indexes whose tracking of an erasure could not be verified in this run.
+   *
+   * See ::assertTrackedForReindexing(); each one is logged once per run.
+   *
+   * @var array<string, true>
+   */
+  protected array $unverifiedTrackingIndexes = [];
+
+  /**
    * Entity manager Service Object.
    *
    * @var \Drupal\Core\Entity\EntityTypeManagerInterface
@@ -1278,10 +1287,15 @@ class ArchiveService implements ArchiveServiceInterface {
    * indexes with a valid tracker whose datasource covers the entity, the
    * indexes ::trackForReindexing() tracked it in. None of them may still
    * mark an item of the entity as indexed. An item without a tracker row
-   * was never indexed. The default tracker is asked through its table, any
-   * other tracker through its remaining items. The exception rolls back the
-   * transaction of the erasure, so the request stays a candidate for the
-   * next run and counts as failed in this one.
+   * was never indexed. The exception rolls back the transaction of the
+   * erasure, so the request stays a candidate for the next run and counts
+   * as failed in this one.
+   *
+   * Only trackers that keep their items in the search_api_item table (the
+   * default tracker and trackers built on TrackerPluginBase) can be
+   * checked. Another tracker cannot tell an item it never tracked, which it
+   * must ignore on an update, from an indexed one; its index is skipped and
+   * a warning logged once per run.
    *
    * @throws \RuntimeException
    *   When an index still marks an item of the entity as indexed.
@@ -1308,18 +1322,23 @@ class ArchiveService implements ArchiveServiceInterface {
         continue;
       }
       $tracker = $index->getTrackerInstance();
-      if ($tracker instanceof TrackerPluginBase) {
-        $indexed = $tracker->getDatabaseConnection()->select('search_api_item', 'sai')
-          ->fields('sai', ['item_id'])
-          ->condition('sai.index_id', $index->id())
-          ->condition('sai.item_id', $item_ids, 'IN')
-          ->condition('sai.status', TrackerPluginBase::STATUS_INDEXED)
-          ->execute()
-          ->fetchCol();
+      if (!$tracker instanceof TrackerPluginBase) {
+        if (!isset($this->unverifiedTrackingIndexes[(string) $index->id()])) {
+          $this->unverifiedTrackingIndexes[(string) $index->id()] = TRUE;
+          $this->logger->warning(
+            'Search index @index uses the tracker @tracker, which the archive module cannot check: it could not verify that erased archived requests wait for reindexing there.',
+            ['@index' => $index->id(), '@tracker' => $tracker->getPluginId()]
+          );
+        }
+        continue;
       }
-      else {
-        $indexed = array_values(array_diff($item_ids, $tracker->getRemainingItems(-1, $datasource_id)));
-      }
+      $indexed = $tracker->getDatabaseConnection()->select('search_api_item', 'sai')
+        ->fields('sai', ['item_id'])
+        ->condition('sai.index_id', $index->id())
+        ->condition('sai.item_id', $item_ids, 'IN')
+        ->condition('sai.status', TrackerPluginBase::STATUS_INDEXED)
+        ->execute()
+        ->fetchCol();
       if ($indexed !== []) {
         throw new \RuntimeException(sprintf(
           'Search index %s did not record %s for reindexing, so it would keep the erased text; the change was rolled back.',

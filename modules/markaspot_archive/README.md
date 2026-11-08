@@ -69,7 +69,11 @@ This module works with:
   reindex it; if one does not, the erasure is rolled back, counted as
   failed, and the request stays a candidate for the next run. The same
   check runs when a report is archived; a manual change to the archived
-  status then fails with an error and the report keeps its status.
+  status then fails with an error and the report keeps its status. Only
+  the default tracker (and trackers built on its `search_api_item` table)
+  can be checked. An index with another tracker is skipped, and a warning
+  "could not verify that erased archived requests wait for reindexing"
+  names it once per run.
 - The command exits with 1 while a search index may keep erased text: a
   read-only index, an enabled index without a valid tracker or server, or a
   disabled index whose data may still sit on a server. Disabling an index
