@@ -219,6 +219,38 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
+   * Label tokens are replaced as plain text, then line breaks collapse.
+   *
+   * Token::replace() would HTML-escape the values, and the label is
+   * escaped again by Twig, so "&" would reach the inbox as "&amp;".
+   */
+  public function testReplaceLabelTokensReplacesPlainAndCollapsesTokenLineBreaks(): void {
+    $token = $this->createMock(Token::class);
+    $token->expects($this->never())->method('replace');
+    $token->expects($this->once())
+      ->method('replacePlain')
+      ->with("Open [node:title]\nin the backend", ['node' => 'n'], ['langcode' => 'de', 'clear' => TRUE])
+      ->willReturn("Open Road & Park \"A\" <b>\r\n  next\nin the backend ");
+    $resolver = $this->buildResolverWithToken($token);
+
+    $this->assertSame(
+      'Open Road & Park "A" <b> next in the backend',
+      $resolver->replaceLabelTokens("Open [node:title]\nin the backend", ['node' => 'n'], 'de'),
+    );
+  }
+
+  /**
+   * An empty label template skips token replacement.
+   */
+  public function testReplaceLabelTokensSkipsEmptyLabels(): void {
+    $token = $this->createMock(Token::class);
+    $token->expects($this->never())->method('replacePlain');
+    $resolver = $this->buildResolverWithToken($token);
+
+    $this->assertSame('', $resolver->replaceLabelTokens(" \n ", [], 'en'));
+  }
+
+  /**
    * Builds a six-slot array of empty scalars and an empty body_blocks list.
    *
    * Each XSS test only needs to fill in the one slot it exercises.

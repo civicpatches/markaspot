@@ -195,8 +195,11 @@ class MailTextResolver {
    * Runs Drupal token replacement over one plain-text label.
    *
    * For label fields outside the six notification slots, such as the
-   * backend_cta_label of staff mails. Labels render escaped, so no HTML
-   * filtering happens here; line breaks collapse to spaces.
+   * backend_cta_label of staff mails. The result is plain text: Twig
+   * escapes it once in the HTML part and the text part uses it as is, so
+   * token values are inserted unescaped (Token::replacePlain()) and an
+   * "&" in a request title stays "&" in both parts. Line breaks, including
+   * those a token value brings along, collapse to single spaces.
    *
    * @param string $label
    *   The label template.
@@ -209,14 +212,14 @@ class MailTextResolver {
    *   The label with tokens replaced, or '' for an empty template.
    */
   public function replaceLabelTokens(string $label, array $tokenData, string $langcode): string {
-    $label = trim(str_replace(["\r\n", "\r", "\n"], ' ', $label));
-    if ($label === '') {
+    if (trim($label) === '') {
       return '';
     }
-    return trim((string) $this->token->replace($label, $tokenData, [
+    $replaced = $this->token->replacePlain($label, $tokenData, [
       'langcode' => $langcode,
       'clear' => TRUE,
-    ]));
+    ]);
+    return trim((string) preg_replace('/[ \t]*[\r\n]+[ \t]*/', ' ', $replaced));
   }
 
   /**
