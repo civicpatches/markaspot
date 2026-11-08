@@ -492,9 +492,9 @@ else {
     assert_equal(403, $code, "GET $ep returns 403 (anonymous)");
   }
 
-  // Dashboard duplicate endpoints (access mark-a-spot api).
+  // AI duplicate read endpoints require staff access.
   $dup_endpoints = [
-    '/ai/duplicates/pending',
+    '/api/ai/duplicates/pending',
   ];
   foreach ($dup_endpoints as $ep) {
     [$code] = http_get("$base$ep");

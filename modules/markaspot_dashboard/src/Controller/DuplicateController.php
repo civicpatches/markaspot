@@ -10,12 +10,9 @@ use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
-use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\markaspot_ai\Access\DuplicateMatchAccessPolicy;
-use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Service\StatusTermScope;
-use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\node\NodeInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -27,8 +24,6 @@ use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
  */
 class DuplicateController extends ControllerBase {
 
-  use JurisdictionIdResolverTrait;
-
   /**
    * The database connection.
    */
@@ -38,11 +33,6 @@ class DuplicateController extends ControllerBase {
    * The time service.
    */
   protected TimeInterface $time;
-
-  /**
-   * The optional jurisdiction hierarchy resolver.
-   */
-  protected ?JurisdictionHierarchyResolverInterface $hierarchyResolver;
 
   /**
    * The graceful jurisdiction scope for service status terms.
@@ -64,23 +54,19 @@ class DuplicateController extends ControllerBase {
     Connection $database,
     EntityTypeManagerInterface $entity_type_manager,
     AccountProxyInterface $current_user,
-    LanguageManagerInterface $language_manager,
     TimeInterface $time,
     ConfigFactoryInterface $config_factory,
     ModuleHandlerInterface $module_handler,
     StatusTermScope $status_term_scope,
-    ?JurisdictionHierarchyResolverInterface $hierarchy_resolver = NULL,
     ?DuplicateMatchAccessPolicy $duplicate_access_policy = NULL,
   ) {
     $this->database = $database;
     $this->entityTypeManager = $entity_type_manager;
     $this->currentUser = $current_user;
-    $this->languageManager = $language_manager;
     $this->time = $time;
     $this->configFactory = $config_factory;
     $this->moduleHandler = $module_handler;
     $this->statusTermScope = $status_term_scope;
-    $this->hierarchyResolver = $hierarchy_resolver;
     $this->duplicateAccessPolicy = $duplicate_access_policy;
   }
 
@@ -92,14 +78,10 @@ class DuplicateController extends ControllerBase {
       $container->get('database'),
       $container->get('entity_type.manager'),
       $container->get('current_user'),
-      $container->get('language_manager'),
       $container->get('datetime.time'),
       $container->get('config.factory'),
       $container->get('module_handler'),
       $container->get('markaspot_group.status_term_scope'),
-      $container->has('markaspot_group.hierarchy_resolver')
-        ? $container->get('markaspot_group.hierarchy_resolver')
-        : NULL,
       $container->has('markaspot_ai.duplicate_match_access')
         ? $container->get('markaspot_ai.duplicate_match_access')
         : NULL,

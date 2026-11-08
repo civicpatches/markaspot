@@ -1,8 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Drupal\markaspot_publisher\Plugin\QueueWorker;
 
 use Drupal\Core\Queue\QueueWorkerBase;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
@@ -45,8 +49,12 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
    *   The publisher service.
    * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
    *   The logger channel.
+   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
+   *   The entity type manager.
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
+   *   The module handler for optional publication holds.
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, $publisher_service, LoggerChannelInterface $logger) {
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, $publisher_service, LoggerChannelInterface $logger, private readonly EntityTypeManagerInterface $entityTypeManager, private readonly ModuleHandlerInterface $moduleHandler) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
     $this->publisherService = $publisher_service;
     $this->logger = $logger;
@@ -61,7 +69,9 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
       $plugin_id,
       $plugin_definition,
       $container->get('markaspot_publisher.publisher'),
-      $container->get('logger.factory')->get('markaspot_publisher')
+      $container->get('logger.factory')->get('markaspot_publisher'),
+      $container->get('entity_type.manager'),
+      $container->get('module_handler')
     );
   }
 
@@ -69,7 +79,7 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
    * Processes a single queued item.
    *
    * @param mixed $data
-   *   The data that was added to the queue. Here we expect an associative array,
+   *   The queued data, provided as an associative array,
    *   e.g. ['nid' => 123].
    */
   public function processItem($data) {
@@ -82,7 +92,7 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
     $this->logger->notice('Starting processing for node ID: @nid', ['@nid' => $nid]);
 
     // Load the node by ID.
-    $node = \Drupal::entityTypeManager()->getStorage('node')->load($nid);
+    $node = $this->entityTypeManager->getStorage('node')->loadUnchanged($nid);
     if (!$node) {
       $this->logger->warning('Node with ID @nid not found.', ['@nid' => $nid]);
       return;
@@ -100,7 +110,7 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
         return;
       }
 
-      // Check if the node is still eligible for publishing based on its field_status.
+      // Check whether the workflow status is still eligible for publication.
       $current_status = $node->get('field_status')->target_id;
       $publishable_statuses = $config->get('status_publishable');
       if (!isset($publishable_statuses[$current_status])) {
@@ -108,6 +118,14 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
           '@nid' => $nid,
           '@current' => $current_status,
         ]);
+        return;
+      }
+
+      // Optional modules may veto publication without becoming dependencies.
+      $held = FALSE;
+      $this->moduleHandler->alter('markaspot_publisher_hold', $held, $node);
+      if ($held) {
+        $this->logger->notice('Node ID @nid is held from automatic publication. Skipping.', ['@nid' => $nid]);
         return;
       }
 

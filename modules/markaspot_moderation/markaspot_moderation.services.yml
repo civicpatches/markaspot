@@ -13,3 +13,10 @@ services:
   logger.channel.markaspot_moderation:
     parent: logger.channel_base
     arguments: ['markaspot_moderation']
+
+  Drupal\markaspot_moderation\Service\PublicationHold:
+    arguments: ['@database']
+
+  Drupal\markaspot_moderation\Hook\PublisherHooks:
+    arguments: ['@Drupal\markaspot_moderation\Service\PublicationHold']
+    public: true

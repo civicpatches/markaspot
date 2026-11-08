@@ -134,12 +134,10 @@ final class DuplicateReviewApiAccessKernelTest extends DuplicateAccessKernelTest
       $this->container->get('database'),
       $this->container->get('entity_type.manager'),
       $this->container->get('current_user'),
-      $this->container->get('language_manager'),
       $this->container->get('datetime.time'),
       $this->container->get('config.factory'),
       $moduleHandler,
       $this->container->get('markaspot_group.status_term_scope'),
-      NULL,
       $this->policy(),
     );
     $controller->setStringTranslation($this->container->get('string_translation'));

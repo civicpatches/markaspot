@@ -173,7 +173,7 @@ function markaspot_tenant_admin_install(): void {
 /**
  * Grant field_sentiment view permissions to tenant_admin.
  *
- * The field uses field_permissions with permission_type: custom,
+ * The field_sentiment uses field_permissions with permission_type: custom,
  * generating discrete "view field_sentiment" / "view own field_sentiment"
  * permissions. Without these, JSON:API omits the sentiment value from the
  * node--service_request collection response even when the user holds the

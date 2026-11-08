@@ -22,6 +22,8 @@ class TenantAdminHelper {
   /**
    * Gets jurisdiction group IDs where the user has the tenant admin group role.
    *
+   * No request cache: membership changes must apply immediately.
+   *
    * @param \Drupal\Core\Session\AccountInterface $account
    *   The user account.
    *

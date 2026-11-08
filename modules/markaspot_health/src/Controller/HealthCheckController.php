@@ -8,6 +8,7 @@ use Drupal\Core\Cache\CacheableJsonResponse;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Extension\ProfileExtensionList;
+use Drupal\Core\Extension\Exception\UnknownExtensionException;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_health\HealthCheckPluginManager;
 use Drupal\markaspot_health\HealthCheckResult;
@@ -58,8 +59,15 @@ class HealthCheckController extends ControllerBase {
 
     $results = $this->pluginManager->runAll($context);
 
+    try {
+      $profileVersion = $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev';
+    }
+    catch (UnknownExtensionException) {
+      $profileVersion = 'dev';
+    }
+
     $response = new CacheableJsonResponse([
-      'profile_version' => $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev',
+      'profile_version' => $profileVersion,
       'checked_at' => gmdate('c'),
       'summary' => $this->buildSummary($results),
       'checks' => array_map(
