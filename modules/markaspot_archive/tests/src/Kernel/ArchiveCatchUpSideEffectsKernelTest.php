@@ -6,6 +6,8 @@ namespace Drupal\Tests\markaspot_archive\Kernel;
 
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\Core\Session\AnonymousUserSession;
+use Drupal\eca\Entity\Eca;
+use Drupal\eca\EventSubscriber\DynamicSubscriber;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\group\Entity\Group;
@@ -16,6 +18,7 @@ use Drupal\markaspot_archive\Drush\Commands\ArchiveCommands;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
+use Drupal\service_request\RevisionLog;
 use Drupal\taxonomy\Entity\Term;
 use Drupal\taxonomy\Entity\Vocabulary;
 use Drupal\user\Entity\User;
@@ -27,8 +30,11 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
  * Large tenants run the anonymization backfill and the one-time unpublish
  * pass on thousands of archived requests at once. These system saves must not
  * notify the reporter, an organisation or an assignee, and must not change a
- * field that tenant notification rules react to. All names, addresses and
- * titles are fictional.
+ * field that tenant notification rules react to. A tenant ECA model that
+ * mails on every save of a request (core's e-mail action stands in for the
+ * Mark-a-Spot mail actions, ECA dispatches both alike) must stay silent too,
+ * and moderation events in the revision history must survive. All names,
+ * addresses and titles are fictional.
  *
  * @group markaspot_archive
  */
@@ -55,8 +61,12 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
     'group',
     'gnode',
     'field_permissions',
+    'modeler_api',
+    'eca',
+    'eca_content',
     'markaspot_validation',
     'markaspot_group',
+    'markaspot_moderation',
     'service_request',
     'markaspot_archive',
   ];
@@ -66,6 +76,7 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
    */
   private const WATCHED_FIELDS = [
     'field_organisation',
+    'field_assignee',
     'field_status',
     'field_e_mail',
     'field_source',
@@ -128,7 +139,8 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       $this->installEntitySchema($type);
     }
     $this->installSchema('node', ['node_access']);
-    $this->installConfig(['system', 'user', 'field', 'filter', 'node', 'group']);
+    $this->installSchema('markaspot_moderation', ['markaspot_moderation_flags']);
+    $this->installConfig(['system', 'user', 'field', 'filter', 'node', 'group', 'eca']);
     $this->container->get('config.storage')->write('markaspot_open311.settings', ['status_note_auto_create' => FALSE]);
     // markaspot_open311 is not enabled; the group presave asks it for an
     // initial status of new requests in a category with a jurisdiction.
@@ -175,6 +187,7 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       'allowed_values' => ['web' => 'Web', 'staff' => 'Staff', 'email' => 'E-mail'],
     ]);
     $this->createField('node', 'service_request', 'field_request_attributes', 'text_long');
+    $this->createField('node', 'service_request', 'field_assignee', 'entity_reference', ['target_type' => 'user']);
     $this->container->get('entity_field.manager')->clearCachedFieldDefinitions();
 
     $open = Term::create(['vid' => 'service_status', 'name' => 'Open']);
@@ -215,8 +228,41 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
     // Drift: the field moved on, the relation stayed behind.
     $this->requests['moved'] = $this->createRequest('Fallen branch', [$roads], 'joan@example.org');
     $this->setFieldOrganisations($this->requests['moved'], [$parks]);
-    $this->requests['hidden'] = $this->createRequest('Broken bench', [$parks], 'jim@example.org', FALSE);
+    $this->requests['hidden'] = $this->createRequest('Broken bench', [$parks], 'jim@example.org', FALSE, 'moderation_hidden');
     $this->deleteRelations($this->requests['hidden'], $parks);
+    // Staff assigned a person before the request was archived.
+    $assignee = User::create(['name' => 'Fictional assignee', 'status' => 1, 'mail' => 'assignee@example.test']);
+    $assignee->save();
+    $this->setFieldValue($this->requests['consistent'], 'field_assignee', 'target_id', (int) $assignee->id());
+
+    // A tenant rule that mails on every save of a request.
+    $events = [];
+    foreach (['presave', 'update'] as $event) {
+      $events[$event] = [
+        'plugin' => 'content_entity:' . $event,
+        'configuration' => ['type' => 'node service_request'],
+        'successors' => [['id' => 'citizen_mail', 'condition' => '']],
+      ];
+    }
+    Eca::create([
+      'id' => 'archive_catch_up_citizen_mail',
+      'label' => 'Synthetic citizen mail on every save',
+      'status' => TRUE,
+      'events' => $events,
+      'conditions' => [],
+      'gateways' => [],
+      'actions' => [
+        'citizen_mail' => [
+          'plugin' => 'action_send_email_action',
+          'configuration' => [
+            'recipient' => 'citizen-mail@example.test',
+            'subject' => 'Your report changed',
+            'message' => 'Fictional status mail.',
+          ],
+          'successors' => [],
+        ],
+      ],
+    ])->save();
 
     $this->config('markaspot_archive.settings')
       ->set('anonymize', 1)
@@ -245,6 +291,7 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
 
     $this->assertSame([], $this->collectedMails());
     $this->assertCatchUpResult($before, $nodeCount);
+    $this->assertTrue(DynamicSubscriber::isActive(), 'ECA is active again after the catch-up.');
   }
 
   /**
@@ -265,6 +312,7 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
 
     $this->assertSame([], $this->collectedMails());
     $this->assertCatchUpResult($before, $nodeCount);
+    $this->assertTrue(DynamicSubscriber::isActive(), 'ECA is active again after the catch-up.');
     $this->assertSame(0, $rows->getExitCode());
     $remaining = [];
     foreach ($rows->getOutputData() as $row) {
@@ -287,9 +335,12 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
   }
 
   /**
-   * A staff save of a drifted request still notifies the organisation.
+   * A staff save of a drifted request still notifies as before.
    *
-   * Keeps the suppression narrow: only system saves stay silent.
+   * Keeps the suppression narrow: only system saves stay silent. The
+   * organisation is notified once; the tenant ECA rule mails on the presave
+   * and update of the staff save and of the re-save that repairs the
+   * relation.
    */
   public function testStaffSaveOfDriftedRequestStillNotifies(): void {
     $this->container->get('current_user')->setAccount(User::load(1));
@@ -297,10 +348,14 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
     $node->setTitle('Pothole near the bus stop, deeper');
     $node->save();
 
-    $mails = $this->collectedMails();
-    $this->assertCount(1, $mails);
-    $this->assertSame('org_notification', $mails[0]['key']);
-    $this->assertSame('roads@example.test', $mails[0]['to']);
+    $mails = [];
+    foreach ($this->collectedMails() as $mail) {
+      $mails[] = $mail['key'] . ' ' . $mail['to'];
+    }
+    $this->assertSame([
+      'action_send_email citizen-mail@example.test' => 4,
+      'org_notification roads@example.test' => 1,
+    ], array_count_values($mails));
   }
 
   /**
@@ -330,6 +385,17 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       unset($before[$nid]['field_e_mail'], $after[$nid]['field_e_mail']);
       $this->assertSame($before[$nid], $after[$nid], $key);
     }
+    // The moderation decision stays readable, the quoted address does not.
+    $logs = $this->container->get('database')->select('node_revision', 'r')
+      ->fields('r', ['revision_log'])
+      ->condition('r.nid', $this->requests['hidden']->id())
+      ->orderBy('r.vid')
+      ->execute()
+      ->fetchCol();
+    $first = RevisionLog::decode((string) $logs[0]);
+    $this->assertSame(['moderation_hidden'], $first['events']);
+    $this->assertSame('Hidden after a complaint by [REDACTED email].', $first['message']);
+    $this->assertStringNotContainsString('jim@example.org', implode(' ', $logs));
   }
 
   /**
@@ -399,8 +465,10 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
    *   Fictional reporter address.
    * @param bool $published
    *   Whether the request is published.
+   * @param string|null $event
+   *   A revision event of the creation, with a note quoting the reporter.
    */
-  private function createRequest(string $title, array $organisations, string $email, bool $published = TRUE): Node {
+  private function createRequest(string $title, array $organisations, string $email, bool $published = TRUE, ?string $event = NULL): Node {
     $node = Node::create([
       'type' => 'service_request',
       'title' => $title,
@@ -415,6 +483,10 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       'field_request_attributes' => json_encode(['_markaspot_channel' => 'staff']),
       'changed' => 1000000000,
     ]);
+    if ($event !== NULL) {
+      RevisionLog::setEvent($node, $event);
+      RevisionLog::setMessage($node, 'Hidden after a complaint by ' . $email . '.');
+    }
     $node->save();
     $this->assertSame(1000000000, (int) Node::load($node->id())->getChangedTime());
     return $node;
@@ -472,6 +544,26 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
           'field_organisation_target_id' => $gid,
         ])->execute();
       }
+    }
+    $this->container->get('entity_type.manager')->getStorage('node')->resetCache([$node->id()]);
+  }
+
+  /**
+   * Sets a single field value in storage, bypassing hooks.
+   */
+  private function setFieldValue(Node $node, string $field, string $property, int|string $value): void {
+    $database = $this->container->get('database');
+    foreach (['node__' . $field, 'node_revision__' . $field] as $table) {
+      $database->delete($table)->condition('entity_id', $node->id())->execute();
+      $database->insert($table)->fields([
+        'bundle' => 'service_request',
+        'deleted' => 0,
+        'entity_id' => $node->id(),
+        'revision_id' => $node->getRevisionId(),
+        'langcode' => $node->language()->getId(),
+        'delta' => 0,
+        $field . '_' . $property => $value,
+      ])->execute();
     }
     $this->container->get('entity_type.manager')->getStorage('node')->resetCache([$node->id()]);
   }

@@ -17,6 +17,7 @@ use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldStorageDefinitionInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\State\StateInterface;
+use Drupal\eca\EventSubscriber\DynamicSubscriber;
 use Drupal\node\NodeInterface;
 
 /**
@@ -813,7 +814,8 @@ class ArchiveService implements ArchiveServiceInterface {
    * catch-up must neither anonymize nor unpublish it then: anonymization is
    * irreversible, and saving the stale copy would undo the staff change. The
    * request is locked, its status read from storage and the request
-   * reloaded, all in one transaction with the change.
+   * reloaded, all in one transaction with the change. ECA stays off for the
+   * load and the change (see ::withoutEca()).
    *
    * @param int $nid
    *   The node ID.
@@ -830,21 +832,23 @@ class ArchiveService implements ArchiveServiceInterface {
   protected function changeArchivedRequest(int $nid, string $archived_status, bool $published, callable $change): bool {
     $transaction = $this->database->startTransaction();
     try {
-      $node = $this->lockArchivedRequest($nid, $archived_status, $published)
-        ? $this->entityTypeManager->getStorage('node')->loadUnchanged($nid)
-        : NULL;
-      if (
-        !$node instanceof NodeInterface
-        || $node->bundle() !== 'service_request'
-        || (string) $node->get('field_status')->target_id !== $archived_status
-      ) {
-        $this->logger->notice(
-          'Node ID @nid changed after the archive catch-up selected it and was left as it is.',
-          ['@nid' => $nid]
-        );
-        return FALSE;
-      }
-      return $change($node);
+      return $this->withoutEca(function () use ($nid, $archived_status, $published, $change): bool {
+        $node = $this->lockArchivedRequest($nid, $archived_status, $published)
+          ? $this->entityTypeManager->getStorage('node')->loadUnchanged($nid)
+          : NULL;
+        if (
+          !$node instanceof NodeInterface
+          || $node->bundle() !== 'service_request'
+          || (string) $node->get('field_status')->target_id !== $archived_status
+        ) {
+          $this->logger->notice(
+            'Node ID @nid changed after the archive catch-up selected it and was left as it is.',
+            ['@nid' => $nid]
+          );
+          return FALSE;
+        }
+        return $change($node);
+      });
     }
     catch (\Throwable $e) {
       $transaction->rollBack();
@@ -853,6 +857,45 @@ class ArchiveService implements ArchiveServiceInterface {
     finally {
       // Commits, or ends the rolled back transaction.
       unset($transaction);
+    }
+  }
+
+  /**
+   * Runs a catch-up change with ECA processing switched off.
+   *
+   * The catch-up re-saves old archived requests as a system write. Syncing
+   * saves keep the Mark-a-Spot notifications quiet, but ECA dispatches its
+   * entity events for them as well, so a tenant model could mail on these
+   * saves (lhm, for example, mails the organisation when field_feedback
+   * changes, and the anonymization empties it). DynamicSubscriber::setActive()
+   * is ECA's documented runtime switch for this; the previous state is
+   * restored afterwards, as markaspot_request_id_update_11902() does. Staff
+   * saves and archive transitions keep running ECA as before. The settings.php
+   * switch $settings['eca_disable'] would turn ECA off for the whole site.
+   *
+   * @param callable(): T $callback
+   *   The change.
+   *
+   * @return T
+   *   The result of the change.
+   *
+   * @template T
+   */
+  protected function withoutEca(callable $callback): mixed {
+    if (
+      !class_exists(DynamicSubscriber::class)
+      || !method_exists(DynamicSubscriber::class, 'setActive')
+      || !method_exists(DynamicSubscriber::class, 'isActive')
+    ) {
+      return $callback();
+    }
+    $active = DynamicSubscriber::isActive();
+    DynamicSubscriber::setActive(FALSE);
+    try {
+      return $callback();
+    }
+    finally {
+      DynamicSubscriber::setActive($active);
     }
   }
 
