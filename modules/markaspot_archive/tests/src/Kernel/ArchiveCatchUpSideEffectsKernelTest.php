@@ -385,7 +385,8 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       unset($before[$nid]['field_e_mail'], $after[$nid]['field_e_mail']);
       $this->assertSame($before[$nid], $after[$nid], $key);
     }
-    // The moderation decision stays readable, the quoted address does not.
+    // The moderation decision stays readable, the note quoting the address
+    // does not.
     $logs = $this->container->get('database')->select('node_revision', 'r')
       ->fields('r', ['revision_log'])
       ->condition('r.nid', $this->requests['hidden']->id())
@@ -394,7 +395,7 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
       ->fetchCol();
     $first = RevisionLog::decode((string) $logs[0]);
     $this->assertSame(['moderation_hidden'], $first['events']);
-    $this->assertSame('Hidden after a complaint by [REDACTED email].', $first['message']);
+    $this->assertSame('Message removed when the report was anonymized.', $first['message']);
     $this->assertStringNotContainsString('jim@example.org', implode(' ', $logs));
   }
 

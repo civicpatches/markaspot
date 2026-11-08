@@ -10,7 +10,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
- * Revision log scrubbing keeps structure and removes contact data.
+ * An anonymized report keeps no free-text message in its revision logs.
  *
  * All names, addresses and numbers are fictional.
  */
@@ -19,108 +19,133 @@ use PHPUnit\Framework\Attributes\Group;
 final class RevisionLogScrubberTest extends UnitTestCase {
 
   /**
-   * Legacy free text loses addresses, numbers and the reporter's values.
+   * The fixed text that replaces a message.
    */
-  public function testLegacyTextIsScrubbedWhole(): void {
-    $log = 'Jordan Fictional called from 0221 123456 and +49 170 1234567, wrote '
-      . 'to staff@example.test and jordan.f@example.org. Jordanstraße 4.';
+  private const PLACEHOLDER = 'Message removed when the report was anonymized.';
 
-    $scrubbed = RevisionLogScrubber::scrub($log, ['Jordan', 'Fictional', 'jordan.f@example.org', 'Al']);
+  /**
+   * Flags of RevisionLog::build().
+   */
+  private const JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
 
-    $this->assertSame(
-      '[REDACTED] [REDACTED] called from [REDACTED phone] and [REDACTED phone], wrote '
-      . 'to [REDACTED email] and [REDACTED email]. Jordanstraße 4.',
-      $scrubbed
-    );
+  /**
+   * The placeholder is stored as a fixed English text.
+   */
+  public function testPlaceholderIsFixed(): void {
+    $this->assertSame(self::PLACEHOLDER, RevisionLogScrubber::PLACEHOLDER);
   }
 
   /**
-   * An envelope keeps every key; only its message is scrubbed.
+   * Legacy free text is replaced as a whole, whatever it holds.
+   *
+   * No pattern could find these: international and bracketed numbers, a
+   * short local number and a bare name.
    */
-  public function testEnvelopeKeepsStructureAndEvents(): void {
-    $envelope = [
-      'schema' => 'civic.revision.v1',
-      'action' => 'updated',
-      'changes' => [['field' => 'status', 'before' => [['id' => '12']], 'after' => [['id' => '13']]]],
-      'events' => ['moderation_hidden', 'unpublished'],
-      'message' => 'Hidden after a call: Müller, 0170 1234567.',
-      'future_key' => ['kept' => TRUE],
-    ];
-    $log = json_encode($envelope, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-    $decoded = json_decode(RevisionLogScrubber::scrub($log, ['Müller']), TRUE);
-
-    $this->assertSame('Hidden after a call: [REDACTED], [REDACTED phone].', $decoded['message']);
-    unset($decoded['message'], $envelope['message']);
-    $this->assertSame($envelope, $decoded);
-  }
-
-  /**
-   * Logs without contact data stay byte-identical.
-   */
-  public function testNeutralLogsAreUntouched(): void {
+  public function testLegacyTextIsReplaced(): void {
     $logs = [
-      'Crew scheduled for 12.11.2026, request 1034-2026, cost 1.250,00 EUR.',
-      json_encode([
-        'schema' => 'civic.revision.v1',
-        'action' => 'updated',
-        'changes' => [['field' => 'responsibility', 'before' => [['id' => '102']], 'after' => [['id' => '1034']]]],
-        'events' => ['scope_sync'],
-        'message' => '',
-      ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-      // An escaped envelope stays as it is when it holds nothing to scrub.
-      json_encode([
-        'schema' => 'civic.revision.v1',
-        'action' => 'created',
-        'changes' => [],
-        'events' => [],
-        'message' => 'Stra' . mb_chr(0xDF) . 'e',
-      ]),
-      '',
+      'Call +44 7700 900123',
+      'Call +49 (0)221 1234567',
+      'Call 1234567',
+      'Spoke to Jordan, she will send photos.',
+      'Crew scheduled for Tuesday, ticket 0123-2026.',
+      // Invalid UTF-8 does not stop the replacement.
+      "Jordan \xC3\x28 called",
+      // JSON that is no revision envelope is free text as well.
+      '{"note":"call 0170 1234567"}',
+      ' ',
     ];
     foreach ($logs as $log) {
-      $this->assertSame($log, RevisionLogScrubber::scrub($log, ['Jordan']));
-      $this->assertFalse(RevisionLogScrubber::containsContactData($log));
+      $this->assertTrue(RevisionLogScrubber::needsScrubbing($log), $log);
+      $this->assertSame(self::PLACEHOLDER, RevisionLogScrubber::scrub($log), $log);
     }
   }
 
   /**
-   * A scrubbed log never matches the patterns again.
+   * An envelope keeps every key; only its message is replaced.
    *
-   * The SQL candidate query uses the same patterns: a scrubbed log is no
-   * candidate any more.
+   * Events and changes are what readers of the history depend on, such as
+   * a moderation hold; a status label quoting digits stays as it is.
    */
-  public function testScrubbingIsIdempotent(): void {
+  public function testEnvelopeKeepsEventsAndChanges(): void {
+    $envelope = [
+      'schema' => 'civic.revision.v1',
+      'action' => 'updated',
+      'changes' => [[
+        'field' => 'status',
+        'before' => [['id' => '12', 'label' => 'Callback 02211234567']],
+        'after' => [['id' => '13']],
+      ]],
+      'events' => ['moderation_hidden', 'unpublished'],
+      'message' => 'Hidden after a call: Müller, +44 7700 900123.',
+      'future_key' => ['kept' => TRUE],
+    ];
+    $log = json_encode($envelope, self::JSON_FLAGS);
+
+    $this->assertTrue(RevisionLogScrubber::needsScrubbing($log));
+    $scrubbed = RevisionLogScrubber::scrub($log);
+
+    $expected = $envelope;
+    $expected['message'] = self::PLACEHOLDER;
+    $this->assertSame(json_encode($expected, self::JSON_FLAGS), $scrubbed);
+    $this->assertStringNotContainsString('Müller', $scrubbed);
+    $this->assertStringNotContainsString('7700', $scrubbed);
+  }
+
+  /**
+   * Empty messages, empty logs and replaced messages stay byte-identical.
+   */
+  public function testCleanLogsAreUntouched(): void {
+    $envelope = static fn (string $message, array $extra = []): string => json_encode([
+      'schema' => 'civic.revision.v1',
+      'action' => 'updated',
+      'changes' => [[
+        'field' => 'status',
+        'before' => [['id' => '1', 'label' => 'Callback 02211234567']],
+        'after' => [['id' => '2']],
+      ]],
+      'events' => ['scope_sync'],
+      'message' => $message,
+    ] + $extra, self::JSON_FLAGS);
     $logs = [
-      'Call 0049 221 1234567 or mail a.b@example.org',
-      // The escaped "a with macron" reads like a local number only in the
-      // stored text; the canonical encoding removes the escape.
+      '',
+      self::PLACEHOLDER,
+      $envelope(''),
+      $envelope(self::PLACEHOLDER),
+      // Escaped encoding of another writer: nothing to replace, kept as is.
+      json_encode(['schema' => 'civic.revision.v1', 'action' => 'created', 'changes' => [], 'message' => '']),
+      // An envelope without a message holds no free text.
+      json_encode(['schema' => 'civic.revision.v1', 'action' => 'created', 'changes' => []]),
+    ];
+    foreach ($logs as $log) {
+      $this->assertFalse(RevisionLogScrubber::needsScrubbing($log), $log);
+      $this->assertSame($log, RevisionLogScrubber::scrub($log), $log);
+    }
+  }
+
+  /**
+   * Replacing twice gives the same log as replacing once.
+   */
+  public function testReplacementIsIdempotent(): void {
+    $logs = [
+      'Reporter jordan@example.org asked for an update.',
       json_encode([
         'schema' => 'civic.revision.v1',
         'action' => 'updated',
         'changes' => [],
         'events' => ['published'],
-        'message' => mb_chr(0x101) . ' 1234567',
+        // Escaped by another writer: the replacement uses the canonical flags.
+        'message' => 'Stra' . mb_chr(0xDF) . 'e 4',
       ]),
     ];
     foreach ($logs as $log) {
-      $this->assertTrue(RevisionLogScrubber::containsContactData($log));
       $once = RevisionLogScrubber::scrub($log);
-      $this->assertFalse(RevisionLogScrubber::containsContactData($once), $once);
+      $this->assertNotSame($log, $once);
+      $this->assertFalse(RevisionLogScrubber::needsScrubbing($once), $once);
       $this->assertSame($once, RevisionLogScrubber::scrub($once));
     }
-    $canonical = json_decode(RevisionLogScrubber::scrub($logs[1]), TRUE);
-    $this->assertSame(mb_chr(0x101) . ' 1234567', $canonical['message']);
-    $this->assertStringNotContainsString('\\u0101', RevisionLogScrubber::scrub($logs[1]));
-    $this->assertSame(['published'], $canonical['events']);
-  }
-
-  /**
-   * Invalid UTF-8 in a legacy log does not stop the scrubbing.
-   */
-  public function testInvalidUtf8IsScrubbed(): void {
-    $log = "Jordan \xC3\x28 jordan@example.org 0221 123456";
-    $this->assertSame("[REDACTED] \xC3\x28 [REDACTED email] [REDACTED phone]", RevisionLogScrubber::scrub($log, ['jordan']));
+    $decoded = json_decode(RevisionLogScrubber::scrub($logs[1]), TRUE);
+    $this->assertSame(['published'], $decoded['events']);
+    $this->assertSame(self::PLACEHOLDER, $decoded['message']);
   }
 
 }

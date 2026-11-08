@@ -83,6 +83,11 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     'shared table and were not anonymized; previous revisions may retain data.';
 
   /**
+   * Text that replaces the free-text message of an anonymized report's logs.
+   */
+  private const PLACEHOLDER = 'Message removed when the report was anonymized.';
+
+  /**
    * Critical message when archive queue retries are exhausted.
    */
   private const GIVE_UP_MESSAGE = 'Queue processing failed for node @nid; ' .
@@ -381,6 +386,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->set('field_e_mail', 'second@example.org');
     $node->set('field_phone', '+49 221 222222');
     $node->set('field_first_name', 'Janet');
+    RevisionLog::setMessage($node, 'Janet asked to be called back.');
     $node->save();
     $second_revision = (int) $node->getRevisionId();
 
@@ -445,6 +451,8 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $audit = RevisionLog::decode((string) $latest_revision->getRevisionLogMessage());
     self::assertSame(['anonymized'], $audit['events']);
     self::assertSame('', $audit['message']);
+    // The staff note quoting the reporter is gone as well.
+    self::assertSame(self::PLACEHOLDER, RevisionLog::decode($this->revisionLog($second_revision))['message']);
   }
 
   /**
@@ -965,7 +973,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
 
     // Only the log changed: no save, no revision, same changed time.
     self::assertSame($log_revisions, $this->nodeRevisionIds((int) $log_only->id()));
-    self::assertSame('Call back at [REDACTED phone].', RevisionLog::decode($this->revisionLog($log_revisions[0]))['message']);
+    self::assertSame(self::PLACEHOLDER, RevisionLog::decode($this->revisionLog($log_revisions[0]))['message']);
     self::assertSame(1000000000, (int) Node::load($log_only->id())->getChangedTime());
     self::assertSame('', (string) $this->revisionFieldValue($feedback_revision, 'field_feedback'));
     self::assertMatchesRegularExpression('/^[0-9a-f]{10}$/', (string) Node::load($note->id())->get('field_reporter_note')->value);
@@ -1064,12 +1072,14 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
-   * Archiving scrubs contact data from every revision log, keeping events.
+   * Archiving replaces the message of every revision log, keeping events.
    *
    * Covers civic.revision.v1 envelopes, whose events and changes readers of
-   * the history rely on (moderation holds), and legacy free-text logs.
+   * the history rely on (moderation holds), and legacy free-text logs. No
+   * message survives, a neutral staff note included; empty messages stay
+   * empty.
    */
-  public function testArchiveScrubsContactDataFromRevisionLogs(): void {
+  public function testArchiveReplacesTheMessageOfEveryRevisionLog(): void {
     $node = $this->createQueueRequest();
     $this->config('markaspot_archive.settings')
       ->set('anonymize_fields', [
@@ -1078,6 +1088,9 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
         'field_first_name' => 'field_first_name',
       ])
       ->save();
+    $created_vid = (int) $node->getRevisionId();
+    $created_log = $this->revisionLog($created_vid);
+    self::assertSame('', RevisionLog::decode($created_log)['message']);
     $node->set('field_first_name', 'Jordan');
     $node->set('field_phone', '+49 221 123456');
     $node->setNewRevision(TRUE);
@@ -1087,7 +1100,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->setNewRevision(TRUE);
     $node->setUnpublished();
     RevisionLog::setEvent($node, 'moderation_hidden');
-    RevisionLog::setMessage($node, 'Hidden after a call with Jordan at 0221 123456, write to citizen@example.org.');
+    RevisionLog::setMessage($node, 'Hidden after a call with Jordan at +44 7700 900123, write to citizen@example.org.');
     $node->save();
     $hidden_vid = (int) $node->getRevisionId();
     $hidden_before = RevisionLog::decode($this->revisionLog($hidden_vid));
@@ -1099,7 +1112,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->save();
     $legacy_vid = (int) $node->getRevisionId();
     $this->container->get('database')->update('node_revision')
-      ->fields(['revision_log' => 'Reporter citizen@example.org asked for an update. Crew on 12.11.2026, request 1034-2026.'])
+      ->fields(['revision_log' => 'Jordan asked for an update, call +49 (0)221 1234567.'])
       ->condition('vid', $legacy_vid)
       ->execute();
     $this->container->get('entity_type.manager')->getStorage('node')->resetCache([$node->id()]);
@@ -1108,33 +1121,31 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     RevisionLog::setMessage($node, 'Crew scheduled for Tuesday, ticket 1034-2026.');
     $node->save();
     $neutral_vid = (int) $node->getRevisionId();
-    $neutral_log = $this->revisionLog($neutral_vid);
 
     // Staff archive the report with a final note.
     $node->setNewRevision(TRUE);
     $node->set('field_status', $this->archivedStatusId());
-    RevisionLog::setMessage($node, 'Archived; Jordan (+49 170 1234567) was informed.');
+    RevisionLog::setMessage($node, 'Archived; Jordan (call 1234567) was informed.');
     $node->save();
     $archive_vid = (int) $node->getRevisionId();
 
     foreach ($this->nodeRevisionIds((int) $node->id()) as $vid) {
       $log = $this->revisionLog($vid);
-      foreach (['citizen@example.org', 'Jordan', '0221 123456', '1234567'] as $plain) {
+      foreach (['citizen@example.org', 'Jordan', '7700', '1234567', 'Tuesday'] as $plain) {
         self::assertStringNotContainsString($plain, $log, "Revision $vid");
       }
     }
+    self::assertSame($created_log, $this->revisionLog($created_vid), 'An empty message stays empty.');
     $hidden_after = RevisionLog::decode($this->revisionLog($hidden_vid));
-    self::assertSame('Hidden after a call with [REDACTED] at [REDACTED phone], write to [REDACTED email].', $hidden_after['message']);
+    self::assertSame(self::PLACEHOLDER, $hidden_after['message']);
     unset($hidden_before['message'], $hidden_after['message']);
     self::assertSame($hidden_before, $hidden_after);
-    self::assertSame(
-      'Reporter [REDACTED email] asked for an update. Crew on 12.11.2026, request 1034-2026.',
-      $this->revisionLog($legacy_vid)
-    );
-    self::assertSame($neutral_log, $this->revisionLog($neutral_vid));
+    self::assertSame(self::PLACEHOLDER, $this->revisionLog($legacy_vid));
+    self::assertSame(self::PLACEHOLDER, RevisionLog::decode($this->revisionLog($neutral_vid))['message']);
     $archive_log = RevisionLog::decode($this->revisionLog($archive_vid));
-    self::assertSame('Archived; [REDACTED] ([REDACTED phone]) was informed.', $archive_log['message']);
+    self::assertSame(self::PLACEHOLDER, $archive_log['message']);
     self::assertSame('status', $archive_log['changes'][0]['field']);
+    self::assertSame(0, $this->container->get('markaspot_archive.archive')->countBackfillCandidates());
 
     // Saving the same object again must not bring the old note back.
     self::assertSame($this->revisionLog($archive_vid), $node->getRevisionLogMessage());
@@ -1142,6 +1153,79 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->setTitle('Broken streetlight, archived');
     $node->save();
     self::assertSame('', RevisionLog::decode($this->revisionLog((int) $node->getRevisionId()))['message']);
+  }
+
+  /**
+   * The backfill replaces every free-text message, then finds nothing more.
+   *
+   * Only the decoded message counts: a status label quoting a number in the
+   * changes of an envelope keeps no report a candidate. Events, changes,
+   * empty and already replaced messages stay byte-identical, and no
+   * revision is added.
+   */
+  public function testBackfillReplacesMessagesUntilNoneIsLeft(): void {
+    $this->createQueueRequest();
+    $archived = $this->archivedStatusId();
+    $done = 'abc@anonymized.off';
+    $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+    $envelope = static fn (string $message, array $events = []): string => json_encode([
+      'schema' => 'civic.revision.v1',
+      'action' => 'updated',
+      'changes' => [[
+        'field' => 'status',
+        'before' => [['id' => '1', 'label' => 'Callback 02211234567']],
+        'after' => [['id' => $archived]],
+      ]],
+      'events' => $events,
+      'message' => $message,
+    ], $flags);
+
+    $label_only = $this->createRequest(['field_status' => $archived, 'field_e_mail' => $done]);
+    $noted = $this->createRequest(['field_status' => $archived, 'field_e_mail' => $done]);
+    for ($i = 0; $i < 4; $i++) {
+      $noted->setNewRevision(TRUE);
+      $noted->setTitle('Broken streetlight ' . $i);
+      $noted->save();
+    }
+    $vids = $this->nodeRevisionIds((int) $noted->id());
+    $logs = [
+      $vids[0] => $envelope(''),
+      $vids[1] => $envelope('Call 0221 1234567 after five.', ['moderation_hidden']),
+      $vids[2] => 'Call +44 7700 900123, ask for Jordan.',
+      $vids[3] => $envelope(self::PLACEHOLDER),
+      $vids[4] => $envelope('', ['scope_sync']),
+    ];
+    $label_vid = (int) $label_only->getRevisionId();
+    $database = $this->container->get('database');
+    foreach ($logs + [$label_vid => $envelope('')] as $vid => $log) {
+      $database->update('node_revision')->fields(['revision_log' => $log])->condition('vid', $vid)->execute();
+    }
+    $this->container->get('entity_type.manager')->getStorage('node')->resetCache();
+    $service = $this->container->get('markaspot_archive.archive');
+
+    self::assertSame(1, $service->countBackfillCandidates());
+    self::assertSame(['processed' => 1, 'changed' => 1, 'failed' => 0], $service->backfillArchived(10, 20));
+
+    self::assertSame($vids, $this->nodeRevisionIds((int) $noted->id()));
+    $hidden = json_decode($logs[$vids[1]], TRUE);
+    $hidden['message'] = self::PLACEHOLDER;
+    $expected = [
+      $vids[0] => $logs[$vids[0]],
+      $vids[1] => json_encode($hidden, $flags),
+      $vids[2] => self::PLACEHOLDER,
+      $vids[3] => $logs[$vids[3]],
+      $vids[4] => $logs[$vids[4]],
+    ];
+    foreach ($expected as $vid => $log) {
+      self::assertSame($log, $this->revisionLog($vid), "Revision $vid");
+    }
+    self::assertSame($envelope(''), $this->revisionLog($label_vid));
+    self::assertSame(['moderation_hidden'], RevisionLog::decode($this->revisionLog($vids[1]))['events']);
+
+    self::assertSame(0, $service->countBackfillCandidates());
+    self::assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $service->backfillArchived(10, 20));
+    $this->container->get('state')->set(ArchiveService::BACKFILL_CURSOR_STATE, 0);
+    self::assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $service->backfillArchived(10, 20));
   }
 
   /**

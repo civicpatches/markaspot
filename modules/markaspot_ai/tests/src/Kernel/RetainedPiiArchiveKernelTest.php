@@ -213,7 +213,7 @@ final class RetainedPiiArchiveKernelTest extends KernelTestBase {
     $stored = Node::load($node->id());
     $this->assertFalse($stored->isPublished());
     $this->assertStringEndsWith('@anonymized.off', (string) $stored->get('field_e_mail')->value);
-    $this->assertSame('Taken over the phone, call back at [REDACTED phone].', $stored->getRevisionLogMessage());
+    $this->assertSame('Message removed when the report was anonymized.', $stored->getRevisionLogMessage());
     $this->assertSame(0, \Drupal::service('markaspot_archive.archive')->countBackfillCandidates());
   }
 
