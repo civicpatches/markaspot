@@ -51,6 +51,11 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
   private const INDEX = 'archive_requests';
 
   /**
+   * Text that replaces the free-text message of an anonymized report's logs.
+   */
+  private const PLACEHOLDER = 'Message removed when the report was anonymized.';
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
@@ -106,6 +111,12 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
           'property_path' => 'field_e_mail',
           'type' => 'string',
         ],
+        'revision_log' => [
+          'label' => 'Revision log',
+          'datasource_id' => 'entity:node',
+          'property_path' => 'revision_log',
+          'type' => 'string',
+        ],
       ],
       // Cron indexes: the item waits, as after a failed post-request index.
       'options' => ['index_directly' => FALSE, 'cron_limit' => 50],
@@ -159,17 +170,96 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
   }
 
   /**
+   * An erasure without a save tracks the indexed request for reindexing.
+   *
+   * The contact fields were anonymized earlier; only the revision log still
+   * holds personal data. The backfill replaces it directly, without saving
+   * the request, so Search API would not notice: the indexed text must be
+   * tracked for update all the same, and indexing replaces it.
+   */
+  public function testDirectErasureTracksTheIndexedRequest(): void {
+    $node = $this->createArchivedRequestWithNote();
+    $index = Index::load(self::INDEX);
+    $index->indexItems();
+    $service = $this->container->get('markaspot_archive.archive');
+    $this->assertSame(['Call Jordan at +44 7700 900123.'], $this->indexedValues('revision_log'));
+    $this->assertSame(0, $service->countSearchIndexBacklog(), 'Nothing waits for indexing.');
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+
+    $this->assertSame(1, $service->backfillArchived(10, 20)['changed']);
+
+    $item_id = 'entity:node/' . $node->id() . ':' . $node->language()->getId();
+    $this->assertSame([$item_id], array_values($index->getTrackerInstance()->getRemainingItems(-1)));
+    $this->assertSame(1, $service->countSearchIndexBacklog());
+    $this->assertSame(['Call Jordan at +44 7700 900123.'], $this->indexedValues('revision_log'), 'Indexed only on the next indexing.');
+
+    $this->assertSame(['processed' => 1, 'changed' => 1, 'failed' => 0], $service->indexSearchIndexBacklog());
+    $this->assertSame([self::PLACEHOLDER], $this->indexedValues('revision_log'));
+    $this->assertSame(0, $service->countSearchIndexBacklog());
+  }
+
+  /**
+   * An index the catch-up cannot update fails the command and is named.
+   *
+   * A read-only index keeps whatever it holds: the command cannot replace
+   * the old text there, so it must not report success.
+   */
+  public function testReadOnlyIndexFailsTheCommand(): void {
+    $this->createArchivedRequestWithNote();
+    $index = Index::load(self::INDEX);
+    $index->indexItems();
+    $index->set('read_only', TRUE)->save();
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+
+    $dry = $this->command()->backfill($this->options(['dry-run' => TRUE]));
+    $this->assertSame(0, $dry->getExitCode());
+    $this->assertStringContainsString('Requests (archive_requests)', $this->rows($dry)['search index']['note']);
+
+    $result = $this->command()->backfill($this->options());
+    $rows = $this->rows($result);
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertSame(['anonymize', 'on', 1, 1, 1, 0, 0], array_slice(array_values($rows['anonymize']), 0, 7));
+    $this->assertStringContainsString('Requests (archive_requests)', $rows['search index']['note']);
+    $this->assertSame(['Call Jordan at +44 7700 900123.'], $this->indexedValues('revision_log'));
+  }
+
+  /**
+   * Creates an archived request with anonymized contact data and a note.
+   */
+  private function createArchivedRequestWithNote(): Node {
+    $node = Node::create([
+      'type' => 'service_request',
+      'title' => 'Broken streetlight',
+      'field_status' => (string) $this->config('markaspot_archive.settings')->get('status_archived'),
+      'field_e_mail' => 'abc@anonymized.off',
+    ]);
+    $node->setRevisionLogMessage('Call Jordan at +44 7700 900123.');
+    $node->save();
+    return $node;
+  }
+
+  /**
    * Returns the e-mail addresses the test backend holds.
    *
    * @return string[]
    *   Indexed addresses.
    */
   private function indexedEmails(): array {
-    $emails = [];
+    return $this->indexedValues('field_e_mail');
+  }
+
+  /**
+   * Returns the values of one field the test backend holds.
+   *
+   * @return string[]
+   *   Indexed values of all items.
+   */
+  private function indexedValues(string $field): array {
+    $values = [];
     foreach ($this->container->get('state')->get('search_api_test.backend.indexed.' . self::INDEX, []) as $fields) {
-      array_push($emails, ...array_map('strval', $fields['field_e_mail'] ?? []));
+      array_push($values, ...array_map('strval', $fields[$field] ?? []));
     }
-    return $emails;
+    return $values;
   }
 
   /**

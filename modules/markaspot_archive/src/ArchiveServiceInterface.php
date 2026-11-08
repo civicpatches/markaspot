@@ -177,6 +177,19 @@ interface ArchiveServiceInterface {
   public function countSearchIndexBacklog(): ?int;
 
   /**
+   * Returns the search indexes of requests the catch-up cannot update.
+   *
+   * Indexes with a node datasource that are read-only (enabled or not), or
+   * enabled without a valid tracker or an enabled server: they may keep
+   * text the anonymization removed. A disabled index is no such index, its
+   * server dropped its data when it was disabled.
+   *
+   * @return array<string, string>
+   *   Index labels keyed by index ID, empty without Search API.
+   */
+  public function unprocessableSearchIndexes(): array;
+
+  /**
    * Indexes the waiting search index items of archived requests now.
    *
    * @return array{processed: int, changed: int, failed: int}

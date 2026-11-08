@@ -47,6 +47,14 @@ final class ArchiveCommands extends DrushCommands {
    */
   private const FAILED_NOTE = 'Some requests failed: a later run retries them. The markaspot_archive log names them and the reason.';
 
+  /**
+   * TRUE when the running catch-up could not finish its work.
+   *
+   * Set for causes no row count shows, such as a search index the catch-up
+   * cannot update.
+   */
+  private bool $incomplete = FALSE;
+
   public function __construct(
     protected readonly ArchiveServiceInterface $archiveService,
     protected readonly ConfigFactoryInterface $configFactory,
@@ -159,11 +167,12 @@ final class ArchiveCommands extends DrushCommands {
    *
    * Then indexes the search index items of archived requests that wait for
    * indexing, so no index keeps the text from before (step "search index",
-   * counted in index items, only with Search API).
+   * counted in index items, only with Search API). A search index the
+   * catch-up cannot update, such as a read-only one, is named in the note.
    *
-   * Exits with 1 when a request failed, or when a step whose setting is on
-   * still has requests left although no --limit was given. A dry run always
-   * exits with 0.
+   * Exits with 1 when a request failed, when a step whose setting is on
+   * still has requests left although no --limit was given, or when a search
+   * index cannot be updated. A dry run always exits with 0.
    */
   #[CLI\Command(
     name: 'markaspot:archive:backfill',
@@ -237,6 +246,7 @@ final class ArchiveCommands extends DrushCommands {
       );
     }
     $dry_run = !empty($options['dry-run']);
+    $this->incomplete = FALSE;
 
     if (!$dry_run && !$this->lock->acquire(
       ArchiveService::CATCH_UP_LOCK,
@@ -264,7 +274,9 @@ final class ArchiveCommands extends DrushCommands {
         $this->lock->release(ArchiveService::CATCH_UP_LOCK);
       }
     }
-    $exit = $dry_run ? self::EXIT_SUCCESS : $this->catchUpExitCode($rows, $limit);
+    $exit = $dry_run || (!$this->incomplete && $this->catchUpExitCode($rows, $limit) === self::EXIT_SUCCESS)
+      ? self::EXIT_SUCCESS
+      : self::EXIT_FAILURE;
     return CommandResult::dataWithExitCode(new RowsOfFields($rows), $exit);
   }
 
@@ -384,6 +396,16 @@ final class ArchiveCommands extends DrushCommands {
       if ($row['failed'] > 0 || $row['remaining'] > 0) {
         $row['note'] = 'Items failed to index: Search API retries them on cron. The markaspot_archive and search_api logs name the reason.';
       }
+    }
+    $unprocessable = $this->archiveService->unprocessableSearchIndexes();
+    if ($unprocessable !== []) {
+      $names = [];
+      foreach ($unprocessable as $id => $label) {
+        $names[] = sprintf('%s (%s)', $label, $id);
+      }
+      $row['note'] = trim($row['note'] . ' Cannot update ' . implode(', ', $names)
+        . ': read-only, or without a valid tracker or server. They may keep text the anonymization removed; fix them and reindex, or clear them.');
+      $this->incomplete = TRUE;
     }
     return $row;
   }

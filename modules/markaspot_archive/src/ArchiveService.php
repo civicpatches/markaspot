@@ -6,6 +6,7 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Database\DatabaseException;
 use Drupal\Core\Database\Query\SelectInterface;
+use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\FieldableEntityInterface;
@@ -21,6 +22,7 @@ use Drupal\Core\State\StateInterface;
 use Drupal\eca\EventSubscriber\DynamicSubscriber;
 use Drupal\node\NodeInterface;
 use Drupal\search_api\IndexInterface;
+use Drupal\search_api\Plugin\search_api\datasource\ContentEntityTrackingManager;
 use Drupal\search_api\Utility\Utility as SearchApiUtility;
 
 /**
@@ -155,6 +157,7 @@ class ArchiveService implements ArchiveServiceInterface {
     LoggerChannelInterface $logger,
     Connection $database,
     protected ?ModuleHandlerInterface $moduleHandler = NULL,
+    protected ?ContentEntityTrackingManager $searchTracking = NULL,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->configFactory = $config_factory;
@@ -706,8 +709,10 @@ class ArchiveService implements ArchiveServiceInterface {
    *
    * Search API tracks every save of a request, syncing ones included, and
    * indexes the item at the end of the request (index_directly) or on cron.
-   * Until then the index still holds the old text. Items of indexes that are
-   * disabled or have no node datasource are left out.
+   * Until then the index still holds the old text. An erasure without a save
+   * tracks the request itself (see ::trackForReindexing()). Items of indexes
+   * that are disabled, have no node datasource or no valid tracker are left
+   * out; ::unprocessableSearchIndexes() names those still holding data.
    *
    * @return array<string, string[]>|null
    *   Item IDs keyed by index ID, NULL when Search API is not enabled.
@@ -749,6 +754,30 @@ class ArchiveService implements ArchiveServiceInterface {
       }
     }
     return $backlog;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function unprocessableSearchIndexes(): array {
+    if ($this->moduleHandler === NULL || !$this->moduleHandler->moduleExists('search_api')) {
+      return [];
+    }
+    $indexes = [];
+    foreach ($this->entityTypeManager->getStorage('search_api_index')->loadMultiple() as $index) {
+      if (!$index instanceof IndexInterface || !$index->isValidDatasource('entity:node')) {
+        continue;
+      }
+      // Disabling an index removes its data from the server; a read-only
+      // index keeps it, enabled or not.
+      if (
+        $index->isReadOnly()
+        || ($index->status() && (!$index->hasValidTracker() || !$index->isServerEnabled()))
+      ) {
+        $indexes[(string) $index->id()] = (string) $index->label();
+      }
+    }
+    return $indexes;
   }
 
   /**
@@ -1069,7 +1098,27 @@ class ArchiveService implements ArchiveServiceInterface {
     $this->moduleHandler?->invokeAll('markaspot_report_anonymized', [$node]);
     $this->scrubRevisionLogs($node);
     $this->entityTypeManager->getStorage('node')->resetCache([$node->id()]);
+    $this->trackForReindexing($node);
     return TRUE;
+  }
+
+  /**
+   * Marks an erased request for reindexing in every index that holds it.
+   *
+   * The erasure writes previous revisions, revision logs and derived data
+   * such as retained PII originals directly, without saving the request, so
+   * Search API does not notice it: an index could keep the old text. Search
+   * API's own tracking marks the request as changed in every enabled index
+   * whose datasource covers it, as a save would. The tracker row is the
+   * pending work; it is written in the transaction of the erasure and stays
+   * until the item is indexed (at the end of the request, on cron or by
+   * markaspot:archive:backfill, see ::countSearchIndexBacklog()). Indexes
+   * that cannot be updated are reported by ::unprocessableSearchIndexes().
+   */
+  protected function trackForReindexing(EntityInterface $entity): void {
+    if ($this->searchTracking !== NULL && $entity instanceof ContentEntityInterface && !$entity->isNew()) {
+      $this->searchTracking->trackEntityChange($entity);
+    }
   }
 
   /**
@@ -1337,6 +1386,7 @@ class ArchiveService implements ArchiveServiceInterface {
     if ($updated > 0 || $scrubbed > 0) {
       $this->entityTypeManager->getStorage($archivable->getEntityTypeId())->resetCache([$archivable->id()]);
     }
+    $this->trackForReindexing($archivable);
     return $updated;
   }
 
