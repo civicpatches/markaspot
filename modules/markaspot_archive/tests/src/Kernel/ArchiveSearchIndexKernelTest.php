@@ -345,13 +345,44 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     $this->assertSame(1, $result->getExitCode());
     $this->assertStringContainsString('Requests (archive_requests)', $this->rows($result)['search index']['note']);
 
-    // Once the server has removed it, a disabled index without a server
-    // holds nothing.
+    // The server has removed it now, but nothing records that for an index
+    // without a server: it still counts.
     $state->set('search_api_test.backend.exception.removeIndex', FALSE);
     $this->container->get('search_api.server_task_manager')->execute();
     $this->assertSame(0, $tasks->getTasksCount(['index_id' => self::INDEX]));
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
+    $this->assertSame(1, $this->command()->backfill($this->options())->getExitCode());
+
+    // Deleting the unused index clears the report.
+    Index::load(self::INDEX)->delete();
     $this->assertSame([], $service->unprocessableSearchIndexes());
     $this->assertSame(0, $this->command()->backfill($this->options())->getExitCode());
+  }
+
+  /**
+   * A disabled index detached from a database server still counts.
+   *
+   * Once the index is detached, nothing tells which backend held it or
+   * whether that backend removed it, even when it was a database server
+   * that dropped its tables.
+   */
+  public function testDetachedDisabledIndexCounts(): void {
+    Server::create([
+      'id' => 'archive_db',
+      'name' => 'Database server',
+      'backend' => 'search_api_db',
+      'backend_config' => ['database' => 'default:default', 'min_chars' => 1],
+    ])->save();
+    Index::load(self::INDEX)->setServer(Server::load('archive_db'))->save();
+    $this->createArchivedRequestWithNote();
+    Index::load(self::INDEX)->indexItems();
+    $service = $this->container->get('markaspot_archive.archive');
+    Index::load(self::INDEX)->disable()->save();
+    $this->assertFalse($this->container->get('keyvalue')->get('search_api_db.indexes')->has(self::INDEX));
+    $this->assertSame([], $service->unprocessableSearchIndexes(), 'The database server dropped the tables.');
+
+    Index::load(self::INDEX)->setServer(NULL)->save();
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
   }
 
   /**

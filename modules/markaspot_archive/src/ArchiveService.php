@@ -895,12 +895,13 @@ class ArchiveService implements ArchiveServiceInterface {
    * failed removal waits as a Search API task. The rule is conservative. A
    * disabled index counts as empty only when
    * - no Search API task waits for it (such as a deferred removeIndex), and
-   * - no search_api_db server keeps tables for it, and
-   * - it has no server, or its server is a search_api_db server, which
-   *   drops the tables and forgets the index in one step.
+   * - its server is a search_api_db server, which drops the tables and
+   *   forgets the index in one step, and that server keeps no tables for it.
    * Other backends cannot tell whether they still hold the index, so a
-   * disabled index on them always counts. Known limit: a backend other than
-   * search_api_db that an index was detached from leaves no trace.
+   * disabled index on them always counts. A disabled index without a server
+   * counts as well: nothing records which backend held it before, or
+   * whether that backend removed it. An index that is no longer used is
+   * deleted to clear the report.
    */
   protected function disabledIndexMayHoldData(IndexInterface $index): bool {
     $index_id = (string) $index->id();
@@ -914,14 +915,11 @@ class ArchiveService implements ArchiveServiceInterface {
       return TRUE;
     }
     $db_tables = $this->keyValue?->get(self::SEARCH_API_DB_INDEXES)->has($index_id);
-    if ($db_tables === TRUE) {
+    if ($db_tables !== FALSE || in_array($index->getServerId(), [NULL, ''], TRUE)) {
       return TRUE;
     }
-    if (in_array($index->getServerId(), [NULL, ''], TRUE)) {
-      return FALSE;
-    }
     $server = $index->getServerInstanceIfAvailable();
-    return $db_tables === NULL || $server === NULL || $server->getBackendId() !== 'search_api_db';
+    return $server === NULL || $server->getBackendId() !== 'search_api_db';
   }
 
   /**

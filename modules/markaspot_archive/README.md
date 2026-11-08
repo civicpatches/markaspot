@@ -74,11 +74,16 @@ This module works with:
   read-only index, an enabled index without a valid tracker or server, or a
   disabled index whose data may still sit on a server. Disabling an index
   removes its data only from an enabled server, and a failed removal waits
-  as a Search API task. A disabled index therefore counts until no Search
-  API task waits for it, no Search API database server keeps tables for it,
-  and it either has no server or sits on a Search API database server
-  (`search_api_db`, which drops the tables when the index is disabled).
-  On other backends a disabled index always counts: clear or delete it there.
+  as a Search API task. A disabled index therefore counts unless it sits on
+  a Search API database server (`search_api_db`, which drops the tables
+  when the index is disabled), that server keeps no tables for it and no
+  Search API task waits for it. A disabled index on any other backend
+  always counts, even after its data was cleared there: the module cannot
+  verify that. A disabled index without a server always counts too, because
+  nothing records which backend held it before. To clear the report for an
+  index that is no longer used, clear its data on the backend and delete
+  the index (Search API index configuration); an index still in use is
+  enabled again instead.
 - Category-specific overrides via taxonomy term fields
 - Implements data privacy protections through field anonymization
 
