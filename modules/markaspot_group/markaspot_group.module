@@ -4652,12 +4652,23 @@ function markaspot_group_node_update(NodeInterface $node): void {
     return;
   }
 
+  // A syncing save is a system write such as the archive catch-up, which runs
+  // on thousands of old requests: relation drift is still repaired, but the
+  // relations it adds back must not mail the organisation, and no assignment
+  // mail goes out.
+  $silence = $node->isSyncing() && !_markaspot_group_notifications_silenced();
+  if ($silence) {
+    _markaspot_group_set_notifications_silenced(TRUE);
+  }
   try {
     _markaspot_group_reconcile_service_request_relationships($node);
     _markaspot_group_notify_pending_assigned_team($node);
     _markaspot_group_notify_assignee_once($node);
   }
   finally {
+    if ($silence) {
+      _markaspot_group_set_notifications_silenced(FALSE);
+    }
     if (!empty($node->_markaspot_group_sync_lock_held)) {
       _markaspot_group_release_service_request_sync_lock($node);
       unset($node->_markaspot_group_sync_lock_held);
@@ -4686,6 +4697,13 @@ function _markaspot_group_reconcile_service_request_relationships(NodeInterface|
       return;
     }
 
+    // Group re-saves the request on every relation it adds or deletes. When
+    // a system write repairs the drift, that save is part of it: keep the
+    // changed time and the stored values, as the triggering save does.
+    $inherit_syncing = $node instanceof NodeInterface && $node->isSyncing() && !$fresh->isSyncing();
+    if ($inherit_syncing) {
+      $fresh->setSyncing(TRUE);
+    }
     _markaspot_group_set_syncing(TRUE);
     try {
       $etm = \Drupal::entityTypeManager();
@@ -4710,6 +4728,11 @@ function _markaspot_group_reconcile_service_request_relationships(NodeInterface|
       $actual_jur_ids = [];
       $actual_org_ids = [];
       foreach ($relationships as $relationship) {
+        if ($inherit_syncing) {
+          // A cached relation may still hold an older copy of the request,
+          // which Group re-saves when the relation is deleted.
+          $relationship->set('entity_id', $fresh);
+        }
         $group = $relationship->getGroup();
         if (!$group instanceof GroupInterface) {
           continue;
@@ -4734,7 +4757,7 @@ function _markaspot_group_reconcile_service_request_relationships(NodeInterface|
       if ($desired_jur_id !== NULL && empty($actual_jur_ids[$desired_jur_id])) {
         $group = $group_storage->load($desired_jur_id);
         if (_markaspot_group_is_jurisdiction_group($group)) {
-          $group->addRelationship($fresh, $plugin_id);
+          _markaspot_group_add_reconciled_relationship($group, $fresh, $plugin_id, $inherit_syncing);
         }
       }
 
@@ -4746,18 +4769,47 @@ function _markaspot_group_reconcile_service_request_relationships(NodeInterface|
         if ($group instanceof GroupInterface
           && $group->bundle() === _markaspot_group_get_org_group_type()
           && _markaspot_group_org_group_matches_jurisdiction($group, $desired_jur_id)) {
-          $group->addRelationship($fresh, $plugin_id);
+          _markaspot_group_add_reconciled_relationship($group, $fresh, $plugin_id, $inherit_syncing);
         }
       }
     }
     finally {
       _markaspot_group_set_syncing(FALSE);
+      if ($inherit_syncing) {
+        $fresh->setSyncing(FALSE);
+      }
     }
   });
   if (!$synced) {
     $node_id = $node instanceof NodeInterface ? (int) $node->id() : (int) $node;
     throw new EntityStorageException(sprintf('Cannot acquire group sync lock for service_request %d.', $node_id));
   }
+}
+
+/**
+ * Adds a relation the reconciliation found missing.
+ *
+ * @param \Drupal\group\Entity\GroupInterface $group
+ *   The jurisdiction or organisation group.
+ * @param \Drupal\node\NodeInterface $node
+ *   The reloaded service request.
+ * @param string $plugin_id
+ *   The relation plugin ID.
+ * @param bool $bind
+ *   TRUE to let the relation hold this copy of the request, so the re-save
+ *   Group runs after the insert keeps its syncing flag. Group itself stores
+ *   only the ID and loads a new copy once the cache was reset.
+ */
+function _markaspot_group_add_reconciled_relationship(GroupInterface $group, NodeInterface $node, string $plugin_id, bool $bind): void {
+  if (!$bind) {
+    $group->addRelationship($node, $plugin_id);
+    return;
+  }
+  $relationship = \Drupal::entityTypeManager()
+    ->getStorage('group_relationship')
+    ->createForEntityInGroup($node, $group, $plugin_id);
+  $relationship->set('entity_id', $node);
+  $relationship->save();
 }
 
 /**
@@ -5753,6 +5805,27 @@ function _markaspot_group_set_syncing(bool $syncing): void {
 }
 
 /**
+ * Checks whether assignment notifications are silenced for a system save.
+ *
+ * @return bool
+ *   TRUE while a syncing node update is processed.
+ */
+function _markaspot_group_notifications_silenced(): bool {
+  return drupal_static(__FUNCTION__, FALSE);
+}
+
+/**
+ * Silences or restores assignment notifications.
+ *
+ * @param bool $silenced
+ *   Whether organisation and assignee mails are skipped.
+ */
+function _markaspot_group_set_notifications_silenced(bool $silenced): void {
+  $static = &drupal_static('_markaspot_group_notifications_silenced', FALSE);
+  $static = $silenced;
+}
+
+/**
  * Derives the organisation group from a node's category term.
  *
  * When a jurisdiction ID is provided, first searches for an org in that
@@ -6135,6 +6208,9 @@ function _markaspot_group_notify_pending_assigned_team(NodeInterface $node): voi
  * Sends one organisation notification per request and org per PHP request.
  */
 function _markaspot_group_notify_organisation_group_once(NodeInterface $node, GroupInterface $org_group): void {
+  if (_markaspot_group_notifications_silenced()) {
+    return;
+  }
   $sent =& drupal_static(__FUNCTION__, []);
   $node_key = $node->id() ? (string) $node->id() : 'new:' . spl_object_id($node);
   $key = $node_key . ':' . (int) $org_group->id();
@@ -6155,6 +6231,9 @@ function _markaspot_group_notify_organisation_group_once(NodeInterface $node, Gr
  *   TRUE when called for a newly inserted node.
  */
 function _markaspot_group_notify_assignee_once(NodeInterface $node, bool $is_insert = FALSE): void {
+  if (_markaspot_group_notifications_silenced()) {
+    return;
+  }
   if (!$node->hasField('field_assignee') || $node->get('field_assignee')->isEmpty()) {
     return;
   }
