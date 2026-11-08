@@ -135,6 +135,18 @@ final class OrganisationRelationSyncKernelTest extends KernelTestBase {
     $this->installSchema('node', ['node_access']);
     $this->installConfig(['system', 'user', 'field', 'filter', 'node', 'group']);
     $this->container->get('config.storage')->write('markaspot_open311.settings', ['status_note_auto_create' => FALSE]);
+    // A new request in a category with a jurisdiction asks the Open311
+    // processor for its initial status; markaspot_open311 is not enabled here.
+    $this->container->set('markaspot_open311.processor', new class {
+
+      /**
+       * Leaves the initial status unset.
+       */
+      public function getInitialStatusTid(int $jurisdictionId): ?int {
+        return NULL;
+      }
+
+    });
 
     User::create(['uid' => 0, 'name' => '', 'status' => 0])->save();
     $admin = User::create(['uid' => 1, 'name' => 'admin', 'status' => 1, 'mail' => 'admin@example.test']);
