@@ -265,8 +265,9 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
 
     $this->assertSame([], $this->collectedMails());
     $this->assertCatchUpResult($before, $nodeCount);
+    $this->assertSame(0, $rows->getExitCode());
     $remaining = [];
-    foreach ($rows as $row) {
+    foreach ($rows->getOutputData() as $row) {
       $remaining[$row['step']] = $row['remaining'];
     }
     $this->assertSame(['unpublish' => 0, 'anonymize' => 0], $remaining);

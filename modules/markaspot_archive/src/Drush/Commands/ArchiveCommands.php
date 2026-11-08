@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\markaspot_archive\Drush\Commands;
 
 use Drupal\service_request\RevisionLog;
+use Consolidation\AnnotatedCommand\CommandResult;
 use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
@@ -40,6 +41,11 @@ final class ArchiveCommands extends DrushCommands {
    * Seconds a catch-up batch of the backfill command may take.
    */
   private const BACKFILL_BATCH_TIME_BUDGET = 300;
+
+  /**
+   * Note of a catch-up step in which requests failed.
+   */
+  private const FAILED_NOTE = 'Some requests failed: a later run retries them. The markaspot_archive log names them and the reason.';
 
   public function __construct(
     protected readonly ArchiveServiceInterface $archiveService,
@@ -150,6 +156,10 @@ final class ArchiveCommands extends DrushCommands {
    * otherwise works through in steps of 50, with the same saves: the changed
    * time is kept and no mail goes out. Running it again is safe; finished
    * requests are no longer candidates.
+   *
+   * Exits with 1 when a request failed, or when a step whose setting is on
+   * still has requests left although no --limit was given. A dry run always
+   * exits with 0.
    */
   #[CLI\Command(
     name: 'markaspot:archive:backfill',
@@ -200,7 +210,7 @@ final class ArchiveCommands extends DrushCommands {
       'limit' => 0,
       'batch-size' => self::BACKFILL_BATCH_SIZE,
     ],
-  ): RowsOfFields {
+  ): CommandResult {
     $only = (string) ($options['only'] ?? '');
     if (!in_array($only, ['', 'unpublish', 'anonymize'], TRUE)) {
       throw new \InvalidArgumentException(
@@ -246,7 +256,28 @@ final class ArchiveCommands extends DrushCommands {
         $this->lock->release(ArchiveService::CATCH_UP_LOCK);
       }
     }
-    return new RowsOfFields($rows);
+    $exit = $dry_run ? self::EXIT_SUCCESS : $this->catchUpExitCode($rows, $limit);
+    return CommandResult::dataWithExitCode(new RowsOfFields($rows), $exit);
+  }
+
+  /**
+   * Returns the exit code of a catch-up run.
+   *
+   * @param array<int, array<string, int|string>> $rows
+   *   The result rows.
+   * @param int $limit
+   *   The --limit option, 0 for all.
+   */
+  private function catchUpExitCode(array $rows, int $limit): int {
+    foreach ($rows as $row) {
+      if ($row['setting'] !== 'on') {
+        continue;
+      }
+      if ((int) $row['failed'] > 0 || ($limit === 0 && (int) $row['remaining'] > 0)) {
+        return self::EXIT_FAILURE;
+      }
+    }
+    return self::EXIT_SUCCESS;
   }
 
   /**
@@ -274,11 +305,17 @@ final class ArchiveCommands extends DrushCommands {
           $size,
           self::BACKFILL_BATCH_TIME_BUDGET
         ));
-      $row['note'] = $this->state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE)
-        ? 'The one-time pass has ended.'
-        : 'Limit reached: cron or the next run continues.';
+      if ($row['failed'] > 0) {
+        $row['note'] = self::FAILED_NOTE;
+      }
+      elseif ($this->state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE)) {
+        $row['note'] = 'The one-time pass has ended.';
+      }
     }
     $row['remaining'] = $this->archiveService->countUnpublishBacklog();
+    if ($row['note'] === '' && $row['remaining'] > 0) {
+      $row['note'] = 'Limit reached: cron or the next run continues.';
+    }
     return $row;
   }
 
@@ -306,9 +343,7 @@ final class ArchiveCommands extends DrushCommands {
           $size,
           self::BACKFILL_BATCH_TIME_BUDGET
         ));
-      $row['note'] = $row['failed'] > 0
-        ? 'Some requests failed: the markaspot_archive log names them and the reason.'
-        : '';
+      $row['note'] = $row['failed'] > 0 ? self::FAILED_NOTE : '';
     }
     $row['remaining'] = $this->archiveService->countBackfillCandidates();
     if ($row['note'] === '' && $row['remaining'] > 0) {

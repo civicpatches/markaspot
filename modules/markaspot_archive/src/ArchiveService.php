@@ -55,6 +55,11 @@ class ArchiveService implements ArchiveServiceInterface {
   public const UNPUBLISH_BACKLOG_DONE_STATE = 'markaspot_archive.unpublish_backlog_done';
 
   /**
+   * State key of the node IDs the unpublish catch-up failed to unpublish.
+   */
+  public const UNPUBLISH_BACKLOG_FAILED_STATE = 'markaspot_archive.unpublish_backlog_failed';
+
+  /**
    * Telephone value written by ::anonymizedValue().
    */
   protected const ANONYMIZED_PHONE = '+49-0123459995555';
@@ -77,6 +82,16 @@ class ArchiveService implements ArchiveServiceInterface {
    * @var \WeakMap<\Drupal\node\NodeInterface, array>
    */
   protected \WeakMap $pendingRevisionValues;
+
+  /**
+   * Node IDs the unpublish catch-up failed on during this request.
+   *
+   * They are retried on a later run, not again in the same one: the operator
+   * command calls the catch-up batch by batch until nothing is processed.
+   *
+   * @var array<int, true>
+   */
+  protected array $unpublishFailedThisRequest = [];
 
   /**
    * Plain contact values ::anonymize() replaced, per entity.
@@ -456,25 +471,37 @@ class ArchiveService implements ArchiveServiceInterface {
       return $result;
     }
 
+    // Requests that failed on an earlier run come first.
+    $failed = $this->unpublishFailures();
+    $retries = array_slice(array_values(array_diff($failed, array_keys($this->unpublishFailedThisRequest))), 0, $limit);
     $cursor = (int) $this->state->get(self::UNPUBLISH_BACKLOG_CURSOR_STATE, 0);
-    $nids = $this->publishedArchivedCandidates($archived_status, $cursor, $limit);
-    if ($nids === []) {
-      // Every node has been passed once. Later archive transitions unpublish
-      // on presave, and a report staff republish afterwards stays published.
-      $this->state->set(self::UNPUBLISH_BACKLOG_DONE_STATE, TRUE);
-      $this->state->delete(self::UNPUBLISH_BACKLOG_CURSOR_STATE);
+    $fresh = count($retries) < $limit
+      ? $this->publishedArchivedCandidates($archived_status, $cursor, $limit - count($retries))
+      : [];
+    if ($retries === [] && $fresh === []) {
+      // Every node has been passed once and no failure is left to retry.
+      // Later archive transitions unpublish on presave, and a report staff
+      // republish afterwards stays published.
+      if ($failed === []) {
+        $this->state->set(self::UNPUBLISH_BACKLOG_DONE_STATE, TRUE);
+        $this->state->delete(self::UNPUBLISH_BACKLOG_CURSOR_STATE);
+        $this->state->delete(self::UNPUBLISH_BACKLOG_FAILED_STATE);
+      }
       return $result;
     }
 
     $started = microtime(TRUE);
-    foreach ($nids as $nid) {
+    foreach ([...$retries, ...$fresh] as $nid) {
       if (microtime(TRUE) - $started > $time_budget) {
         break;
       }
-      $cursor = (int) $nid;
+      $nid = (int) $nid;
+      if (!in_array($nid, $retries, TRUE)) {
+        $cursor = $nid;
+      }
       $result['processed']++;
       try {
-        $changed = $this->changeArchivedRequest((int) $nid, $archived_status, TRUE, function (NodeInterface $node): bool {
+        $changed = $this->changeArchivedRequest($nid, $archived_status, TRUE, function (NodeInterface $node): bool {
           if (!$this->unpublishTranslations($node)) {
             return FALSE;
           }
@@ -486,19 +513,29 @@ class ArchiveService implements ArchiveServiceInterface {
         if ($changed) {
           $result['changed']++;
         }
+        // Unpublished, or no longer archived or published: nothing to retry.
+        unset($failed[$nid]);
       }
       catch (DatabaseException $e) {
         throw $e;
       }
       catch (\Throwable $e) {
         $result['failed']++;
+        $failed[$nid] = $nid;
+        $this->unpublishFailedThisRequest[$nid] = TRUE;
         $this->logger->warning(
-          'Archived node @nid could not be unpublished: @error',
+          'Archived node @nid could not be unpublished, a later run retries it: @error',
           ['@nid' => $nid, '@error' => $e->getMessage()]
         );
       }
     }
     $this->state->set(self::UNPUBLISH_BACKLOG_CURSOR_STATE, $cursor);
+    if ($failed === []) {
+      $this->state->delete(self::UNPUBLISH_BACKLOG_FAILED_STATE);
+    }
+    else {
+      $this->state->set(self::UNPUBLISH_BACKLOG_FAILED_STATE, $failed);
+    }
 
     if ($result['changed'] > 0 || $result['failed'] > 0) {
       $this->logger->notice(
@@ -507,6 +544,20 @@ class ArchiveService implements ArchiveServiceInterface {
       );
     }
     return $result;
+  }
+
+  /**
+   * Returns the node IDs the unpublish catch-up has yet to retry.
+   *
+   * @return array<int, int>
+   *   Node IDs keyed by node ID.
+   */
+  protected function unpublishFailures(): array {
+    $failed = [];
+    foreach ((array) $this->state->get(self::UNPUBLISH_BACKLOG_FAILED_STATE, []) as $nid) {
+      $failed[(int) $nid] = (int) $nid;
+    }
+    return $failed;
   }
 
   /**
@@ -604,7 +655,13 @@ class ArchiveService implements ArchiveServiceInterface {
       return 0;
     }
     $cursor = (int) $this->state->get(self::UNPUBLISH_BACKLOG_CURSOR_STATE, 0);
-    return count($this->publishedArchivedCandidates($archived_status, $cursor, NULL));
+    $pending = $this->publishedArchivedCandidates($archived_status, $cursor, NULL);
+    $failed = array_diff($this->unpublishFailures(), $pending);
+    if ($failed !== []) {
+      // Failures below the cursor that are still archived and published.
+      $pending = [...$pending, ...$this->publishedArchivedCandidates($archived_status, 0, NULL, array_values($failed))];
+    }
+    return count($pending);
   }
 
   /**
@@ -715,11 +772,13 @@ class ArchiveService implements ArchiveServiceInterface {
    *   Only node ids above this one are returned.
    * @param int|null $limit
    *   Maximum number of node ids, NULL for all.
+   * @param int[] $only
+   *   Only these node ids, if any.
    *
    * @return int[]
    *   Node ids in ascending order.
    */
-  protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit): array {
+  protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit, array $only = []): array {
     $storage = $this->entityTypeManager->getStorage('node');
     if (!$storage instanceof SqlContentEntityStorage) {
       return [];
@@ -737,6 +796,9 @@ class ArchiveService implements ArchiveServiceInterface {
       ->condition('n.status', 1)
       ->condition('n.nid', $cursor, '>')
       ->condition('s.' . $mapping->getFieldColumnName($status, 'target_id'), $archived_status);
+    if ($only !== []) {
+      $query->condition('n.nid', $only, 'IN');
+    }
     $query->distinct()->orderBy('n.nid');
     if ($limit !== NULL) {
       $query->range(0, $limit);

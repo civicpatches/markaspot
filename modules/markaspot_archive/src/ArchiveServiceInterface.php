@@ -101,6 +101,11 @@ interface ArchiveServiceInterface {
    * so a request staff republish afterwards stays published. Deleting the
    * state key markaspot_archive.unpublish_backlog_done runs it again.
    *
+   * A request that fails is kept in the state key
+   * markaspot_archive.unpublish_backlog_failed and retried on a later run
+   * (not again in the same request); the pass does not end while one is left.
+   * A request staff reopened or unpublished in the meantime is dropped.
+   *
    * @param int $limit
    *   Maximum number of nodes to process.
    * @param int $time_budget
@@ -135,8 +140,9 @@ interface ArchiveServiceInterface {
   /**
    * Counts the requests the one-time unpublish pass still has to visit.
    *
-   * Published archived requests above the pass cursor, independent of the
-   * "unpublish" setting. Zero once the pass has ended.
+   * Published archived requests above the pass cursor and failed ones still
+   * waiting for a retry, independent of the "unpublish" setting. Zero once
+   * the pass has ended.
    *
    * @return int
    *   Number of published archived requests left in the pass.

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_archive\Kernel;
 
 use Drupal\service_request\RevisionLog;
+use Consolidation\AnnotatedCommand\CommandResult;
 use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
 use Drupal\Core\Database\DatabaseExceptionWrapper;
+use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\Core\Logger\LoggerChannel;
 use Drupal\Core\Logger\RfcLogLevel;
 use Drupal\Core\Queue\QueueFactory;
@@ -21,6 +23,7 @@ use Drupal\markaspot_archive\ArchiveServiceInterface;
 use Drupal\markaspot_archive\Plugin\QueueWorker\ArchiveQueueWorker;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
+use Drupal\node\NodeInterface;
 use Drupal\taxonomy\Entity\Term;
 use Drupal\taxonomy\Entity\Vocabulary;
 use Psr\Log\LogLevel;
@@ -62,6 +65,11 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
    * @var \Drupal\Tests\markaspot_archive\Kernel\ArchiveAnonymizerTestLogger
    */
   private ArchiveAnonymizerTestLogger $loggerSink;
+
+  /**
+   * Node whose next save fails, if any.
+   */
+  private ?int $failingNid = NULL;
 
   /**
    * Category term id.
@@ -1252,13 +1260,87 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * A failed unpublish is retried on a later run and keeps the pass open.
+   */
+  public function testUnpublishBacklogRetriesFailuresBeforeItEnds(): void {
+    $nids = $this->createArchivedBacklog(3);
+    $this->failingNid = $nids[1];
+    $state = $this->container->get('state');
+
+    $run = $this->freshArchiveService();
+    self::assertSame(['processed' => 3, 'changed' => 2, 'failed' => 1], $run->unpublishArchivedBacklog(10, 20));
+    // The same run does not try again, and the pass does not end.
+    self::assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $run->unpublishArchivedBacklog(10, 20));
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    self::assertSame([$nids[1] => $nids[1]], $state->get(ArchiveService::UNPUBLISH_BACKLOG_FAILED_STATE));
+    self::assertSame(1, $run->countUnpublishBacklog());
+    self::assertTrue(Node::load($nids[1])->isPublished());
+
+    // The next cron run retries it; it still fails.
+    self::assertSame(['processed' => 1, 'changed' => 0, 'failed' => 1], $this->freshArchiveService()->unpublishArchivedBacklog(10, 20));
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+
+    // Once the cause is gone, a later run unpublishes it and the pass ends.
+    $this->failingNid = NULL;
+    $run = $this->freshArchiveService();
+    self::assertSame(['processed' => 1, 'changed' => 1, 'failed' => 0], $run->unpublishArchivedBacklog(10, 20));
+    self::assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $run->unpublishArchivedBacklog(10, 20));
+    self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_FAILED_STATE));
+    self::assertSame(0, $run->countUnpublishBacklog());
+    self::assertFalse(Node::load($nids[1])->isPublished());
+  }
+
+  /**
+   * The command exits with a failure while the cleanup is incomplete.
+   */
+  public function testBackfillCommandFailsWhileCleanupIsIncomplete(): void {
+    $nids = $this->createArchivedBacklog(2);
+    $this->failingNid = $nids[0];
+
+    $result = $this->archiveCommand($this->freshArchiveService())->backfill($this->backfillOptions());
+    self::assertSame(1, $result->getExitCode());
+    $rows = $this->backfillRows($result);
+    self::assertSame(['unpublish', 'on', 2, 2, 1, 1, 1], array_slice(array_values($rows[0]), 0, 7));
+    self::assertSame(['anonymize', 'on', 2, 2, 1, 1, 1], array_slice(array_values($rows[1]), 0, 7));
+    self::assertStringStartsWith('Some requests failed: a later run retries them.', $rows[0]['note']);
+    self::assertStringStartsWith('Some requests failed: a later run retries them.', $rows[1]['note']);
+    self::assertTrue(Node::load($nids[0])->isPublished());
+    self::assertSame('plain0@example.org', Node::load($nids[0])->get('field_e_mail')->value);
+
+    // A failure fails a --limit run too; a dry run never fails.
+    $limited = $this->archiveCommand($this->freshArchiveService())->backfill($this->backfillOptions(['limit' => 1]));
+    self::assertSame(1, $limited->getExitCode(), 'The retried request failed again.');
+    $this->failingNid = NULL;
+    self::assertSame(0, $this->archiveCommand($this->freshArchiveService())->backfill($this->backfillOptions(['dry-run' => TRUE]))->getExitCode());
+
+    $result = $this->archiveCommand($this->freshArchiveService())->backfill($this->backfillOptions());
+    self::assertSame(0, $result->getExitCode());
+    $rows = $this->backfillRows($result);
+    self::assertSame(['unpublish', 'on', 1, 1, 1, 0, 0, 'The one-time pass has ended.'], array_values($rows[0]));
+    self::assertSame(['anonymize', 'on', 1, 1, 1, 0, 0, ''], array_values($rows[1]));
+    self::assertFalse(Node::load($nids[0])->isPublished());
+    self::assertStringEndsWith('@anonymized.off', Node::load($nids[0])->get('field_e_mail')->value);
+  }
+
+  /**
+   * Fails the save of the chosen node, like a broken presave of a tenant.
+   */
+  #[Hook('node_presave')]
+  public function failChosenNodeSave(NodeInterface $node): void {
+    if ($this->failingNid !== NULL && (int) $node->id() === $this->failingNid) {
+      throw new \RuntimeException('Synthetic save failure');
+    }
+  }
+
+  /**
    * The backfill command dry run counts both steps and writes nothing.
    */
   public function testBackfillCommandDryRunCountsWithoutWriting(): void {
     $nids = $this->createArchivedBacklog(3);
     $revisions = array_map(static fn (int $nid): int => (int) Node::load($nid)->getRevisionId(), $nids);
 
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $rows = $this->backfillRows($this->archiveCommand()->backfill(
       $this->backfillOptions(['dry-run' => TRUE])
     ));
 
@@ -1281,16 +1363,19 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $nids = $this->createArchivedBacklog(5);
     $state = $this->container->get('state');
 
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $result = $this->archiveCommand()->backfill(
       $this->backfillOptions(['limit' => 2, 'batch-size' => 1])
-    ));
+    );
+    // Requests left after a --limit run are no failure.
+    self::assertSame(0, $result->getExitCode());
+    $rows = $this->backfillRows($result);
     self::assertSame(['unpublish', 'on', 5, 2, 2, 0, 3], array_slice(array_values($rows[0]), 0, 7));
     self::assertSame(['anonymize', 'on', 5, 2, 2, 0, 3], array_slice(array_values($rows[1]), 0, 7));
     self::assertSame('Limit reached: cron or the next run continues.', $rows[1]['note']);
 
     // Wherever cron left the backfill cursor, the command covers all.
     $state->set(ArchiveService::BACKFILL_CURSOR_STATE, max($nids));
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $rows = $this->backfillRows($this->archiveCommand()->backfill(
       $this->backfillOptions(['batch-size' => 2])
     ));
     self::assertSame(['unpublish', 'on', 3, 3, 3, 0, 0, 'The one-time pass has ended.'], array_values($rows[0]));
@@ -1305,7 +1390,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $revisions = array_map(static fn (int $nid): int => (int) Node::load($nid)->getRevisionId(), $nids);
 
     // A further run finds nothing and saves nothing.
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $rows = $this->backfillRows($this->archiveCommand()->backfill(
       $this->backfillOptions()
     ));
     self::assertSame(['unpublish', 'on', 0, 0, 0, 0, 0], array_slice(array_values($rows[0]), 0, 7));
@@ -1323,12 +1408,12 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $nids = $this->createArchivedBacklog(2);
     $this->config('markaspot_archive.settings')->set('unpublish', 0)->save();
 
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $rows = $this->backfillRows($this->archiveCommand()->backfill(
       $this->backfillOptions(['only' => 'unpublish'])
     ));
     self::assertSame([['unpublish', 'off', 2, 0, 0, 0, 2, 'The "unpublish" setting is off: nothing is unpublished.']], array_map('array_values', $rows));
 
-    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+    $rows = $this->backfillRows($this->archiveCommand()->backfill(
       $this->backfillOptions(['only' => 'anonymize'])
     ));
     self::assertCount(1, $rows);
@@ -1433,8 +1518,8 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       /**
        * {@inheritdoc}
        */
-      protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit): array {
-        $candidates = parent::publishedArchivedCandidates($archived_status, $cursor, $limit);
+      protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit, array $only = []): array {
+        $candidates = parent::publishedArchivedCandidates($archived_status, $cursor, $limit, $only);
         $this->reopen();
         return $candidates;
       }
@@ -1602,9 +1687,9 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   /**
    * Builds the staff anonymization command under test.
    */
-  private function archiveCommand(): ArchiveCommands {
+  private function archiveCommand(?ArchiveService $service = NULL): ArchiveCommands {
     return new ArchiveCommands(
-      $this->archiveService,
+      $service ?? $this->archiveService,
       $this->container->get('config.factory'),
       $this->container->get('date.formatter'),
       $this->container->get('entity_type.manager'),
@@ -1632,6 +1717,30 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       'dry-run' => FALSE,
       'no-cascade' => FALSE,
     ];
+  }
+
+  /**
+   * Returns a new archive service, as the next cron run would build it.
+   */
+  private function freshArchiveService(): ArchiveService {
+    return new ArchiveService(
+      $this->container->get('entity_type.manager'),
+      $this->container->get('config.factory'),
+      $this->container->get('state'),
+      $this->testLogger(),
+      $this->container->get('database'),
+      $this->container->get('module_handler'),
+    );
+  }
+
+  /**
+   * Converts the rows of a backfill command result into arrays.
+   *
+   * @return array<int, array<string, mixed>>
+   *   Row arrays.
+   */
+  private function backfillRows(CommandResult $result): array {
+    return $this->rowsToArray($result->getOutputData());
   }
 
   /**
