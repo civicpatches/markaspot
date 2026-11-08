@@ -233,60 +233,22 @@ class ArchiveQueueWorker extends QueueWorkerBase implements
         return;
       }
 
-      // Unpublish node if configured.
-      if ($config->get('unpublish') == 1) {
-        $node->setUnpublished();
-        $this->logger->notice('Node ID @nid unpublished.', ['@nid' => $nid]);
-      }
-
-      // Anonymize fields if configured.
-      $anonymized_values = [];
-      if ($config->get('anonymize') == 1) {
-        $processed_fields = $this->archiveService->normalizeConfiguredFields(
-          (array) $config->get('anonymize_fields')
+      // Archive, unpublish and anonymize in one save and one transaction,
+      // after rechecking the status under a row lock: a failure leaves the
+      // request as it was, never anonymized without the archived status.
+      $result = $this->archiveService->archiveRequest($nid);
+      if ($result === ArchiveServiceInterface::ARCHIVE_DONE) {
+        $this->logger->notice(
+          'Node ID @nid archived successfully.',
+          ['@nid' => $nid]
         );
-        if ($processed_fields !== []) {
-          $anonymized_values = $this->archiveService->anonymize(
-            $node,
-            $processed_fields
-          );
-          if ($anonymized_values !== []) {
-            $this->logger->notice(
-              'Node ID @nid anonymized with fields: @fields',
-              [
-                '@nid' => $nid,
-                '@fields' => implode(', ', array_keys($anonymized_values)),
-              ]
-            );
-          }
-        }
       }
-
-      // Save current anonymized values before final archive status.
-      if ($anonymized_values !== []) {
-        $node->save();
-        $revision_rows = $this->archiveService->anonymizeRevisions(
-          $node,
-          $anonymized_values
+      else {
+        $this->logger->notice(
+          'Node ID @nid changed before it was archived (@result). Skipping.',
+          ['@nid' => $nid, '@result' => $result]
         );
-        if ($revision_rows > 0) {
-          $this->logger->notice(
-            'Node ID @nid previous revisions anonymized in @rows field rows.',
-            [
-              '@nid' => $nid,
-              '@rows' => $revision_rows,
-            ]
-          );
-        }
       }
-
-      // Update the node status to "archived".
-      $node->field_status->target_id = $config->get('status_archived');
-      $node->save();
-      $this->logger->notice(
-        'Node ID @nid archived successfully.',
-        ['@nid' => $nid]
-      );
     }
     catch (DatabaseException $e) {
       throw new SuspendQueueException(sprintf(

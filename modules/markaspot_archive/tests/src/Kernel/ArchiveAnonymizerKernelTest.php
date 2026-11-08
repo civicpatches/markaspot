@@ -72,6 +72,16 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   private ?int $failingNid = NULL;
 
   /**
+   * Node whose save into the archived status fails, if any.
+   */
+  private ?int $failingArchiveNid = NULL;
+
+  /**
+   * Node whose derived-data cleanup fails, if any.
+   */
+  private ?int $failingCleanupNid = NULL;
+
+  /**
    * Category term id.
    */
   private int $categoryTid;
@@ -825,6 +835,74 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * A failing archive save leaves the request as it was, then succeeds.
+   *
+   * The worker archives, unpublishes and anonymizes in one save: when it
+   * fails, the request keeps its eligible status, its contact data and its
+   * publication. A non-archived request is never left anonymized.
+   */
+  public function testQueueWorkerFailingArchiveSaveChangesNothing(): void {
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    $this->failingArchiveNid = (int) $node->id();
+    $revisions = $this->nodeRevisionIds((int) $node->id());
+    $queue = $this->createMock(QueueInterface::class);
+    $queue->expects(self::once())->method('createItem')->with(['nid' => (int) $node->id(), 'attempts' => 2]);
+    $worker = $this->archiveQueueWorker($this->container->get('markaspot_archive.archive'), $queue);
+
+    $worker->processItem(['nid' => $node->id(), 'attempts' => 1]);
+
+    $this->assertRequestUntouched((int) $node->id(), $revisions);
+
+    // Once the cause is gone, the retry archives the request completely.
+    $this->failingArchiveNid = NULL;
+    $worker->processItem(['nid' => $node->id(), 'attempts' => 2]);
+    $archived = $this->reloadNode((int) $node->id());
+    self::assertSame($this->archivedStatusId(), (string) $archived->get('field_status')->target_id);
+    self::assertFalse($archived->isPublished());
+    self::assertStringEndsWith('@anonymized.off', (string) $archived->get('field_e_mail')->value);
+    foreach ($this->nodeRevisionIds((int) $node->id()) as $vid) {
+      self::assertNotSame('citizen@example.org', $this->revisionFieldValue($vid, 'field_e_mail'));
+    }
+  }
+
+  /**
+   * A failing cleanup after the archive save rolls the save back too.
+   */
+  public function testQueueWorkerFailingCleanupRollsBackTheArchive(): void {
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    $this->failingCleanupNid = (int) $node->id();
+    $revisions = $this->nodeRevisionIds((int) $node->id());
+    $worker = $this->archiveQueueWorker(
+      $this->container->get('markaspot_archive.archive'),
+      $this->createMock(QueueInterface::class)
+    );
+
+    $worker->processItem(['nid' => $node->id(), 'attempts' => 1]);
+
+    $this->assertRequestUntouched((int) $node->id(), $revisions);
+  }
+
+  /**
+   * The worker rechecks the status under the lock and leaves a changed one.
+   */
+  public function testArchiveRequestRechecksTheStoredStatus(): void {
+    $node = $this->createQueueRequest();
+    $service = $this->container->get('markaspot_archive.archive');
+    // Staff moved the request to a status that is not archivable.
+    $other = $this->createStatusTerm('In progress');
+    $node->set('field_status', $other->id());
+    $node->save();
+    $revisions = $this->nodeRevisionIds((int) $node->id());
+
+    self::assertSame(ArchiveServiceInterface::ARCHIVE_NOT_ARCHIVABLE, $service->archiveRequest((int) $node->id()));
+    self::assertSame($revisions, $this->nodeRevisionIds((int) $node->id()));
+    self::assertSame('citizen@example.org', $this->reloadNode((int) $node->id())->get('field_e_mail')->value);
+    self::assertSame(ArchiveServiceInterface::ARCHIVE_MISSING, $service->archiveRequest(999999));
+  }
+
+  /**
    * The backfill anonymizes only archived nodes with plain contact data.
    */
   public function testBackfillAnonymizesArchivedPlainContactData(): void {
@@ -1539,6 +1617,23 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     if ($this->failingNid !== NULL && (int) $node->id() === $this->failingNid) {
       throw new \RuntimeException('Synthetic save failure');
     }
+    if (
+      $this->failingArchiveNid !== NULL
+      && (int) $node->id() === $this->failingArchiveNid
+      && (string) $node->get('field_status')->target_id === $this->archivedStatusId()
+    ) {
+      throw new \RuntimeException('Synthetic archive save failure');
+    }
+  }
+
+  /**
+   * Fails the derived-data cleanup of the chosen node.
+   */
+  #[Hook('markaspot_report_anonymized')]
+  public function failChosenCleanup(NodeInterface $node): void {
+    if ($this->failingCleanupNid !== NULL && (int) $node->id() === $this->failingCleanupNid) {
+      throw new \RuntimeException('Synthetic cleanup failure');
+    }
   }
 
   /**
@@ -1749,6 +1844,34 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * Asserts that a failed archive left the request as it was.
+   *
+   * @param int $nid
+   *   The node ID.
+   * @param int[] $revisions
+   *   Revision IDs before the attempt.
+   */
+  private function assertRequestUntouched(int $nid, array $revisions): void {
+    $node = $this->reloadNode($nid);
+    self::assertSame($this->openStatusId(), (string) $node->get('field_status')->target_id);
+    self::assertSame('citizen@example.org', $node->get('field_e_mail')->value);
+    self::assertTrue($node->isPublished());
+    self::assertSame($revisions, $this->nodeRevisionIds($nid));
+    foreach ($revisions as $vid) {
+      self::assertSame('citizen@example.org', $this->revisionFieldValue($vid, 'field_e_mail'));
+    }
+  }
+
+  /**
+   * Loads a node from storage, bypassing the entity caches.
+   */
+  private function reloadNode(int $nid): Node {
+    $node = $this->container->get('entity_type.manager')->getStorage('node')->loadUnchanged($nid);
+    self::assertInstanceOf(Node::class, $node);
+    return $node;
+  }
+
+  /**
    * Returns the open status term id from the archive settings.
    */
   private function openStatusId(): string {
@@ -1848,19 +1971,15 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
-   * Builds an archive service mock that fails during anonymization.
+   * Builds an archive service mock whose archiving fails.
    */
   private function failingArchiveService(
     \Throwable $exception,
   ): ArchiveServiceInterface {
     $archive_service = $this->createMock(ArchiveServiceInterface::class);
     $archive_service
-      ->method('normalizeConfiguredFields')
-      ->willReturn([
-        'field_e_mail' => 'field_e_mail',
-      ]);
-    $archive_service
-      ->method('anonymize')
+      ->expects(self::once())
+      ->method('archiveRequest')
       ->willThrowException($exception);
     return $archive_service;
   }

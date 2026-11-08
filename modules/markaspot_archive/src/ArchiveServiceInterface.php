@@ -11,6 +11,26 @@ use Drupal\node\NodeInterface;
 interface ArchiveServiceInterface {
 
   /**
+   * Result of ::archiveRequest(): the request was archived.
+   */
+  public const ARCHIVE_DONE = 'archived';
+
+  /**
+   * Result of ::archiveRequest(): the request was archived already.
+   */
+  public const ARCHIVE_ALREADY = 'already_archived';
+
+  /**
+   * Result of ::archiveRequest(): the stored status is not archivable.
+   */
+  public const ARCHIVE_NOT_ARCHIVABLE = 'not_archivable';
+
+  /**
+   * Result of ::archiveRequest(): no service request has this ID.
+   */
+  public const ARCHIVE_MISSING = 'missing';
+
+  /**
    * Loads service requests that are eligible for archiving.
    *
    * @param bool $all
@@ -48,6 +68,26 @@ interface ArchiveServiceInterface {
    *   Anonymized values keyed by field machine name.
    */
   public function anonymize(EntityInterface $archivable, array $anonymize_fields): array;
+
+  /**
+   * Archives one service request in a single save, or not at all.
+   *
+   * Used by the archive queue worker. Locks the request as the catch-up
+   * does, so a concurrent staff save waits, and rechecks its stored status:
+   * only a request in an archivable status is archived. The archived status,
+   * the unpublishing and the anonymization of the contact fields (as
+   * configured) go into one save; previous revisions, revision logs and
+   * derived data follow (::anonymizeRevisions()), all in one transaction.
+   * When any step fails, the transaction is rolled back and the exception
+   * rethrown: the request keeps its status, contact data and publication.
+   *
+   * @param int $nid
+   *   The node ID.
+   *
+   * @return string
+   *   One of the ARCHIVE_* constants.
+   */
+  public function archiveRequest(int $nid): string;
 
   /**
    * Unpublishes a node whose status changes to the archived status.

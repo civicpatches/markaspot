@@ -396,6 +396,71 @@ class ArchiveService implements ArchiveServiceInterface {
   /**
    * {@inheritdoc}
    */
+  public function archiveRequest(int $nid): string {
+    $config = $this->configFactory->get('markaspot_archive.settings');
+    $archived_status = (string) $config->get('status_archived');
+    $archivable = array_map('strval', array_keys((array) $config->get('status_archivable')));
+    $transaction = $this->database->startTransaction();
+    try {
+      $statuses = $this->lockRequest($nid);
+      $node = $statuses === NULL ? NULL : $this->entityTypeManager->getStorage('node')->loadUnchanged($nid);
+      if (!$node instanceof NodeInterface || $node->bundle() !== 'service_request' || !$node->hasField('field_status')) {
+        return self::ARCHIVE_MISSING;
+      }
+      $current = (string) $node->get('field_status')->target_id;
+      if ($current === $archived_status) {
+        return self::ARCHIVE_ALREADY;
+      }
+      if (!in_array($current, $archivable, TRUE) || array_unique($statuses) !== [$current]) {
+        $this->logger->notice(
+          'Node ID @nid is no longer in an archivable status (current: @current) and was left as it is.',
+          ['@nid' => $nid, '@current' => $current]
+        );
+        return self::ARCHIVE_NOT_ARCHIVABLE;
+      }
+
+      $node->set('field_status', $archived_status);
+      if ($config->get('unpublish') == 1 && $this->unpublishTranslations($node)) {
+        $this->logger->notice('Node ID @nid unpublished.', ['@nid' => $nid]);
+      }
+      $anonymized_values = [];
+      $fields = $config->get('anonymize') == 1
+        ? $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'))
+        : [];
+      if ($fields !== []) {
+        $anonymized_values = $this->anonymize($node, $fields);
+        if ($anonymized_values !== []) {
+          $this->logger->notice('Node ID @nid anonymized with fields: @fields', [
+            '@nid' => $nid,
+            '@fields' => implode(', ', array_keys($anonymized_values)),
+          ]);
+        }
+      }
+      $node->save();
+      $revision_rows = $this->anonymizeRevisions($node, $anonymized_values);
+      if ($revision_rows > 0) {
+        $this->logger->notice('Node ID @nid previous revisions anonymized in @rows field rows.', [
+          '@nid' => $nid,
+          '@rows' => $revision_rows,
+        ]);
+      }
+      return self::ARCHIVE_DONE;
+    }
+    catch (\Throwable $e) {
+      $transaction->rollBack();
+      // The caches may hold the rolled back save.
+      $this->entityTypeManager->getStorage('node')->resetCache([$nid]);
+      throw $e;
+    }
+    finally {
+      // Commits, or ends the rolled back transaction.
+      unset($transaction);
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function unpublishOnArchiveTransition(NodeInterface $node): bool {
     $config = $this->configFactory->get('markaspot_archive.settings');
     if ($config->get('unpublish') != 1 || !$this->isArchiveTransition($node)) {
@@ -1257,41 +1322,60 @@ class ArchiveService implements ArchiveServiceInterface {
   }
 
   /**
-   * Locks a request and checks its stored status.
+   * Locks a request and returns its stored status.
    *
-   * Every save of a node updates its base table row first. Locking that row
-   * waits for a save in progress and makes later saves wait for the
-   * catch-up; the status rows are then read with the latest committed data.
+   * Must run in a transaction. Every save of a node updates its base table
+   * row first. Locking that row waits for a save in progress and makes later
+   * saves wait for the caller's transaction; the status rows are then read
+   * with the latest committed data.
+   *
+   * @return string[]|null
+   *   The stored status term IDs of all translations, NULL when the node or
+   *   the status field does not exist.
+   */
+  protected function lockRequest(int $nid): ?array {
+    $storage = $this->entityTypeManager->getStorage('node');
+    $status = $this->nodeFieldStorage('field_status');
+    if (!$storage instanceof SqlContentEntityStorage || $status === NULL) {
+      return NULL;
+    }
+    $mapping = $storage->getTableMapping();
+    $locked = $this->database->select((string) $storage->getBaseTable(), 'n')
+      ->fields('n', ['nid'])
+      ->condition('n.nid', $nid)
+      ->forUpdate()
+      ->execute()
+      ->fetchField();
+    if ($locked === FALSE) {
+      return NULL;
+    }
+    return array_map('strval', $this->database->select($mapping->getDedicatedDataTableName($status), 's')
+      ->fields('s', [$mapping->getFieldColumnName($status, 'target_id')])
+      ->condition('s.entity_id', $nid)
+      ->condition('s.deleted', 0)
+      ->forUpdate()
+      ->execute()
+      ->fetchCol());
+  }
+
+  /**
+   * Locks a request and checks that it is still archived.
    *
    * @return bool
    *   TRUE while the request has the archived status (and is published, if
    *   asked for).
    */
   protected function lockArchivedRequest(int $nid, string $archived_status, bool $published): bool {
-    $storage = $this->entityTypeManager->getStorage('node');
-    $status = $this->nodeFieldStorage('field_status');
-    if (!$storage instanceof SqlContentEntityStorage || $status === NULL) {
-      return FALSE;
-    }
-    $mapping = $storage->getTableMapping();
-    $this->database->select((string) $storage->getBaseTable(), 'n')
-      ->fields('n', ['nid'])
-      ->condition('n.nid', $nid)
-      ->forUpdate()
-      ->execute()
-      ->fetchField();
-    $statuses = $this->database->select($mapping->getDedicatedDataTableName($status), 's')
-      ->fields('s', [$mapping->getFieldColumnName($status, 'target_id')])
-      ->condition('s.entity_id', $nid)
-      ->condition('s.deleted', 0)
-      ->forUpdate()
-      ->execute()
-      ->fetchCol();
-    if ($statuses === [] || array_unique(array_map('strval', $statuses)) !== [$archived_status]) {
+    $statuses = $this->lockRequest($nid);
+    if ($statuses === NULL || array_unique($statuses) !== [$archived_status]) {
       return FALSE;
     }
     if (!$published) {
       return TRUE;
+    }
+    $storage = $this->entityTypeManager->getStorage('node');
+    if (!$storage instanceof SqlContentEntityStorage) {
+      return FALSE;
     }
     return (bool) $this->database->select((string) $storage->getDataTable(), 'd')
       ->fields('d', ['nid'])
