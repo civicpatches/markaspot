@@ -103,8 +103,9 @@ function markaspot_archive_cron() {
  * status: such a transition is only caught later by the cron backfill.
  */
 function markaspot_archive_node_presave(NodeInterface $node) {
-  \Drupal::service('markaspot_archive.archive')
-    ->anonymizeOnArchiveTransition($node);
+  $archive = \Drupal::service('markaspot_archive.archive');
+  $archive->unpublishOnArchiveTransition($node);
+  $archive->anonymizeOnArchiveTransition($node);
 }
 
 /**

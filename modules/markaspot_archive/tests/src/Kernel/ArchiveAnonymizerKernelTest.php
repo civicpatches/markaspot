@@ -941,6 +941,127 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * Archiving a report directly unpublishes it and anonymizes all revisions.
+   */
+  public function testDirectArchiveUnpublishesAndAnonymizesAllRevisions(): void {
+    $this->listenToArchiveChannel();
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')
+      ->set('unpublish', 1)
+      ->set('anonymize_fields', [
+        'field_e_mail' => 'field_e_mail',
+        'field_phone' => 'field_phone',
+      ])
+      ->save();
+    $first_revision = (int) $node->getRevisionId();
+    $node->setNewRevision(TRUE);
+    $node->set('field_phone', '+49 221 123456');
+    $node->save();
+    $second_revision = (int) $node->getRevisionId();
+    self::assertTrue($node->isPublished());
+
+    // A status change outside the queue worker, as a staff member, the
+    // dashboard or an Open311 status update saves it.
+    $node->setNewRevision(TRUE);
+    $node->set('field_status', $this->archivedStatusId());
+    $node->save();
+
+    $this->container->get('entity_type.manager')
+      ->getStorage('node')
+      ->resetCache([$node->id()]);
+    $archived = Node::load($node->id());
+    self::assertFalse($archived->isPublished());
+    $email = (string) $archived->get('field_e_mail')->value;
+    self::assertStringEndsWith('@anonymized.off', $email);
+    self::assertSame('+49-0123459995555', $archived->get('field_phone')->value);
+    self::assertSame($email, $this->revisionFieldValue($first_revision, 'field_e_mail'));
+    self::assertSame($email, $this->revisionFieldValue($second_revision, 'field_e_mail'));
+    self::assertSame('+49-0123459995555', $this->revisionFieldValue($second_revision, 'field_phone'));
+    $revision_ids = $this->nodeRevisionIds((int) $node->id());
+    self::assertCount(3, $revision_ids);
+    foreach ($revision_ids as $revision_id) {
+      self::assertNotSame('citizen@example.org', $this->revisionFieldValue($revision_id, 'field_e_mail'));
+      self::assertNotSame('+49 221 123456', $this->revisionFieldValue($revision_id, 'field_phone'));
+    }
+    self::assertTrue($this->loggerHasRecord(
+      LogLevel::NOTICE,
+      'Node ID @nid unpublished on transition to the archived status.'
+    ));
+  }
+
+  /**
+   * Unpublishing on a direct archive follows its own setting.
+   */
+  public function testDirectArchiveUnpublishFollowsItsSetting(): void {
+    // Unpublish off: the archived report stays published, but is anonymized.
+    $published = $this->createQueueRequest();
+    $published->set('field_status', $this->archivedStatusId());
+    $published->save();
+    $published = Node::load($published->id());
+    self::assertTrue($published->isPublished());
+    self::assertStringEndsWith('@anonymized.off', $published->get('field_e_mail')->value);
+
+    // Unpublish on, anonymize off: unpublished, contact data untouched.
+    $plain = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')
+      ->set('unpublish', 1)
+      ->set('anonymize', 0)
+      ->save();
+    $plain->set('field_status', $this->archivedStatusId());
+    $plain->save();
+    $plain = Node::load($plain->id());
+    self::assertFalse($plain->isPublished());
+    self::assertSame('citizen@example.org', $plain->get('field_e_mail')->value);
+
+    // A report created with the archived status is unpublished as well.
+    $created = $this->createRequest([
+      'field_status' => $this->archivedStatusId(),
+      'field_e_mail' => 'created@example.org',
+    ]);
+    self::assertFalse(Node::load($created->id())->isPublished());
+  }
+
+  /**
+   * Republishing an archived report is no transition and stays published.
+   */
+  public function testRepublishedArchivedReportStaysPublished(): void {
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    $node->set('field_status', $this->archivedStatusId());
+    $node->save();
+    self::assertFalse(Node::load($node->id())->isPublished());
+
+    $republished = Node::load($node->id());
+    $republished->setPublished();
+    $republished->save();
+
+    self::assertTrue(Node::load($node->id())->isPublished());
+  }
+
+  /**
+   * The queue worker unpublishes once; the transition hook adds nothing.
+   */
+  public function testQueueWorkerArchiveUnpublishesWithoutTransitionNotice(): void {
+    $this->listenToArchiveChannel();
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
+    $worker = $this->archiveQueueWorker(
+      $this->container->get('markaspot_archive.archive'),
+      $this->createMock(QueueInterface::class)
+    );
+
+    $worker->processItem(['nid' => $node->id()]);
+
+    $archived = Node::load($node->id());
+    self::assertSame($this->archivedStatusId(), (string) $archived->get('field_status')->target_id);
+    self::assertFalse($archived->isPublished());
+    self::assertFalse($this->loggerHasRecord(
+      LogLevel::NOTICE,
+      'Node ID @nid unpublished on transition to the archived status.'
+    ));
+  }
+
+  /**
    * Returns the archived status term id from the archive settings.
    */
   private function archivedStatusId(): string {

@@ -50,6 +50,23 @@ interface ArchiveServiceInterface {
   public function anonymize(EntityInterface $archivable, array $anonymize_fields): array;
 
   /**
+   * Unpublishes a node whose status changes to the archived status.
+   *
+   * Runs on presave like ::anonymizeOnArchiveTransition(), so a request
+   * archived outside the queue worker (a manual status change, an Open311
+   * status update) is unpublished as well. Follows the "unpublish" setting,
+   * independent of the "anonymize" setting. Saving an already archived node
+   * again, for example after staff republished it, unpublishes nothing.
+   *
+   * @param \Drupal\node\NodeInterface $node
+   *   The node being saved.
+   *
+   * @return bool
+   *   TRUE when a published translation was unpublished.
+   */
+  public function unpublishOnArchiveTransition(NodeInterface $node): bool;
+
+  /**
    * Anonymizes a node whose status changes to the archived status.
    *
    * Runs on presave, so every way into the archive is covered: the queue

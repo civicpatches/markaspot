@@ -340,20 +340,34 @@ class ArchiveService implements ArchiveServiceInterface {
   /**
    * {@inheritdoc}
    */
-  public function anonymizeOnArchiveTransition(NodeInterface $node): array {
-    if ($node->bundle() !== 'service_request' || !$node->hasField('field_status')) {
-      return [];
-    }
+  public function unpublishOnArchiveTransition(NodeInterface $node): bool {
     $config = $this->configFactory->get('markaspot_archive.settings');
-    $archived_status = (string) $config->get('status_archived');
-    if ($config->get('anonymize') != 1 || $archived_status === '') {
-      return [];
+    if ($config->get('unpublish') != 1 || !$this->isArchiveTransition($node)) {
+      return FALSE;
     }
-    if ((string) $node->get('field_status')->target_id !== $archived_status) {
-      return [];
+    $unpublished = FALSE;
+    foreach ($node->getTranslationLanguages() as $langcode => $language) {
+      $translation = $node->getTranslation($langcode);
+      if ($translation->isPublished()) {
+        $translation->setUnpublished();
+        $unpublished = TRUE;
+      }
     }
-    $original = $this->originalNode($node);
-    if ($original !== NULL && (string) $original->get('field_status')->target_id === $archived_status) {
+    if ($unpublished) {
+      $this->logger->notice(
+        'Node ID @nid unpublished on transition to the archived status.',
+        ['@nid' => $node->isNew() ? 'new' : $node->id()]
+      );
+    }
+    return $unpublished;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function anonymizeOnArchiveTransition(NodeInterface $node): array {
+    $config = $this->configFactory->get('markaspot_archive.settings');
+    if ($config->get('anonymize') != 1 || !$this->isArchiveTransition($node)) {
       return [];
     }
     // The queue worker and the staff command anonymize before they save.
@@ -567,6 +581,27 @@ class ArchiveService implements ArchiveServiceInterface {
       ->getStorage('field_storage_config')
       ->load('node.' . $field_name);
     return $definition instanceof FieldStorageDefinitionInterface ? $definition : NULL;
+  }
+
+  /**
+   * Returns TRUE when the save in progress moves a request into the archive.
+   *
+   * A request moves into the archive when its status is the archived status
+   * and it is new or its unchanged node had another status. Saving an already
+   * archived request again is no transition.
+   */
+  protected function isArchiveTransition(NodeInterface $node): bool {
+    if ($node->bundle() !== 'service_request' || !$node->hasField('field_status')) {
+      return FALSE;
+    }
+    $archived_status = (string) $this->configFactory
+      ->get('markaspot_archive.settings')
+      ->get('status_archived');
+    if ($archived_status === '' || (string) $node->get('field_status')->target_id !== $archived_status) {
+      return FALSE;
+    }
+    $original = $this->originalNode($node);
+    return $original === NULL || (string) $original->get('field_status')->target_id !== $archived_status;
   }
 
   /**

@@ -36,6 +36,9 @@ This module works with:
 - Anonymizes the configured fields on every change to the archived status,
   whether it comes from the queue worker, a manual status change or an Open311
   status update. Requires the "Anonymize" setting.
+- Unpublishes the request on the same transitions when the "Unpublish" setting
+  is on, independent of the "Anonymize" setting. Saving an already archived
+  request again (for example after staff republished it) leaves it alone.
 - Every cron run anonymizes up to 50 archived requests that still hold plain
   contact data in the current or a previous revision (archived before this
   existed or while anonymization was off), keeping their changed time. Plain
