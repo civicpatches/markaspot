@@ -17,6 +17,7 @@ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
 use Drupal\Core\Entity\TranslatableInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldStorageDefinitionInterface;
+use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\eca\EventSubscriber\DynamicSubscriber;
@@ -65,6 +66,15 @@ class ArchiveService implements ArchiveServiceInterface {
    * State key of the node IDs the unpublish catch-up failed to unpublish.
    */
   public const UNPUBLISH_BACKLOG_FAILED_STATE = 'markaspot_archive.unpublish_backlog_failed';
+
+  /**
+   * Key-value collection in which search_api_db keeps the indexes it holds.
+   *
+   * Search API's database backend stores the tables of each index there and
+   * deletes the entry when it removes the index
+   * (Database::INDEXES_KEY_VALUE_STORE_ID).
+   */
+  protected const SEARCH_API_DB_INDEXES = 'search_api_db.indexes';
 
   /**
    * Telephone value written by ::anonymizedValue().
@@ -159,6 +169,7 @@ class ArchiveService implements ArchiveServiceInterface {
     Connection $database,
     protected ?ModuleHandlerInterface $moduleHandler = NULL,
     protected ?ContentEntityTrackingManager $searchTracking = NULL,
+    protected ?KeyValueFactoryInterface $keyValue = NULL,
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->configFactory = $config_factory;
@@ -837,16 +848,53 @@ class ArchiveService implements ArchiveServiceInterface {
       if (!$index instanceof IndexInterface || !$index->isValidDatasource('entity:node')) {
         continue;
       }
-      // Disabling an index removes its data from the server; a read-only
-      // index keeps it, enabled or not.
+      // A read-only index keeps its data, enabled or not.
       if (
         $index->isReadOnly()
         || ($index->status() && (!$index->hasValidTracker() || !$index->isServerEnabled()))
+        || (!$index->status() && $this->disabledIndexMayHoldData($index))
       ) {
         $indexes[(string) $index->id()] = (string) $index->label();
       }
     }
     return $indexes;
+  }
+
+  /**
+   * Returns TRUE unless a disabled index provably holds no data any more.
+   *
+   * Disabling an index does not prove that its data is gone: Search API
+   * removes it from the server only while the server is enabled, and a
+   * failed removal waits as a Search API task. The rule is conservative. A
+   * disabled index counts as empty only when
+   * - no Search API task waits for it (such as a deferred removeIndex), and
+   * - no search_api_db server keeps tables for it, and
+   * - it has no server, or its server is a search_api_db server, which
+   *   drops the tables and forgets the index in one step.
+   * Other backends cannot tell whether they still hold the index, so a
+   * disabled index on them always counts. Known limit: a backend other than
+   * search_api_db that an index was detached from leaves no trace.
+   */
+  protected function disabledIndexMayHoldData(IndexInterface $index): bool {
+    $index_id = (string) $index->id();
+    $tasks = (int) $this->entityTypeManager->getStorage('search_api_task')
+      ->getQuery()
+      ->accessCheck(FALSE)
+      ->condition('index_id', $index_id)
+      ->count()
+      ->execute();
+    if ($tasks > 0) {
+      return TRUE;
+    }
+    $db_tables = $this->keyValue?->get(self::SEARCH_API_DB_INDEXES)->has($index_id);
+    if ($db_tables === TRUE) {
+      return TRUE;
+    }
+    if (in_array($index->getServerId(), [NULL, ''], TRUE)) {
+      return FALSE;
+    }
+    $server = $index->getServerInstanceIfAvailable();
+    return $db_tables === NULL || $server === NULL || $server->getBackendId() !== 'search_api_db';
   }
 
   /**

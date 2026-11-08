@@ -43,6 +43,7 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     'node',
     'taxonomy',
     'search_api',
+    'search_api_db',
     'search_api_test',
     'markaspot_archive',
     'markaspot_archive_search_test',
@@ -312,6 +313,86 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
     $this->assertNotContains('Call Jordan at +44 7700 900123.', $this->indexedValues('revision_log'));
     $this->assertNotContains('plain@example.org', $this->indexedEmails());
     $this->assertSame(0, $service->countBackfillCandidates());
+  }
+
+  /**
+   * A disabled index counts until its server holds nothing of it.
+   *
+   * Disabling an index removes its data from the server only while the
+   * server is enabled, and a failed removal waits as a Search API task.
+   */
+  public function testDisabledIndexWithPendingRemovalFailsTheCommand(): void {
+    $this->createArchivedRequestWithNote();
+    $index = Index::load(self::INDEX);
+    $index->indexItems();
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $service = $this->container->get('markaspot_archive.archive');
+    $state = $this->container->get('state');
+    $tasks = $this->container->get('search_api.task_manager');
+
+    // The server fails to remove the index: the removal waits as a task.
+    $state->set('search_api_test.backend.exception.removeIndex', TRUE);
+    $index->disable()->save();
+    $this->assertSame(1, $tasks->getTasksCount(['type' => 'removeIndex', 'index_id' => self::INDEX]));
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
+
+    // Detached from its server, the pending removal still counts.
+    Index::load(self::INDEX)->setServer(NULL)->save();
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
+    $result = $this->command()->backfill($this->options());
+    $this->assertSame(1, $result->getExitCode());
+    $this->assertStringContainsString('Requests (archive_requests)', $this->rows($result)['search index']['note']);
+
+    // Once the server has removed it, a disabled index without a server
+    // holds nothing.
+    $state->set('search_api_test.backend.exception.removeIndex', FALSE);
+    $this->container->get('search_api.server_task_manager')->execute();
+    $this->assertSame(0, $tasks->getTasksCount(['index_id' => self::INDEX]));
+    $this->assertSame([], $service->unprocessableSearchIndexes());
+    $this->assertSame(0, $this->command()->backfill($this->options())->getExitCode());
+  }
+
+  /**
+   * A disabled index on a database server counts while its tables remain.
+   *
+   * The database backend drops the tables of an index and forgets it when
+   * the index is disabled. Disabled while the server was off, the index is
+   * never removed: its tables keep the old text.
+   */
+  public function testDisabledIndexOnDatabaseServerCountsWhileItsTablesRemain(): void {
+    Server::create([
+      'id' => 'archive_db',
+      'name' => 'Database server',
+      'backend' => 'search_api_db',
+      'backend_config' => ['database' => 'default:default', 'min_chars' => 1],
+    ])->save();
+    $index = Index::load(self::INDEX);
+    $index->setServer(Server::load('archive_db'))->save();
+    $this->createArchivedRequestWithNote();
+    Index::load(self::INDEX)->indexItems();
+    $service = $this->container->get('markaspot_archive.archive');
+    $db_indexes = $this->container->get('keyvalue')->get('search_api_db.indexes');
+    $this->assertTrue($db_indexes->has(self::INDEX));
+
+    // Disabled on an enabled server: the backend drops the index.
+    Index::load(self::INDEX)->disable()->save();
+    $this->assertFalse($db_indexes->has(self::INDEX));
+    $this->assertSame([], $service->unprocessableSearchIndexes());
+
+    // Enabled and indexed again, then disabled while the server is off.
+    Index::load(self::INDEX)->enable()->save();
+    Index::load(self::INDEX)->indexItems();
+    $this->assertTrue($db_indexes->has(self::INDEX));
+    $server = Server::load('archive_db');
+    $server->setSyncing(TRUE);
+    $server->disable()->save();
+    Index::load(self::INDEX)->disable()->save();
+    $this->assertTrue($db_indexes->has(self::INDEX), 'The backend kept the tables.');
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
+
+    // Detaching the server does not remove the tables either.
+    Index::load(self::INDEX)->setServer(NULL)->save();
+    $this->assertSame([self::INDEX => 'Requests'], $service->unprocessableSearchIndexes());
   }
 
   /**

@@ -219,10 +219,12 @@ interface ArchiveServiceInterface {
   /**
    * Returns the search indexes of requests the catch-up cannot update.
    *
-   * Indexes with a node datasource that are read-only (enabled or not), or
-   * enabled without a valid tracker or an enabled server: they may keep
-   * text the anonymization removed. A disabled index is no such index, its
-   * server dropped its data when it was disabled.
+   * Indexes with a node datasource that are read-only (enabled or not),
+   * enabled without a valid tracker or an enabled server, or disabled while
+   * a server may still hold their data: they may keep text the
+   * anonymization removed. Disabling an index removes its data only from an
+   * enabled server, and a failed removal waits as a Search API task; see
+   * ArchiveService::disabledIndexMayHoldData() for the rule.
    *
    * @return array<string, string>
    *   Index labels keyed by index ID, empty without Search API.

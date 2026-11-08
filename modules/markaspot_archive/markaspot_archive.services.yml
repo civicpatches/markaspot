@@ -13,3 +13,4 @@ services:
       - '@database'
       - '@module_handler'
       - '@?search_api.entity_datasource.tracking_manager'
+      - '@keyvalue'

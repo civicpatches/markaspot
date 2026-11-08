@@ -178,7 +178,8 @@ final class ArchiveCommands extends DrushCommands {
    * Then indexes the search index items of archived requests that wait for
    * indexing, so no index keeps the text from before (step "search index",
    * counted in index items, only with Search API). A search index the
-   * catch-up cannot update, such as a read-only one, is named in the note.
+   * catch-up cannot update, such as a read-only one or a disabled one whose
+   * server may still hold its data, is named in the note.
    *
    * The command renews its lock before each batch and each indexing chunk.
    * When that fails, cron or another run may hold the lock: the command
@@ -433,7 +434,7 @@ final class ArchiveCommands extends DrushCommands {
         $names[] = sprintf('%s (%s)', $label, $id);
       }
       $row['note'] = trim($row['note'] . ' Cannot update ' . implode(', ', $names)
-        . ': read-only, or without a valid tracker or server. They may keep text the anonymization removed; fix them and reindex, or clear them.');
+        . ': read-only, without a valid tracker or server, or disabled while a server may still hold their data (a pending Search API task, or a server that is not a database server or that kept the tables). They may keep text the anonymization removed; fix them and reindex, or clear or delete them on their server.');
       $this->incomplete = TRUE;
     }
     return $row;
