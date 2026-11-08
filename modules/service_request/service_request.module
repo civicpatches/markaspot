@@ -415,6 +415,14 @@ function _service_request_sanitize_address(EntityInterface $node): void {
  * Normalizes request source/channel metadata on every service_request save.
  */
 function _service_request_normalize_intake_metadata(EntityInterface $node): void {
+  // Syncing saves of existing requests are system writes, such as the archive
+  // catch-up under cron. They run as the anonymous user and would otherwise
+  // rewrite the stored source to "web" and drop the channel. No client can
+  // set the syncing flag.
+  if ($node instanceof NodeInterface && !$node->isNew() && $node->isSyncing()) {
+    return;
+  }
+
   $account = \Drupal::currentUser();
   $is_dashboard_staff = $account->hasPermission('manage dashboard notes')
     || $account->hasPermission('administer nodes');
