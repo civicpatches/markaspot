@@ -59,7 +59,10 @@ This module works with:
   The command checks that it still holds the catch-up lock before the first
   batch, after every request and after every search indexing chunk. Once the
   lock is lost (cron or another run may hold it now) it stops, records no
-  further progress and exits with 1.
+  further progress and exits with 1. The catch-up on cron renews the lock
+  the same way after every request and before it records progress or
+  starts its pass over; once a renewal fails, it stops for this run without
+  recording progress and logs a warning.
 - Search indexes: an erasure that writes the database directly (previous
   revisions, revision logs, retained PII originals) marks the request for
   reindexing in every Search API index that holds it, and the command

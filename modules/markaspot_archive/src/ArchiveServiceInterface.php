@@ -178,8 +178,9 @@ interface ArchiveServiceInterface {
    * @param int $time_budget
    *   Seconds after which no further node is started.
    * @param (callable(): bool)|null $continue
-   *   Called after each node, for example to renew a lock. When it returns
-   *   FALSE the call stops and does not record its progress.
+   *   Called after each node and before the cursor is reset to start over,
+   *   for example to renew a lock. When it returns FALSE the call stops and
+   *   records neither its progress nor the reset.
    *
    * @return array{processed: int, changed: int, failed: int}
    *   Nodes passed, anonymized and failed in this call. Nothing processed

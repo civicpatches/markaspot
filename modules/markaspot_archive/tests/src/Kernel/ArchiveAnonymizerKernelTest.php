@@ -1760,6 +1760,74 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * The backfill does not reset its cursor once the lock is lost.
+   *
+   * Another run that holds the lock now may have moved the cursor; an
+   * expired run must not move it back.
+   */
+  public function testBackfillCursorResetNeedsTheLock(): void {
+    $this->createArchivedBacklog(1);
+    $service = $this->container->get('markaspot_archive.archive');
+    $state = $this->container->get('state');
+    $state->set(ArchiveService::BACKFILL_CURSOR_STATE, 900);
+
+    self::assertSame(['processed' => 0, 'changed' => 0, 'failed' => 0], $service->backfillArchived(10, 20, static fn (): bool => FALSE));
+    self::assertSame(900, $state->get(ArchiveService::BACKFILL_CURSOR_STATE));
+
+    // While the lock is held, the backfill starts over.
+    self::assertSame(0, $service->backfillArchived(10, 20, static fn (): bool => TRUE)['processed']);
+    self::assertSame(0, $state->get(ArchiveService::BACKFILL_CURSOR_STATE));
+  }
+
+  /**
+   * The cron catch-up stops, and records no progress, once it loses the lock.
+   */
+  public function testCronCatchUpStopsWhenTheLockIsLost(): void {
+    $nids = $this->createArchivedBacklog(3);
+    // Only the catch-up part of cron runs.
+    $this->config('markaspot_archive.settings')->set('cron_enable', 0)->save();
+    $state = $this->container->get('state');
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    // Cron acquires the lock; the renewal after the first request fails.
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      return ++$calls <= 1;
+    });
+    $this->container->set('lock', $lock);
+
+    $this->container->get('module_handler')->invoke('markaspot_archive', 'cron');
+
+    self::assertSame(2, $calls, 'No renewal after the loss.');
+    self::assertFalse($this->reloadNode($nids[0])->isPublished());
+    self::assertTrue($this->reloadNode($nids[1])->isPublished());
+    self::assertTrue($this->reloadNode($nids[2])->isPublished());
+    self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE), 'No progress recorded.');
+    // The anonymize step did not start.
+    foreach ($nids as $i => $nid) {
+      self::assertSame('plain' . $i . '@example.org', $this->reloadNode($nid)->get('field_e_mail')->value);
+    }
+    self::assertNull($state->get(ArchiveService::BACKFILL_CURSOR_STATE));
+
+    // The anonymize step: the acquisition and the renewal before the step
+    // succeed, the renewal after its first request fails.
+    $this->config('markaspot_archive.settings')->set('unpublish', 0)->save();
+    $calls = 0;
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
+      return ++$calls <= 2;
+    });
+    $this->container->set('lock', $lock);
+
+    $this->container->get('module_handler')->invoke('markaspot_archive', 'cron');
+
+    self::assertSame(3, $calls, 'No renewal after the loss.');
+    self::assertStringEndsWith('@anonymized.off', $this->reloadNode($nids[0])->get('field_e_mail')->value);
+    self::assertSame('plain1@example.org', $this->reloadNode($nids[1])->get('field_e_mail')->value);
+    self::assertSame('plain2@example.org', $this->reloadNode($nids[2])->get('field_e_mail')->value);
+    self::assertNull($state->get(ArchiveService::BACKFILL_CURSOR_STATE), 'No progress recorded.');
+  }
+
+  /**
    * Archiving from the queue does not retry a lock conflict itself.
    *
    * Its save runs the hooks of an ordinary status change, which may send

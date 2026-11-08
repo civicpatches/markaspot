@@ -690,8 +690,9 @@ class ArchiveService implements ArchiveServiceInterface {
     $cursor = (int) $this->state->get(self::BACKFILL_CURSOR_STATE, 0);
     $candidates = $this->backfillCandidates($archived_status, $detectable, $cursor, $limit);
     if ($candidates === []) {
-      // Start over on the next run to catch nodes archived meanwhile.
-      if ($cursor > 0) {
+      // Start over on the next run to catch nodes archived meanwhile. Not
+      // without the lock: another run may have moved the cursor meanwhile.
+      if ($cursor > 0 && ($continue === NULL || $continue())) {
         $this->state->set(self::BACKFILL_CURSOR_STATE, 0);
       }
       return $result;

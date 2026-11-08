@@ -249,12 +249,13 @@ final class ArchiveSearchIndexKernelTest extends KernelTestBase {
 
     // The command: the first acquisition and the six renewals of the
     // anonymize step succeed (before the first batch, after each of the two
-    // requests, after that batch and after the empty batch that ends the
-    // step); the renewal before the first indexing chunk fails.
+    // requests, after that batch, before the empty batch that ends the step
+    // resets the cursor, and after it); the renewal before the first
+    // indexing chunk fails.
     $calls = 0;
     $lock = $this->createMock(LockBackendInterface::class);
     $lock->method('acquire')->willReturnCallback(static function () use (&$calls): bool {
-      return ++$calls <= 6;
+      return ++$calls <= 7;
     });
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
     $result = $this->command($lock)->backfill($this->options());

@@ -37,21 +37,35 @@ function markaspot_archive_cron() {
   // catch-up to it.
   $lock = \Drupal::lock();
   if ($lock->acquire(ArchiveService::CATCH_UP_LOCK, 2 * ArchiveService::BACKFILL_TIME_BUDGET + 30)) {
+    // Renews the lease after every request and before any progress is
+    // recorded. Once a renewal fails, the command or another cron run may
+    // hold the lock: the catch-up stops without recording progress and does
+    // not resume in this run, even if the lock is free again.
+    $lost = FALSE;
+    $continue = static function () use ($lock, &$lost): bool {
+      if (!$lost && !$lock->acquire(ArchiveService::CATCH_UP_LOCK, ArchiveService::BACKFILL_TIME_BUDGET + 30)) {
+        $lost = TRUE;
+        \Drupal::logger('markaspot_archive')->warning('The archive catch-up on cron lost its lock and stopped; a later cron run continues.');
+      }
+      return !$lost;
+    };
     try {
       // Unpublish archived requests that are still published, once per site.
       // It depends only on the unpublish setting, not on the archive throttle.
       $archive->unpublishArchivedBacklog(
         ArchiveService::BACKFILL_LIMIT,
-        ArchiveService::BACKFILL_TIME_BUDGET
+        ArchiveService::BACKFILL_TIME_BUDGET,
+        $continue
       );
       // Catch up on archived requests that still hold plain contact data on
       // every run. It depends only on the anonymize setting, not on the
       // archive throttle. A slow first step may have used up the lease: go
       // on only while this run still holds the lock.
-      if ($lock->acquire(ArchiveService::CATCH_UP_LOCK, ArchiveService::BACKFILL_TIME_BUDGET + 30)) {
+      if ($continue()) {
         $archive->backfillArchived(
           ArchiveService::BACKFILL_LIMIT,
-          ArchiveService::BACKFILL_TIME_BUDGET
+          ArchiveService::BACKFILL_TIME_BUDGET,
+          $continue
         );
       }
     }
