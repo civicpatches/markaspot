@@ -10,6 +10,7 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\FieldableEntityInterface;
 use Drupal\Core\Entity\RevisionableInterface;
 use Drupal\Core\Entity\RevisionableStorageInterface;
+use Drupal\Core\Entity\RevisionLogInterface;
 use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
 use Drupal\Core\Entity\TranslatableInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
@@ -59,6 +60,11 @@ class ArchiveService implements ArchiveServiceInterface {
   protected const ANONYMIZED_PHONE = '+49-0123459995555';
 
   /**
+   * Field types whose plain values revision logs may quote verbatim.
+   */
+  protected const KNOWN_VALUE_TYPES = ['email', 'telephone', 'string'];
+
+  /**
    * Entities anonymized during this request.
    *
    * @var \WeakMap<\Drupal\Core\Entity\EntityInterface, true>
@@ -71,6 +77,16 @@ class ArchiveService implements ArchiveServiceInterface {
    * @var \WeakMap<\Drupal\node\NodeInterface, array>
    */
   protected \WeakMap $pendingRevisionValues;
+
+  /**
+   * Plain contact values ::anonymize() replaced, per entity.
+   *
+   * The revision log scrubbing needs them after the save, when the entity
+   * only holds the anonymized values.
+   *
+   * @var \WeakMap<\Drupal\Core\Entity\EntityInterface, string[]>
+   */
+  protected \WeakMap $replacedValues;
 
   /**
    * Entity manager Service Object.
@@ -125,6 +141,7 @@ class ArchiveService implements ArchiveServiceInterface {
     $this->database = $database;
     $this->anonymizedEntities = new \WeakMap();
     $this->pendingRevisionValues = new \WeakMap();
+    $this->replacedValues = new \WeakMap();
   }
 
   /**
@@ -312,6 +329,7 @@ class ArchiveService implements ArchiveServiceInterface {
     }
 
     $anonymized_values = [];
+    $replaced = $this->replacedValues[$archivable] ?? [];
     foreach ($this->fieldNames($anonymize_fields) as $field_name) {
       if (!$archivable->hasField($field_name)) {
         continue;
@@ -340,6 +358,9 @@ class ArchiveService implements ArchiveServiceInterface {
           continue;
         }
         foreach ($translation_items as $item) {
+          if (in_array($type, self::KNOWN_VALUE_TYPES, TRUE) && is_string($item->value)) {
+            $replaced[] = $item->value;
+          }
           $item->set('value', $value);
           if ($type === 'text_with_summary') {
             $item->set('summary', $value);
@@ -349,6 +370,7 @@ class ArchiveService implements ArchiveServiceInterface {
     }
 
     $this->anonymizedEntities[$archivable] = TRUE;
+    $this->replacedValues[$archivable] = $replaced;
     return $anonymized_values;
   }
 
@@ -783,22 +805,38 @@ class ArchiveService implements ArchiveServiceInterface {
    * {@inheritdoc}
    */
   public function anonymizeRevisions(EntityInterface $archivable, array $anonymized_values): int {
+    if ($anonymized_values === []) {
+      return 0;
+    }
+    // Read the plain values before the previous revisions are overwritten.
+    $known_values = $this->knownContactValues($archivable, $anonymized_values);
+
     // Both anonymisation paths (queue worker and drush) end here after saving
     // the anonymised entity. Modules holding data derived from the report
     // (e.g. AI reasoning that may quote the reporter) purge it now; the
     // anonymisation itself never deletes the report.
-    if ($anonymized_values !== [] && $this->moduleHandler !== NULL) {
+    if ($this->moduleHandler !== NULL) {
       $this->moduleHandler->invokeAll('markaspot_report_anonymized', [$archivable]);
     }
 
-    if (
-      !$archivable instanceof FieldableEntityInterface
-      || !$archivable instanceof RevisionableInterface
-      || $anonymized_values === []
-    ) {
+    if (!$archivable instanceof FieldableEntityInterface || !$archivable instanceof RevisionableInterface) {
       return 0;
     }
+    $updated = $this->anonymizePreviousRevisions($archivable, $anonymized_values);
+    $scrubbed = $this->scrubRevisionLogs($archivable, $known_values);
+    if ($updated > 0 || $scrubbed > 0) {
+      $this->entityTypeManager->getStorage($archivable->getEntityTypeId())->resetCache([$archivable->id()]);
+    }
+    return $updated;
+  }
 
+  /**
+   * Overwrites the anonymized fields in the previous revisions.
+   *
+   * @return int
+   *   Number of revision field rows updated.
+   */
+  protected function anonymizePreviousRevisions(FieldableEntityInterface&RevisionableInterface $archivable, array $anonymized_values): int {
     $storage = $this->entityTypeManager->getStorage($archivable->getEntityTypeId());
     if (!$storage instanceof RevisionableStorageInterface) {
       return 0;
@@ -850,11 +888,119 @@ class ArchiveService implements ArchiveServiceInterface {
         ->condition('revision_id', $previous_revision_ids, 'IN')
         ->execute();
     }
-
-    if ($updated > 0) {
-      $storage->resetCache([$archivable->id()]);
-    }
     return $updated;
+  }
+
+  /**
+   * Returns the plain contact values of the entity in any revision.
+   *
+   * Covers the values ::anonymize() replaced on the entity and the values the
+   * previous revisions still hold, of e-mail, telephone and string fields.
+   * Anonymized values are left out.
+   *
+   * @return string[]
+   *   Distinct plain values.
+   */
+  protected function knownContactValues(EntityInterface $archivable, array $anonymized_values): array {
+    $values = $this->replacedValues[$archivable] ?? [];
+    if ($archivable instanceof FieldableEntityInterface && !$archivable->isNew()) {
+      foreach ($anonymized_values as $field_name => $info) {
+        $type = (string) ($info['type'] ?? '');
+        if (!in_array($type, self::KNOWN_VALUE_TYPES, TRUE) || !$archivable->hasField($field_name)) {
+          continue;
+        }
+        $column_info = $this->revisionColumnInfo($archivable, $field_name, $type);
+        if ($column_info === NULL) {
+          continue;
+        }
+        $column = $column_info['columns']['value'];
+        $values = array_merge($values, $this->database->select($column_info['table'], 'r')
+          ->fields('r', [$column])
+          ->condition('r.entity_id', $archivable->id())
+          ->isNotNull('r.' . $column)
+          ->distinct()
+          ->execute()
+          ->fetchCol());
+      }
+    }
+    $plain = [];
+    foreach ($values as $value) {
+      $value = trim((string) $value);
+      if ($value !== '' && !$this->looksAnonymized($value)) {
+        $plain[$value] = $value;
+      }
+    }
+    return array_values($plain);
+  }
+
+  /**
+   * Returns TRUE for a value ::anonymizedValue() writes.
+   */
+  protected function looksAnonymized(string $value): bool {
+    return $value === self::ANONYMIZED_PHONE
+      || str_ends_with($value, '@anonymized.off')
+      || preg_match('/^[0-9a-f]{10}$/', $value) === 1;
+  }
+
+  /**
+   * Scrubs reporter contact data from every revision log of an entity.
+   *
+   * Covers the current and all previous revisions; see RevisionLogScrubber
+   * for the rules. Rows are updated directly, like the previous revision
+   * fields, so no hook runs and no revision is added.
+   *
+   * @param \Drupal\Core\Entity\EntityInterface $entity
+   *   The saved, anonymized entity.
+   * @param string[] $known_values
+   *   The reporter's plain contact values.
+   *
+   * @return int
+   *   Number of revision logs changed.
+   */
+  protected function scrubRevisionLogs(EntityInterface $entity, array $known_values): int {
+    $entity_type = $entity->getEntityType();
+    $table = $entity_type->getRevisionTable();
+    $log_column = $entity_type->getRevisionMetadataKey('revision_log_message');
+    $id_column = $entity_type->getKey('id');
+    $revision_column = $entity_type->getKey('revision');
+    if (!$table || !$log_column || !$id_column || !$revision_column || $entity->isNew()) {
+      return 0;
+    }
+    $rows = $this->database->select($table, 'r')
+      ->fields('r', [$revision_column, $log_column])
+      ->condition('r.' . $id_column, $entity->id())
+      ->isNotNull('r.' . $log_column)
+      ->execute()
+      ->fetchAllKeyed();
+
+    $changed = 0;
+    foreach ($rows as $revision_id => $log) {
+      $scrubbed = RevisionLogScrubber::scrub((string) $log, $known_values);
+      if ($scrubbed === (string) $log) {
+        continue;
+      }
+      $this->database->update($table)
+        ->fields([$log_column => $scrubbed])
+        ->condition($revision_column, $revision_id)
+        ->execute();
+      $changed++;
+      // A later save of the same object must not write the old text back.
+      if (
+        $entity instanceof RevisionLogInterface
+        && $entity instanceof RevisionableInterface
+        && (int) $entity->getRevisionId() === (int) $revision_id
+      ) {
+        $entity->setRevisionLogMessage($scrubbed);
+      }
+    }
+    if ($changed > 0) {
+      $this->logger->notice('Scrubbed reporter contact data from @count revision logs of @type @id.', [
+        '@count' => $changed,
+        '@type' => $entity->getEntityTypeId(),
+        '@id' => $entity->id(),
+      ]);
+    }
+    return $changed;
   }
 
   /**

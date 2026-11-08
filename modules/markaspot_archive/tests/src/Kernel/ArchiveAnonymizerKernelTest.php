@@ -990,6 +990,87 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * Archiving scrubs contact data from every revision log, keeping events.
+   *
+   * Covers civic.revision.v1 envelopes, whose events and changes readers of
+   * the history rely on (moderation holds), and legacy free-text logs.
+   */
+  public function testArchiveScrubsContactDataFromRevisionLogs(): void {
+    $node = $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')
+      ->set('anonymize_fields', [
+        'field_e_mail' => 'field_e_mail',
+        'field_phone' => 'field_phone',
+        'field_first_name' => 'field_first_name',
+      ])
+      ->save();
+    $node->set('field_first_name', 'Jordan');
+    $node->set('field_phone', '+49 221 123456');
+    $node->setNewRevision(TRUE);
+    $node->save();
+
+    // Moderation hid the report with a note quoting the reporter.
+    $node->setNewRevision(TRUE);
+    $node->setUnpublished();
+    RevisionLog::setEvent($node, 'moderation_hidden');
+    RevisionLog::setMessage($node, 'Hidden after a call with Jordan at 0221 123456, write to citizen@example.org.');
+    $node->save();
+    $hidden_vid = (int) $node->getRevisionId();
+    $hidden_before = RevisionLog::decode($this->revisionLog($hidden_vid));
+    self::assertSame(['moderation_hidden', 'unpublished'], $hidden_before['events']);
+
+    // A legacy free-text log and a neutral note.
+    $node->setNewRevision(TRUE);
+    $node->setTitle('Broken streetlight, pole 12');
+    $node->save();
+    $legacy_vid = (int) $node->getRevisionId();
+    $this->container->get('database')->update('node_revision')
+      ->fields(['revision_log' => 'Reporter citizen@example.org asked for an update. Crew on 12.11.2026, request 1034-2026.'])
+      ->condition('vid', $legacy_vid)
+      ->execute();
+    $this->container->get('entity_type.manager')->getStorage('node')->resetCache([$node->id()]);
+    $node = Node::load($node->id());
+    $node->setNewRevision(TRUE);
+    RevisionLog::setMessage($node, 'Crew scheduled for Tuesday, ticket 1034-2026.');
+    $node->save();
+    $neutral_vid = (int) $node->getRevisionId();
+    $neutral_log = $this->revisionLog($neutral_vid);
+
+    // Staff archive the report with a final note.
+    $node->setNewRevision(TRUE);
+    $node->set('field_status', $this->archivedStatusId());
+    RevisionLog::setMessage($node, 'Archived; Jordan (+49 170 1234567) was informed.');
+    $node->save();
+    $archive_vid = (int) $node->getRevisionId();
+
+    foreach ($this->nodeRevisionIds((int) $node->id()) as $vid) {
+      $log = $this->revisionLog($vid);
+      foreach (['citizen@example.org', 'Jordan', '0221 123456', '1234567'] as $plain) {
+        self::assertStringNotContainsString($plain, $log, "Revision $vid");
+      }
+    }
+    $hidden_after = RevisionLog::decode($this->revisionLog($hidden_vid));
+    self::assertSame('Hidden after a call with [REDACTED] at [REDACTED phone], write to [REDACTED email].', $hidden_after['message']);
+    unset($hidden_before['message'], $hidden_after['message']);
+    self::assertSame($hidden_before, $hidden_after);
+    self::assertSame(
+      'Reporter [REDACTED email] asked for an update. Crew on 12.11.2026, request 1034-2026.',
+      $this->revisionLog($legacy_vid)
+    );
+    self::assertSame($neutral_log, $this->revisionLog($neutral_vid));
+    $archive_log = RevisionLog::decode($this->revisionLog($archive_vid));
+    self::assertSame('Archived; [REDACTED] ([REDACTED phone]) was informed.', $archive_log['message']);
+    self::assertSame('status', $archive_log['changes'][0]['field']);
+
+    // Saving the same object again must not bring the old note back.
+    self::assertSame($this->revisionLog($archive_vid), $node->getRevisionLogMessage());
+    $node->setNewRevision(TRUE);
+    $node->setTitle('Broken streetlight, archived');
+    $node->save();
+    self::assertSame('', RevisionLog::decode($this->revisionLog((int) $node->getRevisionId()))['message']);
+  }
+
+  /**
    * Unpublishing on a direct archive follows its own setting.
    */
   public function testDirectArchiveUnpublishFollowsItsSetting(): void {
@@ -1528,6 +1609,18 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       }
     }
     return FALSE;
+  }
+
+  /**
+   * Reads the stored revision log of a node revision.
+   */
+  private function revisionLog(int $revision_id): string {
+    return (string) $this->container->get('database')
+      ->select('node_revision', 'r')
+      ->fields('r', ['revision_log'])
+      ->condition('vid', $revision_id)
+      ->execute()
+      ->fetchField();
   }
 
   /**
