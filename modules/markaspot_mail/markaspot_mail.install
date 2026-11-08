@@ -991,3 +991,17 @@ function markaspot_mail_update_10017(): string {
     ? ucfirst(implode('; ', $changes)) . '.'
     : 'Default-language mail text and BPMN notification models are already aligned.';
 }
+
+/**
+ * Imports the backend link label of staff mails for existing tenants.
+ *
+ * Staff mails with markaspot_mail.settings:staff_links both carry a second
+ * link to the Drupal backend labelled "Open in the backend". Fresh installs
+ * import the shipped PO files on their own; existing tenants need this
+ * re-import so German staff get the German label. Writes locale storage
+ * only, no configuration. Number 10018 stays unused: an unreleased 10018
+ * existed briefly before 11.9.244 and may have run on a test database.
+ */
+function markaspot_mail_update_10019(): string {
+  return _markaspot_mail_import_shipped_translations();
+}

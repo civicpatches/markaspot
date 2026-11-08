@@ -129,6 +129,11 @@ msgstr "Eine Meldung ist zur Bearbeitung bereit."
 msgid "Open request"
 msgstr "Meldung öffnen"
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr "Im Backend öffnen"
+
 msgid "Activate your @site workspace \"@name\""
 msgstr "Aktivieren Sie Ihren @site-Arbeitsbereich „@name“"
 

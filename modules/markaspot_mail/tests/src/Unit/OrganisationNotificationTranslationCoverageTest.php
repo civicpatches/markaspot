@@ -26,6 +26,7 @@ final class OrganisationNotificationTranslationCoverageTest extends UnitTestCase
     'Request #@request_id was assigned to @organisation',
     'A citizen request is ready for review.',
     'Open request',
+    'Open in the backend',
   ];
 
   private const REQUIRED_PLACEHOLDERS = [

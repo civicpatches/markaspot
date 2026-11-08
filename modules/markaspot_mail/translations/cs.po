@@ -136,6 +136,11 @@ msgstr "Podnět od občana je připraven ke kontrole."
 msgid "Open request"
 msgstr "Otevřít podnět"
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr "Otevřít v administraci"
+
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Activate your @site workspace \"@name\""
 msgstr "Aktivujte pracovní prostor \"@name\" na @site"

@@ -150,6 +150,11 @@ msgstr ""
 msgid "Open request"
 msgstr ""
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr ""
+
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Activate your @site workspace \"@name\""
 msgstr ""

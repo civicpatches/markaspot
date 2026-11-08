@@ -135,6 +135,11 @@ msgstr "Una incidencia ciudadana está lista para revisión."
 msgid "Open request"
 msgstr "Abrir incidencia"
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr "Abrir en el panel de administración"
+
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Activate your @site workspace \"@name\""
 msgstr "Active su espacio de trabajo \"@name\" de @site"

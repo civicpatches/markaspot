@@ -135,6 +135,11 @@ msgstr "Bir vatandaş bildirimi incelemeye hazır."
 msgid "Open request"
 msgstr "Bildirimi aç"
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr "Yönetim panelinde aç"
+
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Activate your @site workspace \"@name\""
 msgstr "@site üzerindeki \"@name\" çalışma alanınızı etkinleştirin"

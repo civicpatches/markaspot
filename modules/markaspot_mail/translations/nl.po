@@ -135,6 +135,11 @@ msgstr "Een melding van een inwoner is klaar voor beoordeling."
 msgid "Open request"
 msgstr "Melding openen"
 
+#: src/Mail/Builder/GroupOrgNotificationBuilder.php
+#: src/Mail/Builder/AssigneeNotificationBuilder.php
+msgid "Open in the backend"
+msgstr "Openen in de beheeromgeving"
+
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Activate your @site workspace \"@name\""
 msgstr "Activeer uw @site-werkruimte \"@name\""
