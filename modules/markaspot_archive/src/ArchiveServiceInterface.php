@@ -165,6 +165,26 @@ interface ArchiveServiceInterface {
   public function countBackfillCandidates(): int;
 
   /**
+   * Counts search index items of archived requests awaiting indexing.
+   *
+   * Search API indexes a changed request at the end of the request or on
+   * cron; until then the index still holds the text from before the
+   * catch-up. A failed indexing leaves the item waiting for cron.
+   *
+   * @return int|null
+   *   Number of index items, NULL when Search API is not enabled.
+   */
+  public function countSearchIndexBacklog(): ?int;
+
+  /**
+   * Indexes the waiting search index items of archived requests now.
+   *
+   * @return array{processed: int, changed: int, failed: int}
+   *   Items attempted, indexed and not indexed.
+   */
+  public function indexSearchIndexBacklog(): array;
+
+  /**
    * Updates previous revision field tables with anonymized values.
    *
    * Callers invoke this as the last step after saving the anonymized entity.

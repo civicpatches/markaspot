@@ -20,6 +20,8 @@ use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\eca\EventSubscriber\DynamicSubscriber;
 use Drupal\node\NodeInterface;
+use Drupal\search_api\IndexInterface;
+use Drupal\search_api\Utility\Utility as SearchApiUtility;
 
 /**
  * Class ArchiveService finds all service requests that can be archived.
@@ -678,6 +680,96 @@ class ArchiveService implements ArchiveServiceInterface {
       return 0;
     }
     return count($this->backfillCandidates($archived_status, $this->detectableFields($fields), 0, NULL));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function countSearchIndexBacklog(): ?int {
+    $backlog = $this->searchIndexBacklog();
+    return $backlog === NULL ? NULL : array_sum(array_map('count', $backlog));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function indexSearchIndexBacklog(): array {
+    $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
+    $storage = $this->entityTypeManager->getStorage('search_api_index');
+    foreach ($this->searchIndexBacklog() ?? [] as $index_id => $item_ids) {
+      $index = $storage->load($index_id);
+      if (!$index instanceof IndexInterface || $index->isReadOnly()) {
+        continue;
+      }
+      $batch_size = max(1, (int) ($index->getOption('cron_limit', 50) ?: 50));
+      foreach (array_chunk($item_ids, $batch_size) as $chunk) {
+        $result['processed'] += count($chunk);
+        try {
+          $indexed = count($index->indexSpecificItems($index->loadItemsMultiple($chunk)));
+        }
+        catch (\Exception $e) {
+          $indexed = 0;
+          $this->logger->warning('Search index @index could not index @count archived service requests: @error', [
+            '@index' => $index_id,
+            '@count' => count($chunk),
+            '@error' => $e->getMessage(),
+          ]);
+        }
+        $result['changed'] += $indexed;
+        $result['failed'] += count($chunk) - $indexed;
+      }
+    }
+    return $result;
+  }
+
+  /**
+   * Returns the search index items of archived requests awaiting indexing.
+   *
+   * Search API tracks every save of a request, syncing ones included, and
+   * indexes the item at the end of the request (index_directly) or on cron.
+   * Until then the index still holds the old text. Items of indexes that are
+   * disabled or have no node datasource are left out.
+   *
+   * @return array<string, string[]>|null
+   *   Item IDs keyed by index ID, NULL when Search API is not enabled.
+   */
+  protected function searchIndexBacklog(): ?array {
+    if ($this->moduleHandler === NULL || !$this->moduleHandler->moduleExists('search_api')) {
+      return NULL;
+    }
+    $archived_status = (string) $this->configFactory->get('markaspot_archive.settings')->get('status_archived');
+    $archived = $archived_status === '' ? NULL : $this->archivedRequestsQuery($archived_status);
+    $backlog = [];
+    if ($archived === NULL) {
+      return $backlog;
+    }
+    foreach ($this->entityTypeManager->getStorage('search_api_index')->loadMultiple() as $index) {
+      if (
+        !$index instanceof IndexInterface
+        || !$index->status()
+        || !$index->isValidDatasource('entity:node')
+        || !$index->hasValidTracker()
+      ) {
+        continue;
+      }
+      $items = [];
+      foreach ($index->getTrackerInstance()->getRemainingItems(-1, 'entity:node') as $item_id) {
+        [, $raw_id] = SearchApiUtility::splitCombinedId((string) $item_id);
+        $items[(int) strtok((string) $raw_id, ':')][] = (string) $item_id;
+      }
+      $pending = [];
+      foreach (array_chunk(array_keys($items), 1000) as $nids) {
+        $query = clone $archived;
+        $query->condition('archived.entity_id', $nids, 'IN');
+        foreach ($query->execute()->fetchCol() as $nid) {
+          array_push($pending, ...$items[(int) $nid]);
+        }
+      }
+      if ($pending !== []) {
+        $backlog[(string) $index->id()] = array_values(array_unique($pending));
+      }
+    }
+    return $backlog;
   }
 
   /**

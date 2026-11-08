@@ -157,6 +157,10 @@ final class ArchiveCommands extends DrushCommands {
    * time is kept and no mail goes out. Running it again is safe; finished
    * requests are no longer candidates.
    *
+   * Then indexes the search index items of archived requests that wait for
+   * indexing, so no index keeps the text from before (step "search index",
+   * counted in index items, only with Search API).
+   *
    * Exits with 1 when a request failed, or when a step whose setting is on
    * still has requests left although no --limit was given. A dry run always
    * exits with 0.
@@ -249,6 +253,10 @@ final class ArchiveCommands extends DrushCommands {
       }
       if ($only !== 'unpublish') {
         $rows[] = $this->anonymizeStep($dry_run, $limit, $batch_size);
+      }
+      $search = $this->searchIndexStep($dry_run);
+      if ($search !== NULL) {
+        $rows[] = $search;
       }
     }
     finally {
@@ -348,6 +356,34 @@ final class ArchiveCommands extends DrushCommands {
     $row['remaining'] = $this->archiveService->countBackfillCandidates();
     if ($row['note'] === '' && $row['remaining'] > 0) {
       $row['note'] = 'Limit reached: cron or the next run continues.';
+    }
+    return $row;
+  }
+
+  /**
+   * Indexes or counts the search index items of archived requests.
+   *
+   * @return array<string, int|string>|null
+   *   The result row, NULL without Search API.
+   */
+  private function searchIndexStep(bool $dry_run): ?array {
+    $pending = $this->archiveService->countSearchIndexBacklog();
+    if ($pending === NULL) {
+      return NULL;
+    }
+    $row = $this->stepRow('search index', TRUE, $pending);
+    if ($dry_run) {
+      $row['note'] = 'Dry run: nothing was changed.';
+    }
+    elseif ($pending > 0) {
+      $result = $this->archiveService->indexSearchIndexBacklog();
+      foreach (['processed', 'changed', 'failed'] as $key) {
+        $row[$key] = $result[$key];
+      }
+      $row['remaining'] = (int) $this->archiveService->countSearchIndexBacklog();
+      if ($row['failed'] > 0 || $row['remaining'] > 0) {
+        $row['note'] = 'Items failed to index: Search API retries them on cron. The markaspot_archive and search_api logs name the reason.';
+      }
     }
     return $row;
   }
