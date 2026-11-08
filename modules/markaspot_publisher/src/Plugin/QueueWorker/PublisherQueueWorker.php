@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 namespace Drupal\markaspot_publisher\Plugin\QueueWorker;
 
 use Drupal\Core\Queue\QueueWorkerBase;

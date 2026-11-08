@@ -125,8 +125,7 @@ class MarkASpotSettingsController extends ControllerBase {
    * @param \Drupal\markaspot_nuxt\Image\LogoDimensionResolver $logo_dimension_resolver
    *   The logo dimension resolver.
    * @param \Drupal\Core\Extension\ProfileExtensionList $profileExtensionList
-   *   Profile versions serve frontend compatibility checks on the server;
-   *   the Nuxt proxy must strip this field from browser responses.
+   *   The profile extension list.
    */
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
@@ -239,6 +238,8 @@ class MarkASpotSettingsController extends ControllerBase {
     }
 
     $settings = [
+      // Profile versions serve frontend compatibility checks on the server;
+      // the Nuxt proxy must strip this field from browser responses.
       'profile_version' => $profileVersion,
       // Map configuration - styles only, no keys.
       'mapbox_style' => $nuxt_config->get('mapbox_style'),
