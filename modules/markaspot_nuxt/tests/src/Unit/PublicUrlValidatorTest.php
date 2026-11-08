@@ -182,6 +182,32 @@ final class PublicUrlValidatorTest extends UnitTestCase {
   }
 
   /**
+   * URLs the caller recognizes as its own keep the request host.
+   */
+  public function testPreservesCallerApprovedUrlsOnTheRequestHost(): void {
+    $preserved = [];
+    $output = $this->validator->rewriteNonPublicHttpUrls(
+      '<a href="https://staff.example.org/node/7/edit">Edit</a> <img src="https://staff.example.org/files/a.png"> http://127.0.0.1/node/8',
+      'https://public.example.org',
+      ['staff.example.org'],
+      static function (string $url) use (&$preserved): bool {
+        $preserved[] = $url;
+        return $url === 'https://staff.example.org/node/7/edit';
+      },
+    );
+
+    $this->assertSame(
+      '<a href="https://staff.example.org/node/7/edit">Edit</a> <img src="https://public.example.org/files/a.png"> https://public.example.org/node/8',
+      $output,
+    );
+    $this->assertSame([
+      'https://staff.example.org/node/7/edit',
+      'https://staff.example.org/files/a.png',
+      'http://127.0.0.1/node/8',
+    ], $preserved);
+  }
+
+  /**
    * Invalid path-bearing origins cannot inject markup during replacement.
    */
   public function testRejectsHtmlBreakingReplacementBase(): void {

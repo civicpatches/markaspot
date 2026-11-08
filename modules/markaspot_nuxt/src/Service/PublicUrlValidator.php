@@ -216,9 +216,21 @@ final class PublicUrlValidator {
    * Rewrites non-public absolute URLs in rendered mail or token output.
    *
    * Request-derived local hosts may be supplied so a poisoned but
-   * public-looking Host header is replaced instead of preserved.
+   * public-looking Host header is replaced instead of preserved. A caller
+   * that recognizes some URLs as its own, built from an explicitly
+   * configured public base whose host can also be the request host, passes
+   * $preserve: every URL it accepts stays exactly as written.
+   *
+   * @param string $value
+   *   Rendered mail or token output.
+   * @param string $publicBase
+   *   The configured public origin to rebase onto.
+   * @param string[] $localHosts
+   *   Request-derived hosts that are never trusted as they are.
+   * @param (callable(string): bool)|null $preserve
+   *   Receives each matched URL as written; TRUE keeps it unchanged.
    */
-  public function rewriteNonPublicHttpUrls(string $value, string $publicBase, array $localHosts = []): string {
+  public function rewriteNonPublicHttpUrls(string $value, string $publicBase, array $localHosts = [], ?callable $preserve = NULL): string {
     $localHosts = array_map(
       static fn(string $host): string => rtrim(strtolower(trim($host, '[]')), '.'),
       $localHosts,
@@ -226,8 +238,11 @@ final class PublicUrlValidator {
 
     return (string) preg_replace_callback(
       '~(?:(?<![a-z0-9+.-])https?://|(?<![a-z0-9:])//)[^\s<>"\']+~i',
-      function (array $matches) use ($publicBase, $localHosts): string {
+      function (array $matches) use ($publicBase, $localHosts, $preserve): string {
         $url = $matches[0];
+        if ($preserve !== NULL && $preserve($url) === TRUE) {
+          return $url;
+        }
         $candidate = str_starts_with($url, '//') ? 'https:' . $url : $url;
         $host = parse_url($candidate, PHP_URL_HOST);
         $normalizedHost = is_string($host)

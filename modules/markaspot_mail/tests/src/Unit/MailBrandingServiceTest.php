@@ -487,6 +487,76 @@ final class MailBrandingServiceTest extends UnitTestCase {
   }
 
   /**
+   * Staff backend links survive a request on the staff backend host.
+   *
+   * Staff saving a request at management.example.org make it the request
+   * host. Only the backend link shapes on the configured staff base stay;
+   * every other URL on that host is still rebased onto the public origin.
+   */
+  public function testNormalizeMailUrlsKeepsStaffBackendLinksOnTheRequestHost(): void {
+    $service = $this->buildStaffBackendNormalizer('https://management.example.org/node/123/edit', [
+      'platform.staff_backend_base_url' => 'https://management.example.org/',
+    ]);
+
+    $this->assertSame(
+      '<a href="https://management.example.org/node/123/edit">Edit</a> <a href="https://management.example.org/node/123">View</a>',
+      $service->normalizeMailUrls('<a href="https://management.example.org/node/123/edit">Edit</a> <a href="https://management.example.org/node/123">View</a>'),
+    );
+    $this->assertSame(
+      "Open in the backend: https://management.example.org/node/123/edit\nOr see https://management.example.org/node/123/edit.",
+      $service->normalizeMailUrls("Open in the backend: https://management.example.org/node/123/edit\nOr see https://management.example.org/node/123/edit."),
+    );
+    $this->assertSame(
+      '<img src="https://melder.example.org/sites/default/files/logo.png"> https://melder.example.org/user/reset/1?token=secret https://melder.example.org/node/123/edit?destination=/admin https://melder.example.org/node/123/revisions https://melder.example.org/node/0/edit',
+      $service->normalizeMailUrls('<img src="https://management.example.org/sites/default/files/logo.png"> https://management.example.org/user/reset/1?token=secret https://management.example.org/node/123/edit?destination=/admin https://management.example.org/node/123/revisions https://management.example.org/node/0/edit'),
+    );
+  }
+
+  /**
+   * A staff base with its own path only keeps links below that path.
+   */
+  public function testNormalizeMailUrlsKeepsStaffBackendLinksBelowTheStaffBasePath(): void {
+    $service = $this->buildStaffBackendNormalizer('https://example.org/management/node/5/edit', [
+      'platform.staff_backend_base_url' => 'https://example.org/management',
+    ]);
+
+    $this->assertSame(
+      'https://example.org/management/node/5/edit https://melder.example.org/reset?token=secret https://melder.example.org/managementx/node/5/edit https://melder.example.org/node/5/edit',
+      $service->normalizeMailUrls('https://example.org/management/node/5/edit https://example.org/reset?token=secret https://example.org/managementx/node/5/edit https://example.org/node/5/edit'),
+    );
+  }
+
+  /**
+   * Untrusted request hosts are still rebased, staff links included.
+   */
+  public function testNormalizeMailUrlsStillRebasesUntrustedRequestHosts(): void {
+    $attacker = $this->buildStaffBackendNormalizer('https://attacker.example.net/', [
+      'platform.staff_backend_base_url' => 'https://management.example.org',
+    ]);
+    $this->assertSame(
+      'https://melder.example.org/node/123/edit https://management.example.org/node/123/edit',
+      $attacker->normalizeMailUrls('https://attacker.example.net/node/123/edit https://management.example.org/node/123/edit'),
+    );
+
+    // Without an explicit staff base the request host is never trusted.
+    $unset = $this->buildStaffBackendNormalizer('https://management.example.org/', []);
+    $this->assertSame(
+      'https://melder.example.org/node/123/edit',
+      $unset->normalizeMailUrls('https://management.example.org/node/123/edit'),
+    );
+
+    // A staff base on the frontend host is no staff backend.
+    $frontend = $this->buildStaffBackendNormalizer('https://www.example.org/', [
+      'platform.staff_backend_base_url' => 'https://www.example.org',
+      'platform.frontend_base_url' => 'https://www.example.org',
+    ]);
+    $this->assertSame(
+      'https://melder.example.org/node/123/edit',
+      $frontend->normalizeMailUrls('https://www.example.org/node/123/edit'),
+    );
+  }
+
+  /**
    * Nested token output is normalized before mail template validation.
    */
   public function testNormalizeMailContentRecursesThroughStringValues(): void {
@@ -1548,6 +1618,26 @@ final class MailBrandingServiceTest extends UnitTestCase {
       $moduleExtensionList,
       $requestStack,
       $fileSystem,
+    );
+  }
+
+  /**
+   * Builds a branding service for a request on the given URL.
+   *
+   * The public asset origin is https://melder.example.org.
+   *
+   * @param string $requestUrl
+   *   The URL of the current request.
+   * @param array<string, string> $settings
+   *   Settings on top of the platform settings.
+   */
+  private function buildStaffBackendNormalizer(string $requestUrl, array $settings): MailBrandingService {
+    $requestStack = new RequestStack();
+    $requestStack->push(Request::create($requestUrl));
+    return $this->buildService(
+      NULL,
+      settingsOverride: $settings + ['platform.backend_base_url' => 'https://melder.example.org'] + self::PLATFORM_SETTINGS,
+      requestStack: $requestStack,
     );
   }
 

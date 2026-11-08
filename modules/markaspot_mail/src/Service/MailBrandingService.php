@@ -152,6 +152,9 @@ class MailBrandingService {
 
   /**
    * Rewrites generated internal URLs in rendered mail and token output.
+   *
+   * Staff backend links built from platform.staff_backend_base_url stay as
+   * they are, see staffBackendLinkMatcher().
    */
   public function normalizeMailUrls(string $value): string {
     $base = $this->resolveAbsoluteBaseUrl();
@@ -159,7 +162,40 @@ class MailBrandingService {
       $value,
       $base,
       $base !== '' ? $this->requestLocalHosts() : [],
+      $this->staffBackendLinkMatcher(),
     );
+  }
+
+  /**
+   * Returns a matcher for the staff backend links of staff mails.
+   *
+   * Staff mails link the Drupal backend as <base>/node/<nid> and
+   * <base>/node/<nid>/edit (StaffRequestLinksTrait), where <base> is the
+   * explicitly configured platform.staff_backend_base_url. A mail sent
+   * while staff work on that host has it as request host, and
+   * normalizeMailUrls() rebases request-host URLs onto
+   * platform.backend_base_url, which would send staff to the frontend. Only
+   * these two link shapes are kept, followed at most by the punctuation
+   * plain text puts after a URL. Every other URL on the request host, such
+   * as a file URL in a citizen mail, is still rebased: a staff backend host
+   * is often not reachable for the public.
+   *
+   * @return (callable(string): bool)|null
+   *   The matcher, or NULL without a usable explicit staff backend base.
+   */
+  private function staffBackendLinkMatcher(): ?callable {
+    $base = $this->configuredStaffBackendBase();
+    if ($base === NULL) {
+      return NULL;
+    }
+    $frontendBase = $this->validateHttpUrl((string) ($this->configFactory
+      ->get('markaspot_mail.settings')
+      ->get('platform.frontend_base_url') ?? ''), '');
+    if ($this->pointsAtFrontend($base, $frontendBase)) {
+      return NULL;
+    }
+    $pattern = '~^' . preg_quote($base, '~') . '/node/[1-9][0-9]*(?:/edit)?[.,;:!?)\]]*$~';
+    return static fn(string $url): bool => preg_match($pattern, $url) === 1;
   }
 
   /**
@@ -283,7 +319,7 @@ class MailBrandingService {
     $settings = $this->configFactory->get('markaspot_mail.settings');
     $configured = trim((string) ($settings->get('platform.staff_backend_base_url') ?? ''));
     if ($configured !== '') {
-      $base = $this->urlValidator()->normalizeBaseUrl($configured);
+      $base = $this->configuredStaffBackendBase();
       if ($base === NULL) {
         $this->warnOnce('Ignored invalid markaspot_mail.settings.platform.staff_backend_base_url: staff mails keep the dashboard link.');
         return NULL;
@@ -776,6 +812,20 @@ class MailBrandingService {
    */
   private function resolveGeneratedFileUrl(string $url): ?string {
     return $this->ensureAbsolute($url);
+  }
+
+  /**
+   * Returns the validated platform.staff_backend_base_url, without logging.
+   *
+   * @return string|null
+   *   The public base URL without trailing slash, or NULL when the setting
+   *   is empty or invalid.
+   */
+  private function configuredStaffBackendBase(): ?string {
+    $configured = trim((string) ($this->configFactory
+      ->get('markaspot_mail.settings')
+      ->get('platform.staff_backend_base_url') ?? ''));
+    return $configured !== '' ? $this->urlValidator()->normalizeBaseUrl($configured) : NULL;
   }
 
   /**
