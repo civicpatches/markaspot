@@ -8,7 +8,7 @@ Template readers require staff capabilities and jurisdiction membership. Organis
 
 `tenant.features.unifiedReporting` contains `enabled` (boolean), `aiMode` (`disabled`, `opt_in`, `opt_out`) and `photoPolicy` (`optional`, `required`, `required_by_category`). These values pass through to the shared frontend runtime configuration.
 
-`tenant.features.photoRequiredCategories` is a list of category term IDs that require a photo (used by `photoPolicy: required_by_category` and by the classic form); an import replaces the stored list. `tenant.features.forms.lockPhotoLocation` (boolean) lets a photo's EXIF location replace and lock the detected position.
+`tenant.features.photoRequiredCategories` is a list of category term IDs that require a photo (used by `photoPolicy: required_by_category` and by the classic form); an import replaces the stored list. `tenant.features.forms.lockPhotoLocation` (boolean) lets a photo's EXIF location replace and lock the detected position. `tenant.features.forms.requireDashboardDescription` (boolean, default false) makes the description mandatory when staff create a report in the dashboard.
 
 `tenant.features.operationsDashboard` controls the Fachadmin's `access dashboard kpis` permission. Enabling it requires `markaspot_dashboard`; the saved permission is checked. Authentication responses expose the permission to the frontend. Initial optional template manager permissions are established once after configuration installation. A completed setup does not regrant later revocations.
 

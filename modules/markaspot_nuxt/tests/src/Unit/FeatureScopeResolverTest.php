@@ -131,7 +131,7 @@ final class FeatureScopeResolverTest extends UnitTestCase {
   }
 
   /**
-   * Tests the report form settings pass through and lockPhotoLocation resolves.
+   * Tests the report form settings pass through and the form flags resolve.
    *
    * @covers ::resolveEffectiveFeatures
    * @covers ::isEditable
@@ -148,7 +148,7 @@ final class FeatureScopeResolverTest extends UnitTestCase {
       'field_nuxt_config' => json_encode(['features' => [
         'unifiedReporting' => $unified,
         'photoRequiredCategories' => [12, '7', 'x', 0],
-        'forms' => ['lockPhotoLocation' => TRUE],
+        'forms' => ['lockPhotoLocation' => TRUE, 'requireDashboardDescription' => TRUE],
       ]]),
     ]);
     $legacy = $this->createGroup(1, [
@@ -161,14 +161,22 @@ final class FeatureScopeResolverTest extends UnitTestCase {
     $this->assertSame($unified, $features['unifiedReporting']);
     $this->assertSame([7, 12], $features['photoRequiredCategories']);
     $this->assertTrue($features['forms']['lockPhotoLocation']);
+    $this->assertTrue($features['forms']['requireDashboardDescription']);
     $this->assertFalse($features['forms']['allowParentCategorySelection']);
-    foreach (['unifiedReporting', 'photoRequiredCategories', 'forms.lockPhotoLocation'] as $key) {
+    $editable = [
+      'unifiedReporting',
+      'photoRequiredCategories',
+      'forms.lockPhotoLocation',
+      'forms.requireDashboardDescription',
+    ];
+    foreach ($editable as $key) {
       $this->assertTrue($resolver->isEditable($key, $stored), $key);
     }
 
     $this->assertTrue($this->createResolver($legacy)->resolveEffectiveFeatures($legacy)['forms']['lockPhotoLocation']);
     $defaults = $this->createResolver($empty)->resolveEffectiveFeatures($empty);
     $this->assertFalse($defaults['forms']['lockPhotoLocation']);
+    $this->assertFalse($defaults['forms']['requireDashboardDescription']);
     $this->assertArrayNotHasKey('unifiedReporting', $defaults);
   }
 

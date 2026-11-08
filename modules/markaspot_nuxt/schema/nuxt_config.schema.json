@@ -590,6 +590,12 @@
               "title": "Lock Photo Location",
               "description": "A photo's EXIF location replaces the detected position and locks it",
               "default": false
+            },
+            "requireDashboardDescription": {
+              "type": "boolean",
+              "title": "Require Description in the Dashboard",
+              "description": "Staff must enter a description when they create a report in the dashboard",
+              "default": false
             }
           }
         },

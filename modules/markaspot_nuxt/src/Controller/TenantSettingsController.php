@@ -121,6 +121,7 @@ final class TenantSettingsController extends ControllerBase {
   const FORM_FEATURE_FLAGS = [
     'allowParentCategorySelection',
     'lockPhotoLocation',
+    'requireDashboardDescription',
   ];
 
   /**
@@ -2357,6 +2358,7 @@ final class TenantSettingsController extends ControllerBase {
         'forms' => [
           'allowParentCategorySelection' => $this->getBooleanFeatureValue($forms, 'allowParentCategorySelection', FALSE),
           'lockPhotoLocation' => $this->getBooleanFeatureValue($forms, 'lockPhotoLocation', FALSE),
+          'requireDashboardDescription' => $this->getBooleanFeatureValue($forms, 'requireDashboardDescription', FALSE),
         ],
         'unifiedReporting' => $this->normalizeUnifiedReporting($features['unifiedReporting'] ?? NULL),
         // Lenient on read: a single malformed stored entry must not empty the

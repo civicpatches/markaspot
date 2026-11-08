@@ -8,7 +8,7 @@ Lesende benötigen Mitarbeitendenrechte und die Mitgliedschaft in der Jurisdikti
 
 `tenant.features.unifiedReporting` enthält `enabled` als booleschen Wert, `aiMode` (`disabled`, `opt_in`, `opt_out`) und `photoPolicy` (`optional`, `required`, `required_by_category`). Diese Werte gelangen in die Laufzeitkonfiguration des gemeinsamen Frontends.
 
-`tenant.features.photoRequiredCategories` ist eine Liste von Kategorie-Term-IDs, für die ein Foto Pflicht ist (genutzt von `photoPolicy: required_by_category` und vom klassischen Formular); ein Import ersetzt die gespeicherte Liste. `tenant.features.forms.lockPhotoLocation` (boolescher Wert) lässt den EXIF-Standort eines Fotos die erkannte Position ersetzen und festsetzen.
+`tenant.features.photoRequiredCategories` ist eine Liste von Kategorie-Term-IDs, für die ein Foto Pflicht ist (genutzt von `photoPolicy: required_by_category` und vom klassischen Formular); ein Import ersetzt die gespeicherte Liste. `tenant.features.forms.lockPhotoLocation` (boolescher Wert) lässt den EXIF-Standort eines Fotos die erkannte Position ersetzen und festsetzen. `tenant.features.forms.requireDashboardDescription` (boolescher Wert, Standard false) macht die Beschreibung zur Pflicht, wenn Mitarbeitende im Dashboard eine Meldung anlegen.
 
 `tenant.features.operationsDashboard` steuert die Fachadmin-Berechtigung `access dashboard kpis`. Die Aktivierung setzt `markaspot_dashboard` voraus; die gespeicherte Berechtigung wird geprüft. Die Anmeldeantwort übermittelt sie an das Frontend. Optionale Rechte zur Vorlagenverwaltung werden einmalig nach der Konfigurationsinstallation gesetzt. Ein abgeschlossenes Setup stellt später entzogene Rechte nicht erneut her.
 

@@ -3461,6 +3461,11 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertSame(['enabled' => FALSE, 'aiMode' => 'disabled', 'photoPolicy' => 'optional'], $data['features']['unifiedReporting']);
     $this->assertSame([], $data['features']['photoRequiredCategories']);
     $this->assertFalse($data['features']['forms']['lockPhotoLocation']);
+    // A missing key reads as off; the settings page shows the switch because
+    // the scopes advertise the key as jurisdiction-scoped and editable.
+    $this->assertFalse($data['features']['forms']['requireDashboardDescription']);
+    $this->assertSame('jurisdiction', $data['scopes']['flags']['forms.requireDashboardDescription']);
+    $this->assertContains('forms.requireDashboardDescription', $data['scopes']['editable']);
   }
 
   /**
@@ -3478,7 +3483,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
           'cta' => ['heading' => 'x'],
         ],
         'photoRequiredCategories' => ['12', 7, 12, 'abc', 0, -3, 2.5],
-        'forms' => ['lockPhotoLocation' => TRUE],
+        'forms' => ['lockPhotoLocation' => TRUE, 'requireDashboardDescription' => TRUE],
       ]]),
     ]);
     $this->groupStorage->method('load')->with(14)->willReturn($group);
@@ -3488,6 +3493,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertSame(['enabled' => TRUE, 'aiMode' => 'disabled', 'photoPolicy' => 'required_by_category'], $data['features']['unifiedReporting']);
     $this->assertSame([7, 12], $data['features']['photoRequiredCategories']);
     $this->assertTrue($data['features']['forms']['lockPhotoLocation']);
+    $this->assertTrue($data['features']['forms']['requireDashboardDescription']);
   }
 
   /**
@@ -3525,6 +3531,39 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertSame([2, 43], $updated['photoRequiredCategories']);
     $this->assertSame(['allowParentCategorySelection' => TRUE, 'lockPhotoLocation' => TRUE], $updated['forms']);
     $this->assertSame(['enabled' => TRUE, 'mode' => 'fuzzy'], $updated['search']);
+  }
+
+  /**
+   * Tests a child jurisdiction stores its own dashboard description rule.
+   *
+   * The flag is jurisdiction-scoped like lockPhotoLocation: a tenant admin
+   * saving the settings of a child jurisdiction stores it there, while a
+   * tenant-scoped flag in the same request stays with the root.
+   *
+   * @covers ::updateFeatureSettings
+   */
+  public function testUpdateFeatureSettingsStoresDashboardDescriptionInJurisdictionScope(): void {
+    $storedNuxtConfig = json_encode(['features' => [
+      'forms' => ['lockPhotoLocation' => TRUE],
+      'delegationNoteRequired' => FALSE,
+    ]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->willReturn($group);
+    // Group 14 is a child of the tenant root 1.
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(1);
+
+    $response = $this->controller->updateFeatureSettings($this->createFeaturePatchRequest([
+      'forms' => ['requireDashboardDescription' => TRUE],
+      'delegationNoteRequired' => TRUE,
+    ]), '14');
+    $data = json_decode($response->getContent(), TRUE);
+    $updated = json_decode($storedNuxtConfig, TRUE)['features'];
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame(['lockPhotoLocation' => TRUE, 'requireDashboardDescription' => TRUE], $updated['forms']);
+    $this->assertFalse($updated['delegationNoteRequired']);
+    $this->assertTrue($data['features']['forms']['requireDashboardDescription']);
+    $this->assertContains('forms.requireDashboardDescription', $data['scopes']['editable']);
   }
 
   /**
@@ -3596,6 +3635,8 @@ class TenantSettingsControllerTest extends UnitTestCase {
       'category text' => [['photoRequiredCategories' => ['abc']]],
       'categories object' => [['photoRequiredCategories' => ['a' => 1]]],
       'lock string' => [['forms' => ['lockPhotoLocation' => 'yes']]],
+      'require description string' => [['forms' => ['requireDashboardDescription' => 'yes']]],
+      'require description number' => [['forms' => ['requireDashboardDescription' => 1]]],
       'oversized category id' => [['photoRequiredCategories' => ['999999999999999999999999999999']]],
       'id beyond the JS safe integer' => [['photoRequiredCategories' => ['9007199254740993']]],
       'int beyond the JS safe integer' => [['photoRequiredCategories' => [9007199254740992]]],

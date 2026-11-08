@@ -33,12 +33,12 @@ final class TenantRuntimeConfigurationTest extends UnitTestCase {
   }
 
   /**
-   * Photo-required categories replace the stored list; the photo lock merges.
+   * Photo-required categories replace the stored list; the form flags merge.
    */
   public function testPhotoCategoriesAndLockContract(): void {
     $tenant = ['features' => [
       'photoRequiredCategories' => [43, 2, 43],
-      'forms' => ['lockPhotoLocation' => TRUE],
+      'forms' => ['lockPhotoLocation' => TRUE, 'requireDashboardDescription' => TRUE],
     ]];
     $existing = ['features' => [
       'photoRequiredCategories' => [99, 98, 97],
@@ -51,13 +51,18 @@ final class TenantRuntimeConfigurationTest extends UnitTestCase {
     $this->assertSame([], TenantRuntimeConfiguration::validate(['features' => ['photoRequiredCategories' => $at_cap]]));
     $merged = TenantRuntimeConfiguration::merge($existing, $tenant)['features'];
     $this->assertSame([43, 2], $merged['photoRequiredCategories']);
-    $this->assertSame(['allowParentCategorySelection' => TRUE, 'lockPhotoLocation' => TRUE], $merged['forms']);
+    $this->assertSame([
+      'allowParentCategorySelection' => TRUE,
+      'lockPhotoLocation' => TRUE,
+      'requireDashboardDescription' => TRUE,
+    ], $merged['forms']);
     foreach ([
       ['photoRequiredCategories' => [0]],
       ['photoRequiredCategories' => ['12']],
       ['photoRequiredCategories' => ['a' => 1]],
       ['forms' => ['lockPhotoLocation' => 'yes']],
       ['forms' => ['allowParentCategorySelection' => 'yes']],
+      ['forms' => ['requireDashboardDescription' => 'yes']],
       ['forms' => ['unknownFlag' => TRUE]],
       ['photoRequiredCategories' => [9007199254740992]],
       ['photoRequiredCategories' => range(1, 1001)],

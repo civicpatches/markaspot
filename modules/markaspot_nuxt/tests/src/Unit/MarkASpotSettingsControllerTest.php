@@ -1650,6 +1650,41 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Tests the dashboard description rule reaches the frontend as a boolean.
+   *
+   * @covers ::getMarkASpotSettings
+   * @dataProvider dashboardDescriptionConfigProvider
+   */
+  public function testGetSettingsExposesDashboardDescriptionRule(array $nuxtConfig, bool $expected): void {
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode($nuxtConfig),
+      'field_slug' => 'riverton',
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
+    $response = $this->controller->getMarkASpotSettings($request);
+
+    $this->assertEquals(200, $response->getStatusCode());
+    $data = json_decode($response->getContent(), TRUE);
+    $this->assertSame($expected, $data['features']['forms']['requireDashboardDescription']);
+  }
+
+  /**
+   * Provides stored dashboard description rules and the delivered value.
+   */
+  public static function dashboardDescriptionConfigProvider(): array {
+    return [
+      'enabled' => [['features' => ['forms' => ['requireDashboardDescription' => TRUE]]], TRUE],
+      'disabled' => [['features' => ['forms' => ['requireDashboardDescription' => FALSE]]], FALSE],
+      'missing key stays off' => [['features' => ['forms' => ['lockPhotoLocation' => TRUE]]], FALSE],
+      'no features' => [['features' => []], FALSE],
+      'non-boolean stays off' => [['features' => ['forms' => ['requireDashboardDescription' => 'yes']]], FALSE],
+      'legacy top-level forms' => [['features' => [], 'forms' => ['requireDashboardDescription' => TRUE]], TRUE],
+    ];
+  }
+
+  /**
    * Tests custom WMS layers are enabled on self-hosted installations.
    *
    * The tier field is attached but empty after moving it to markaspot_group,

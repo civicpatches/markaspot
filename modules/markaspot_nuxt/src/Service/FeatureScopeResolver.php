@@ -59,6 +59,9 @@ class FeatureScopeResolver {
     'boundaries' => 'jurisdiction',
     'forms.allowParentCategorySelection' => 'jurisdiction',
     'forms.lockPhotoLocation' => 'jurisdiction',
+    // Staff must enter a description when they create a report in the
+    // dashboard. Off by default.
+    'forms.requireDashboardDescription' => 'jurisdiction',
     // Report form configuration objects. Not booleans: they only take part in
     // the editability check, the citizen settings pass them through as stored.
     'unifiedReporting' => 'jurisdiction',
@@ -116,6 +119,7 @@ class FeatureScopeResolver {
     'boundaries' => FALSE,
     'forms.allowParentCategorySelection' => FALSE,
     'forms.lockPhotoLocation' => FALSE,
+    'forms.requireDashboardDescription' => FALSE,
   ];
 
   /**

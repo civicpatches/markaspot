@@ -16,6 +16,13 @@ final class TenantRuntimeConfiguration {
   ];
 
   /**
+   * Mirrors TenantSettingsController::FORM_FEATURE_FLAGS (features.forms).
+   */
+  public const FORM_FLAGS = [
+    'allowParentCategorySelection', 'lockPhotoLocation', 'requireDashboardDescription',
+  ];
+
+  /**
    * Mirrors TenantSettingsController::MAX_PHOTO_REQUIRED_CATEGORIES.
    */
   public const MAX_PHOTO_REQUIRED_CATEGORIES = 1000;
@@ -99,10 +106,9 @@ final class TenantRuntimeConfiguration {
             continue;
           }
           if ($name === 'forms') {
-            $form_flags = ['allowParentCategorySelection', 'lockPhotoLocation'];
-            if (!is_array($value) || $value === [] || array_diff(array_keys($value), $form_flags) !== []
+            if (!is_array($value) || $value === [] || array_diff(array_keys($value), self::FORM_FLAGS) !== []
               || array_filter($value, static fn($flag): bool => !is_bool($flag)) !== []) {
-              $errors[] = 'tenant.features.forms supports only the booleans allowParentCategorySelection and lockPhotoLocation.';
+              $errors[] = 'tenant.features.forms supports only the booleans ' . implode(', ', self::FORM_FLAGS) . '.';
             }
             continue;
           }
@@ -217,7 +223,7 @@ final class TenantRuntimeConfiguration {
     if (isset($tenant['features']['photoRequiredCategories'])) {
       $existing['features']['photoRequiredCategories'] = array_values(array_unique($tenant['features']['photoRequiredCategories']));
     }
-    foreach (['allowParentCategorySelection', 'lockPhotoLocation'] as $form_flag) {
+    foreach (self::FORM_FLAGS as $form_flag) {
       if (isset($tenant['features']['forms'][$form_flag])) {
         $patch['features']['forms'][$form_flag] = $tenant['features']['forms'][$form_flag];
       }
