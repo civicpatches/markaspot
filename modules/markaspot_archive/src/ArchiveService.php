@@ -466,7 +466,6 @@ class ArchiveService implements ArchiveServiceInterface {
       return $result;
     }
 
-    $storage = $this->entityTypeManager->getStorage('node');
     $started = microtime(TRUE);
     foreach ($nids as $nid) {
       if (microtime(TRUE) - $started > $time_budget) {
@@ -475,14 +474,18 @@ class ArchiveService implements ArchiveServiceInterface {
       $cursor = (int) $nid;
       $result['processed']++;
       try {
-        $node = $storage->load($nid);
-        if (!$node instanceof NodeInterface || !$this->unpublishTranslations($node)) {
-          continue;
+        $changed = $this->changeArchivedRequest((int) $nid, $archived_status, TRUE, function (NodeInterface $node): bool {
+          if (!$this->unpublishTranslations($node)) {
+            return FALSE;
+          }
+          // Keep the changed time: unpublishing is no change of the request.
+          $node->setSyncing(TRUE);
+          $node->save();
+          return TRUE;
+        });
+        if ($changed) {
+          $result['changed']++;
         }
-        // Keep the changed time: unpublishing is no change of the request.
-        $node->setSyncing(TRUE);
-        $node->save();
-        $result['changed']++;
       }
       catch (DatabaseException $e) {
         throw $e;
@@ -520,7 +523,6 @@ class ArchiveService implements ArchiveServiceInterface {
       return $result;
     }
     $fields = $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'));
-    $storage = $this->entityTypeManager->getStorage('node');
     $detectable = $this->detectableFields($fields);
     if ($detectable === []) {
       return $result;
@@ -544,29 +546,30 @@ class ArchiveService implements ArchiveServiceInterface {
       $cursor = (int) $nid;
       $result['processed']++;
       try {
-        $node = $storage->load($nid);
-        if (!$node instanceof NodeInterface) {
-          continue;
-        }
-        $anonymized_values = $this->anonymize($node, $fields);
-        // A field empty on the current revision may still hold plain data in
-        // previous revisions.
-        foreach ($detectable as $field_name => $type) {
-          if (!isset($anonymized_values[$field_name]) && $node->hasField($field_name)) {
-            $anonymized_values[$field_name] = [
-              'type' => $type,
-              'value' => $this->anonymizedValue($type),
-            ];
+        $changed = $this->changeArchivedRequest((int) $nid, $archived_status, FALSE, function (NodeInterface $node) use ($fields, $detectable): bool {
+          $anonymized_values = $this->anonymize($node, $fields);
+          // A field empty on the current revision may still hold plain data
+          // in previous revisions.
+          foreach ($detectable as $field_name => $type) {
+            if (!isset($anonymized_values[$field_name]) && $node->hasField($field_name)) {
+              $anonymized_values[$field_name] = [
+                'type' => $type,
+                'value' => $this->anonymizedValue($type),
+              ];
+            }
           }
+          if ($anonymized_values === []) {
+            return FALSE;
+          }
+          // Keep the changed time: anonymizing is no change of the request.
+          $node->setSyncing(TRUE);
+          $node->save();
+          $this->anonymizeRevisions($node, $anonymized_values);
+          return TRUE;
+        });
+        if ($changed) {
+          $result['changed']++;
         }
-        if ($anonymized_values === []) {
-          continue;
-        }
-        // Keep the changed time: anonymizing is no change of the request.
-        $node->setSyncing(TRUE);
-        $node->save();
-        $this->anonymizeRevisions($node, $anonymized_values);
-        $result['changed']++;
       }
       catch (DatabaseException $e) {
         throw $e;
@@ -739,6 +742,103 @@ class ArchiveService implements ArchiveServiceInterface {
       $query->range(0, $limit);
     }
     return array_map('intval', $query->execute()->fetchCol());
+  }
+
+  /**
+   * Changes one archived request of the catch-up under a row lock.
+   *
+   * Staff can reopen a request between the candidate query and its turn. The
+   * catch-up must neither anonymize nor unpublish it then: anonymization is
+   * irreversible, and saving the stale copy would undo the staff change. The
+   * request is locked, its status read from storage and the request
+   * reloaded, all in one transaction with the change.
+   *
+   * @param int $nid
+   *   The node ID.
+   * @param string $archived_status
+   *   The archived status term ID.
+   * @param bool $published
+   *   TRUE when the request must also still be published.
+   * @param callable(\Drupal\node\NodeInterface): bool $change
+   *   Changes the reloaded request; returns TRUE when it changed something.
+   *
+   * @return bool
+   *   TRUE when the request was changed.
+   */
+  protected function changeArchivedRequest(int $nid, string $archived_status, bool $published, callable $change): bool {
+    $transaction = $this->database->startTransaction();
+    try {
+      $node = $this->lockArchivedRequest($nid, $archived_status, $published)
+        ? $this->entityTypeManager->getStorage('node')->loadUnchanged($nid)
+        : NULL;
+      if (
+        !$node instanceof NodeInterface
+        || $node->bundle() !== 'service_request'
+        || (string) $node->get('field_status')->target_id !== $archived_status
+      ) {
+        $this->logger->notice(
+          'Node ID @nid changed after the archive catch-up selected it and was left as it is.',
+          ['@nid' => $nid]
+        );
+        return FALSE;
+      }
+      return $change($node);
+    }
+    catch (\Throwable $e) {
+      $transaction->rollBack();
+      throw $e;
+    }
+    finally {
+      // Commits, or ends the rolled back transaction.
+      unset($transaction);
+    }
+  }
+
+  /**
+   * Locks a request and checks its stored status.
+   *
+   * Every save of a node updates its base table row first. Locking that row
+   * waits for a save in progress and makes later saves wait for the
+   * catch-up; the status rows are then read with the latest committed data.
+   *
+   * @return bool
+   *   TRUE while the request has the archived status (and is published, if
+   *   asked for).
+   */
+  protected function lockArchivedRequest(int $nid, string $archived_status, bool $published): bool {
+    $storage = $this->entityTypeManager->getStorage('node');
+    $status = $this->nodeFieldStorage('field_status');
+    if (!$storage instanceof SqlContentEntityStorage || $status === NULL) {
+      return FALSE;
+    }
+    $mapping = $storage->getTableMapping();
+    $this->database->select((string) $storage->getBaseTable(), 'n')
+      ->fields('n', ['nid'])
+      ->condition('n.nid', $nid)
+      ->forUpdate()
+      ->execute()
+      ->fetchField();
+    $statuses = $this->database->select($mapping->getDedicatedDataTableName($status), 's')
+      ->fields('s', [$mapping->getFieldColumnName($status, 'target_id')])
+      ->condition('s.entity_id', $nid)
+      ->condition('s.deleted', 0)
+      ->forUpdate()
+      ->execute()
+      ->fetchCol();
+    if ($statuses === [] || array_unique(array_map('strval', $statuses)) !== [$archived_status]) {
+      return FALSE;
+    }
+    if (!$published) {
+      return TRUE;
+    }
+    return (bool) $this->database->select((string) $storage->getDataTable(), 'd')
+      ->fields('d', ['nid'])
+      ->condition('d.nid', $nid)
+      ->condition('d.status', 1)
+      ->forUpdate()
+      ->range(0, 1)
+      ->execute()
+      ->fetchField();
   }
 
   /**

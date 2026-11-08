@@ -1230,6 +1230,28 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * A request staff reopen after the candidate query is left alone.
+   *
+   * Anonymization is irreversible, and saving the stale copy would undo the
+   * staff change: both catch-ups recheck the stored status before a change.
+   */
+  public function testCatchUpLeavesRequestsReopenedAfterSelection(): void {
+    $nids = $this->createArchivedBacklog(2);
+
+    $this->racingArchiveService($nids[0])->backfillArchived(10, 20);
+    $this->racingArchiveService($nids[1])->unpublishArchivedBacklog(10, 20);
+
+    $reopened = Node::load($nids[0]);
+    self::assertSame($this->openStatusId(), (string) $reopened->get('field_status')->target_id);
+    self::assertSame('plain0@example.org', $reopened->get('field_e_mail')->value);
+    self::assertTrue($reopened->isPublished(), 'The unpublish pass reopened copy stays published.');
+    $other = Node::load($nids[1]);
+    self::assertSame($this->openStatusId(), (string) $other->get('field_status')->target_id);
+    self::assertStringEndsWith('@anonymized.off', $other->get('field_e_mail')->value);
+    self::assertTrue($other->isPublished(), 'Reopened before its unpublish turn.');
+  }
+
+  /**
    * The backfill command dry run counts both steps and writes nothing.
    */
   public function testBackfillCommandDryRunCountsWithoutWriting(): void {
@@ -1371,6 +1393,73 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       'limit' => 0,
       'batch-size' => ArchiveCommands::BACKFILL_BATCH_SIZE,
     ];
+  }
+
+  /**
+   * Returns an archive service that lets staff reopen a request.
+   *
+   * The request is reopened by an ordinary save right after the catch-up
+   * selected its candidates, before it processes them.
+   */
+  private function racingArchiveService(int $reopen_nid): ArchiveService {
+    return new class(
+      $reopen_nid,
+      (int) $this->openStatusId(),
+      $this->container->get('entity_type.manager'),
+      $this->container->get('config.factory'),
+      $this->container->get('state'),
+      $this->testLogger(),
+      $this->container->get('database'),
+      $this->container->get('module_handler'),
+    ) extends ArchiveService {
+
+      public function __construct(
+        private int $reopenNid,
+        private readonly int $openStatus,
+        mixed ...$arguments,
+      ) {
+        parent::__construct(...$arguments);
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      protected function backfillCandidates(string $archived_status, array $detectable, int $cursor, ?int $limit): array {
+        $candidates = parent::backfillCandidates($archived_status, $detectable, $cursor, $limit);
+        $this->reopen();
+        return $candidates;
+      }
+
+      /**
+       * {@inheritdoc}
+       */
+      protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit): array {
+        $candidates = parent::publishedArchivedCandidates($archived_status, $cursor, $limit);
+        $this->reopen();
+        return $candidates;
+      }
+
+      /**
+       * Reopens the request once, as staff would.
+       */
+      private function reopen(): void {
+        if ($this->reopenNid === 0) {
+          return;
+        }
+        $node = Node::load($this->reopenNid);
+        $node->set('field_status', $this->openStatus);
+        $node->save();
+        $this->reopenNid = 0;
+      }
+
+    };
+  }
+
+  /**
+   * Returns the open status term id from the archive settings.
+   */
+  private function openStatusId(): string {
+    return (string) array_key_first((array) $this->config('markaspot_archive.settings')->get('status_archivable'));
   }
 
   /**
