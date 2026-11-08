@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_mail\Unit;
 
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
 use Drupal\Component\Render\MarkupInterface;
@@ -1243,49 +1244,257 @@ final class MailBrandingServiceTest extends UnitTestCase {
   }
 
   /**
-   * Staff links stay on the dashboard unless the tenant opts into the backend.
+   * Staff links stay on the dashboard without the staff_links key.
    */
-  public function testStaffLinkBaseIsEmptyByDefault(): void {
+  public function testStaffLinksMissingKeyKeepsTheDashboardWithoutWarning(): void {
     $overrides = self::PLATFORM_SETTINGS;
     $overrides['platform.backend_base_url'] = 'https://management.example.com';
-    $branding = $this->buildService(NULL, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+    $warnings = [];
+    $branding = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides)
+      ->getBranding(NULL, 'platform', 'de');
 
-    $this->assertNull($branding['staff_link_base']);
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertSame([], $warnings);
   }
 
   /**
-   * The backend choice exposes the configured backend origin.
+   * Explicit and empty dashboard values resolve no backend base.
    */
-  public function testStaffLinkBaseUsesTheBackendOrigin(): void {
+  #[DataProvider('dashboardStaffLinkValues')]
+  public function testStaffLinksDashboardValuesResolveNoBackendBase(mixed $value): void {
     $overrides = self::PLATFORM_SETTINGS;
     $overrides['platform.backend_base_url'] = 'https://management.example.com';
-    $overrides['staff_links'] = 'backend';
-    $branding = $this->buildService(NULL, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+    $overrides['staff_links'] = $value;
+    $warnings = [];
+    $branding = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides)
+      ->getBranding(NULL, 'platform', 'de');
 
-    $this->assertSame('https://management.example.com', $branding['staff_link_base']);
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertSame([], $warnings);
   }
 
   /**
-   * The backend choice without a backend origin keeps the dashboard and warns.
+   * Provides staff_links values that mean the dashboard.
    */
-  public function testStaffLinkBaseWithoutBackendOriginFallsBackAndWarns(): void {
+  public static function dashboardStaffLinkValues(): array {
+    return [
+      'dashboard' => ['dashboard'],
+      'empty string' => [''],
+      'whitespace' => ['  '],
+      'upper case dashboard' => ['DASHBOARD'],
+    ];
+  }
+
+  /**
+   * Backend and both are normalized and expose the backend origin.
+   */
+  #[DataProvider('backendStaffLinkValues')]
+  public function testStaffLinksBackendValuesUseTheBackendOrigin(string $value, string $expected): void {
     $overrides = self::PLATFORM_SETTINGS;
-    unset($overrides['platform.backend_base_url']);
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $overrides['staff_links'] = $value;
+    $service = $this->buildService(NULL, settingsOverride: $overrides);
+    $branding = $service->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame($expected, $service->getStaffLinksMode());
+    $this->assertSame($expected, $branding['staff_links']);
+    $this->assertSame('https://management.example.com', $branding['staff_backend_base']);
+  }
+
+  /**
+   * Provides staff_links values that open the backend.
+   */
+  public static function backendStaffLinkValues(): array {
+    return [
+      'backend' => ['backend', 'backend'],
+      'both' => ['both', 'both'],
+      'mixed case backend with spaces' => [' Backend ', 'backend'],
+      'upper case both' => ['BOTH', 'both'],
+    ];
+  }
+
+  /**
+   * An unknown staff_links value warns once and keeps the dashboard.
+   */
+  public function testStaffLinksUnknownValueWarnsOnceAndKeepsTheDashboard(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $overrides['staff_links'] = 'drupal';
+    $warnings = [];
+    $service = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides);
+    $first = $service->getBranding(NULL, 'platform', 'de');
+    $second = $service->getBranding(NULL, 'platform', 'en');
+
+    $this->assertSame('dashboard', $first['staff_links']);
+    $this->assertSame('dashboard', $second['staff_links']);
+    $this->assertNull($first['staff_backend_base']);
+    $this->assertSame([
+      'Unknown markaspot_mail.settings.staff_links value "@value": staff mails keep the dashboard link. Use dashboard, backend or both.',
+    ], $warnings);
+  }
+
+  /**
+   * The staff backend base wins over the mail asset origin and keeps a path.
+   */
+  public function testStaffBackendBaseUrlWinsOverTheAssetOrigin(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://melder.example.com';
+    $overrides['platform.staff_backend_base_url'] = 'https://intern.example.com/management/';
+    $overrides['staff_links'] = 'both';
+    $branding = $this->buildService(NULL, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame('both', $branding['staff_links']);
+    $this->assertSame('https://intern.example.com/management', $branding['staff_backend_base']);
+  }
+
+  /**
+   * Without any backend base the backend modes fall back and warn once.
+   */
+  public function testStaffLinksWithoutAnyBackendBaseFallBackAndWarn(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.staff_backend_base_url'] = '';
     $overrides['staff_links'] = 'backend';
     $warnings = [];
+    $service = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides);
+    $branding = $service->getBranding(NULL, 'platform', 'de');
+    $service->getBranding(NULL, 'platform', 'en');
+
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertSame([
+      'Staff backend links need markaspot_mail.settings.platform.staff_backend_base_url or platform.backend_base_url: staff mails keep the dashboard link.',
+    ], $warnings);
+  }
+
+  /**
+   * An invalid staff backend base warns and keeps the dashboard.
+   *
+   * The asset origin is not used as a silent substitute: the operator asked
+   * for a different host.
+   */
+  #[DataProvider('invalidStaffBackendBaseUrls')]
+  public function testInvalidStaffBackendBaseUrlKeepsTheDashboard(string $url): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $overrides['platform.staff_backend_base_url'] = $url;
+    $overrides['staff_links'] = 'both';
+    $warnings = [];
+    $branding = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides)
+      ->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertSame([
+      'Ignored invalid markaspot_mail.settings.platform.staff_backend_base_url: staff mails keep the dashboard link.',
+    ], $warnings);
+  }
+
+  /**
+   * Provides staff backend base URLs that must be rejected.
+   */
+  public static function invalidStaffBackendBaseUrls(): array {
+    return [
+      'not a URL' => ['management'],
+      'javascript scheme' => ['javascript:alert(1)'],
+      'internal host' => ['http://drupal'],
+      'query string' => ['https://management.example.com/?a=1'],
+      'credentials' => ['https://user:secret@management.example.com'],
+    ];
+  }
+
+  /**
+   * An asset origin that is the frontend host yields no backend link.
+   */
+  public function testStaffLinksGuardAgainstThePlatformFrontendOrigin(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.frontend_base_url'] = 'https://melder.example.com';
+    $overrides['platform.backend_base_url'] = 'https://MELDER.example.com:443';
+    $overrides['staff_links'] = 'both';
+    $warnings = [];
+    $branding = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides)
+      ->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertSame([
+      'markaspot_mail.settings.@source points at the frontend host, which does not serve the Drupal backend: staff mails keep the dashboard link. Set platform.staff_backend_base_url to the backend host.',
+    ], $warnings);
+  }
+
+  /**
+   * A staff base on the tenant frontend host yields no backend link.
+   */
+  public function testStaffLinksGuardAgainstTheTenantFrontendOrigin(): void {
+    $group = $this->buildGroup([
+      'id' => 5,
+      'label' => 'Rotterdam',
+      'field_slug' => 'rotterdam',
+    ]);
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.staff_backend_base_url'] = 'https://rotterdam.civicspot.io/';
+    $overrides['staff_links'] = 'backend';
+    $warnings = [];
+    $branding = $this->buildService($group, logger: $this->recordingLogger($warnings), settingsOverride: $overrides)
+      ->getBranding(5, 'jurisdiction', 'en');
+
+    $this->assertSame('https://rotterdam.civicspot.io', $branding['frontend_base_url']);
+    $this->assertSame('dashboard', $branding['staff_links']);
+    $this->assertNull($branding['staff_backend_base']);
+    $this->assertContains(
+      'markaspot_mail.settings.@source points at the frontend host, which does not serve the Drupal backend: staff mails keep the dashboard link. Set platform.staff_backend_base_url to the backend host.',
+      $warnings,
+    );
+  }
+
+  /**
+   * A distinct deployment path on the frontend host counts as a backend.
+   */
+  public function testStaffBackendPathOnTheFrontendHostIsAllowed(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.frontend_base_url'] = 'https://melder.example.com';
+    $overrides['platform.staff_backend_base_url'] = 'https://melder.example.com/management';
+    $overrides['staff_links'] = 'backend';
+    $warnings = [];
+    $service = $this->buildService(NULL, logger: $this->recordingLogger($warnings), settingsOverride: $overrides);
+    $branding = $service->getBranding(NULL, 'platform', 'de');
+
+    $this->assertSame('backend', $branding['staff_links']);
+    $this->assertSame('https://melder.example.com/management', $branding['staff_backend_base']);
+    $this->assertSame('https://melder.example.com/management', $service->resolveStaffBackendBase('https://melder.example.com'));
+    $this->assertSame([], $warnings);
+  }
+
+  /**
+   * The resolver used by tokens applies the guard without staff_links.
+   */
+  public function testResolveStaffBackendBaseIgnoresTheStaffLinksMode(): void {
+    $overrides = self::PLATFORM_SETTINGS;
+    $overrides['platform.backend_base_url'] = 'https://management.example.com';
+    $service = $this->buildService(NULL, settingsOverride: $overrides);
+
+    $this->assertSame('dashboard', $service->getStaffLinksMode());
+    $this->assertSame('https://management.example.com', $service->resolveStaffBackendBase());
+    $this->assertNull($service->resolveStaffBackendBase('https://management.example.com/'));
+  }
+
+  /**
+   * Builds a logger that records staff link warning messages.
+   *
+   * Other warnings of the branding service (logo file checks in this unit
+   * context, missing legal notices) are not part of these assertions.
+   */
+  private function recordingLogger(array &$warnings): LoggerInterface {
     $logger = $this->createMock(LoggerInterface::class);
     $logger->method('warning')->willReturnCallback(
       static function (string $message) use (&$warnings): void {
-        $warnings[] = $message;
+        if (stripos($message, 'staff') !== FALSE) {
+          $warnings[] = $message;
+        }
       },
     );
-    $branding = $this->buildService(NULL, logger: $logger, settingsOverride: $overrides)->getBranding(NULL, 'platform', 'de');
-
-    $this->assertNull($branding['staff_link_base']);
-    $this->assertContains(
-      'markaspot_mail.settings.staff_links is "backend", but platform.backend_base_url is not set: staff links keep opening the dashboard.',
-      $warnings,
-    );
+    return $logger;
   }
 
   /**

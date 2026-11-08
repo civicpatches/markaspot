@@ -14,6 +14,7 @@ use Drupal\markaspot_mail\Mail\MailContext;
 use Drupal\markaspot_mail\Mail\MailMessage;
 use Drupal\markaspot_mail\Mail\RequestFieldValueTrait;
 use Drupal\markaspot_mail\Mail\ResolveJurisdictionFromNodeTrait;
+use Drupal\markaspot_mail\Mail\StaffRequestLinksTrait;
 use Drupal\markaspot_mail\Service\MailBrandingService;
 use Drupal\markaspot_mail\Service\MailTextResolver;
 use Drupal\node\NodeInterface;
@@ -27,6 +28,7 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
 
   use ResolveJurisdictionFromNodeTrait;
   use RequestFieldValueTrait;
+  use StaffRequestLinksTrait;
   use StringTranslationTrait;
 
   public function __construct(
@@ -65,7 +67,9 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
     $category = $this->resolveCategoryLabel($node);
     $address = $this->resolveAddressText($node);
     $description = $this->resolveBodyText($node);
-    $requestUrl = $this->resolveRequestUrl($requestId, $branding, $node);
+    // The assignee gets the request view; staff_links decides whether it
+    // opens in the dashboard, the Drupal backend or both.
+    $links = $this->resolveStaffRequestLinks($branding, $node, $requestId, FALSE);
     $assignee = $ctx->params['assignee'] ?? NULL;
     $assigneeName = $assignee instanceof UserInterface
       ? trim($assignee->getDisplayName())
@@ -84,6 +88,7 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
       ['langcode' => $ctx->langcode],
     );
     $defaultCtaLabel = (string) $this->t('Open request', [], ['langcode' => $ctx->langcode]);
+    $defaultBackendCtaLabel = (string) $this->t('Open in the backend', [], ['langcode' => $ctx->langcode]);
 
     $slots = $this->resolveTextSlots('assignee_notification', $node, $ctx->langcode);
     $slots = $this->replaceContextPlaceholders($slots, [
@@ -96,6 +101,7 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
     $intro = $slots['intro'] !== '' ? $slots['intro'] : $defaultIntro;
     $preheader = $slots['preheader'] !== '' ? $slots['preheader'] : $defaultPreheader;
     $ctaLabel = $slots['cta_label'] !== '' ? $slots['cta_label'] : $defaultCtaLabel;
+    $backendCtaLabel = $slots['backend_cta_label'] !== '' ? $slots['backend_cta_label'] : $defaultBackendCtaLabel;
 
     $bodyBlocks = $slots['body_blocks'] !== [] ? $slots['body_blocks'] : [$defaultLead];
     if ($description !== '') {
@@ -123,16 +129,14 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
         'intro' => $intro,
         'body_blocks' => $bodyBlocks,
         'features_block' => $features,
-        'cta_label' => $requestUrl !== '' ? $ctaLabel : '',
-        'cta_url' => $requestUrl,
-      ],
+      ] + $this->buildStaffCtaContent($links, $branding, $ctaLabel, $backendCtaLabel),
       mode: $mode,
       jurisdictionId: $jurisdictionId,
     );
   }
 
   /**
-   * Resolves and token-replaces the six editable text slots.
+   * Resolves and token-replaces the editable text slots.
    */
   private function resolveTextSlots(string $key, NodeInterface $node, string $langcode): array {
     $resolved = $this->textResolver->resolve('markaspot_mail.texts', $key, $langcode);
@@ -144,15 +148,21 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
       'cta_label' => $this->textResolver->resolveField('markaspot_mail.texts', $key, 'cta_label', $langcode),
       'preheader' => $this->textResolver->resolveField('markaspot_mail.texts', $key, 'preheader', $langcode),
     ];
-    return $this->textResolver->replaceTokens($slots, ['node' => $node], $langcode);
+    $slots = $this->textResolver->replaceTokens($slots, ['node' => $node], $langcode);
+    $slots['backend_cta_label'] = $this->textResolver->replaceLabelTokens(
+      $this->textResolver->resolveField('markaspot_mail.texts', $key, 'backend_cta_label', $langcode),
+      ['node' => $node],
+      $langcode,
+    );
+    return $slots;
   }
 
   /**
    * Replaces assignment-only placeholders after generic token replacement.
    */
   private function replaceContextPlaceholders(array $slots, array $replacements): array {
-    foreach (['subject', 'headline', 'cta_label', 'preheader'] as $slot) {
-      $slots[$slot] = strtr($slots[$slot], $replacements);
+    foreach (['subject', 'headline', 'cta_label', 'backend_cta_label', 'preheader'] as $slot) {
+      $slots[$slot] = strtr((string) ($slots[$slot] ?? ''), $replacements);
     }
     $htmlReplacements = array_map(
       static fn(string $replacement): string => Html::escape($replacement),
@@ -205,26 +215,6 @@ final class AssigneeNotificationBuilder implements MailBuilderInterface {
       return '';
     }
     return trim($node->get($fieldName)->getString());
-  }
-
-  /**
-   * Builds the dashboard URL from resolved mail branding.
-   *
-   * Tenants whose staff work in the Drupal backend get the backend view.
-   */
-  private function resolveRequestUrl(string $requestId, array $branding, NodeInterface $node): string {
-    $staffLinkBase = rtrim((string) ($branding['staff_link_base'] ?? ''), '/');
-    if ($staffLinkBase !== '' && $node->id()) {
-      return $staffLinkBase . '/node/' . (int) $node->id();
-    }
-    $frontendBase = rtrim((string) ($branding['frontend_base_url'] ?? ''), '/');
-    if ($frontendBase === '' || $requestId === '') {
-      return '';
-    }
-    $slug = trim((string) ($branding['jurisdiction_slug'] ?? ''));
-    $useJurisdictionPath = (bool) ($branding['frontend_uses_jurisdiction_path'] ?? ($slug !== ''));
-    $prefix = $useJurisdictionPath && $slug !== '' ? '/' . rawurlencode($slug) : '';
-    return $frontendBase . $prefix . '/dashboard/requests/' . rawurlencode($requestId);
   }
 
 }

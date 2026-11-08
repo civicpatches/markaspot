@@ -231,7 +231,8 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
       'frontend_base_url' => 'https://bonn-mobility.example',
       'jurisdiction_slug' => 'bonn',
       'frontend_uses_jurisdiction_path' => TRUE,
-      'staff_link_base' => 'https://management.bonn-mobility.example/',
+      'staff_links' => 'backend',
+      'staff_backend_base' => 'https://management.bonn-mobility.example/',
     ]);
     $builder = $this->buildBuilder(branding: $branding);
     $msg = $builder->build($this->buildContext([
@@ -241,6 +242,129 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
 
     $this->assertNotNull($msg);
     $this->assertSame('https://management.bonn-mobility.example/node/123/edit', $msg->content['cta_url']);
+  }
+
+  /**
+   * Tests a missing staff_links key keeps the single dashboard link.
+   */
+  public function testBuildWithoutStaffLinksKeysKeepsTheDashboardLink(): void {
+    $node = $this->buildNode();
+    $message = $this->buildBuilder(branding: $this->staffBranding([]))->build($this->staffContext($node));
+
+    $this->assertNotNull($message);
+    $this->assertSame('Open request', (string) $message->content['cta_label']);
+    $this->assertSame('https://bonn-mobility.example/bonn/dashboard/requests/7-2026/edit', $message->content['cta_url']);
+    $this->assertArrayNotHasKey('secondary_cta_url', $message->content);
+    $this->assertArrayNotHasKey('secondary_cta_label', $message->content);
+  }
+
+  /**
+   * Tests both links: dashboard button first, backend link second.
+   */
+  public function testBuildWithBothStaffLinksAddsTheBackendLink(): void {
+    $node = $this->buildNode();
+    $message = $this->buildBuilder(branding: $this->staffBranding([
+      'staff_links' => 'both',
+      'staff_backend_base' => 'https://management.bonn-mobility.example',
+    ]))->build($this->staffContext($node));
+
+    $this->assertNotNull($message);
+    $this->assertSame('Open request', (string) $message->content['cta_label']);
+    $this->assertSame('https://bonn-mobility.example/bonn/dashboard/requests/7-2026/edit', $message->content['cta_url']);
+    $this->assertSame('Open in the backend', (string) $message->content['secondary_cta_label']);
+    $this->assertSame('https://management.bonn-mobility.example/node/123/edit', $message->content['secondary_cta_url']);
+  }
+
+  /**
+   * Tests the editable backend label, with context placeholders and tokens.
+   */
+  public function testBuildWithBothStaffLinksUsesTheEditableBackendLabel(): void {
+    $node = $this->buildNode();
+    $builder = $this->buildBuilder(
+      branding: $this->staffBranding([
+        'staff_links' => 'both',
+        'staff_backend_base' => 'https://management.bonn-mobility.example',
+      ]),
+      textResolver: $this->buildTextResolver([
+        'backend_cta_label' => '[node:title] in Drupal ({{ organisation }})',
+      ]),
+    );
+    $message = $builder->build($this->staffContext($node));
+
+    $this->assertNotNull($message);
+    $this->assertSame('Broken lamp in Drupal (Tiefbauamt)', $message->content['secondary_cta_label']);
+  }
+
+  /**
+   * Tests both links without a frontend base: the backend link is the button.
+   */
+  public function testBuildWithBothStaffLinksAndNoDashboardUsesTheBackendAsButton(): void {
+    $node = $this->buildNode();
+    $message = $this->buildBuilder(branding: $this->staffBranding([
+      'frontend_base_url' => '',
+      'staff_links' => 'both',
+      'staff_backend_base' => 'https://management.bonn-mobility.example',
+    ]))->build($this->staffContext($node));
+
+    $this->assertNotNull($message);
+    $this->assertSame('Open in the backend', (string) $message->content['cta_label']);
+    $this->assertSame('https://management.bonn-mobility.example/node/123/edit', $message->content['cta_url']);
+    $this->assertArrayNotHasKey('secondary_cta_url', $message->content);
+  }
+
+  /**
+   * Tests an unsaved node keeps the dashboard link in every backend mode.
+   */
+  public function testBuildForAnUnsavedNodeKeepsTheDashboardLink(): void {
+    foreach (['backend', 'both'] as $mode) {
+      $node = $this->buildNode(NULL);
+      $message = $this->buildBuilder(branding: $this->staffBranding([
+        'staff_links' => $mode,
+        'staff_backend_base' => 'https://management.bonn-mobility.example',
+      ]))->build($this->staffContext($node));
+
+      $this->assertNotNull($message);
+      $this->assertSame('Open request', (string) $message->content['cta_label'], $mode);
+      $this->assertSame('https://bonn-mobility.example/bonn/dashboard/requests/7-2026/edit', $message->content['cta_url'], $mode);
+      $this->assertArrayNotHasKey('secondary_cta_url', $message->content, $mode);
+    }
+  }
+
+  /**
+   * Tests a fallen-back mode without backend base keeps the dashboard link.
+   */
+  public function testBuildWithBackendModeButNoBackendBaseKeepsTheDashboardLink(): void {
+    $node = $this->buildNode();
+    $message = $this->buildBuilder(branding: $this->staffBranding([
+      'staff_links' => 'backend',
+      'staff_backend_base' => NULL,
+    ]))->build($this->staffContext($node));
+
+    $this->assertNotNull($message);
+    $this->assertSame('https://bonn-mobility.example/bonn/dashboard/requests/7-2026/edit', $message->content['cta_url']);
+  }
+
+  /**
+   * Builds the German mail context of a staff link test.
+   */
+  private function staffContext(NodeInterface $node): MailContext {
+    return $this->buildContext([
+      'node' => $node,
+      'organisation' => $this->buildOrganisation(),
+    ], 'de');
+  }
+
+  /**
+   * Builds a branding double for staff link tests.
+   */
+  private function staffBranding(array $overrides): MailBrandingService {
+    $branding = $this->createMock(MailBrandingService::class);
+    $branding->method('getBranding')->willReturn($overrides + [
+      'frontend_base_url' => 'https://bonn-mobility.example',
+      'jurisdiction_slug' => 'bonn',
+      'frontend_uses_jurisdiction_path' => TRUE,
+    ]);
+    return $branding;
   }
 
   /**
@@ -288,6 +412,7 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
       'intro' => '',
       'body_blocks' => [],
       'cta_label' => '',
+      'backend_cta_label' => '',
       'preheader' => '',
     ];
     $resolver = $this->createMock(MailTextResolver::class);
@@ -297,6 +422,10 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
     $resolver->method('resolveField')
       ->willReturnCallback(
         static fn(string $configName, string $key, string $field): string => (string) $slots[$field],
+      );
+    $resolver->method('replaceLabelTokens')
+      ->willReturnCallback(
+        static fn(string $label): string => str_replace('[node:title]', $tokenValue, $label),
       );
     $replaceTokens = $expectedNode === NULL
       ? $resolver->method('replaceTokens')
@@ -325,7 +454,7 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
   /**
    * Builds a service request node with jurisdiction and display fields.
    */
-  private function buildNode(): NodeInterface {
+  private function buildNode(?int $id = 123): NodeInterface {
     $jurisdiction = $this->createMock(GroupInterface::class);
     $jurisdiction->method('getEntityTypeId')->willReturn('group');
     $jurisdiction->method('bundle')->willReturn('jur');
@@ -366,7 +495,7 @@ final class GroupOrgNotificationBuilderTest extends UnitTestCase {
     ];
 
     $node = $this->createMock(NodeInterface::class);
-    $node->method('id')->willReturn(123);
+    $node->method('id')->willReturn($id);
     $node->method('hasField')
       ->willReturnCallback(static fn(string $fieldName): bool => array_key_exists($fieldName, $fields));
     $node->method('get')

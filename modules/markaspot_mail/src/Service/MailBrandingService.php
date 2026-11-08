@@ -77,6 +77,28 @@ class MailBrandingService {
   private const DEFAULT_BACKGROUND = '#EEF3FF';
 
   /**
+   * Staff mail links open the markaspot-ui dashboard (default).
+   */
+  public const STAFF_LINKS_DASHBOARD = 'dashboard';
+
+  /**
+   * Staff mail links open the Drupal backend.
+   */
+  public const STAFF_LINKS_BACKEND = 'backend';
+
+  /**
+   * Staff mails carry the dashboard link and the Drupal backend link.
+   */
+  public const STAFF_LINKS_BOTH = 'both';
+
+  /**
+   * Configuration warnings already logged in this request.
+   *
+   * @var array<string, true>
+   */
+  private array $loggedWarnings = [];
+
+  /**
    * Request-scoped memoization of resolved branding packages.
    *
    * Keyed by "<jurisdictionId|''>:<mode>:<langcode>". The entity type
@@ -200,8 +222,11 @@ class MailBrandingService {
    *   - jurisdiction_label (string|null)
    *   - tenant_display_name (string|null)
    *   - platform_footer (array)
-   *   - staff_link_base (string|null, backend origin when staff links open
-   *     the Drupal backend instead of the dashboard)
+   *   - staff_links (string, effective staff link mode: dashboard, backend
+   *     or both; backend and both fall back to dashboard when no usable
+   *     staff backend base resolves)
+   *   - staff_backend_base (string|null, Drupal backend base URL for staff
+   *     links; NULL unless staff_links is backend or both)
    */
   public function getBranding(?int $jurisdictionId, string $mode, string $langcode): array {
     $mode = $mode === 'jurisdiction' ? 'jurisdiction' : 'platform';
@@ -209,9 +234,85 @@ class MailBrandingService {
     if (isset($this->brandingCache[$cacheKey])) {
       return $this->brandingCache[$cacheKey];
     }
-    $branding = $this->computeBranding($jurisdictionId, $mode, $langcode);
+    $branding = $this->withStaffLinks($this->computeBranding($jurisdictionId, $mode, $langcode));
     $this->brandingCache[$cacheKey] = $branding;
     return $branding;
+  }
+
+  /**
+   * Returns the normalized markaspot_mail.settings:staff_links mode.
+   *
+   * A missing or empty value is the dashboard (the behaviour before the
+   * setting existed). Values are compared case-insensitively; an unknown
+   * value logs one warning and keeps the dashboard.
+   */
+  public function getStaffLinksMode(): string {
+    $raw = $this->configFactory->get('markaspot_mail.settings')->get('staff_links');
+    if ($raw === NULL || (is_string($raw) && trim($raw) === '')) {
+      return self::STAFF_LINKS_DASHBOARD;
+    }
+    $value = is_string($raw) ? strtolower(trim($raw)) : '';
+    if (in_array($value, [self::STAFF_LINKS_DASHBOARD, self::STAFF_LINKS_BACKEND, self::STAFF_LINKS_BOTH], TRUE)) {
+      return $value;
+    }
+    $this->warnOnce('Unknown markaspot_mail.settings.staff_links value "@value": staff mails keep the dashboard link. Use dashboard, backend or both.', [
+      '@value' => is_scalar($raw) ? mb_substr((string) $raw, 0, 32) : gettype($raw),
+    ]);
+    return self::STAFF_LINKS_DASHBOARD;
+  }
+
+  /**
+   * Resolves the Drupal backend base URL for staff links.
+   *
+   * Platform.staff_backend_base_url wins and may carry a deployment path
+   * (for example https://example.org/management). When it is empty, the
+   * mail asset origin platform.backend_base_url is used as before. A base
+   * that points at the frontend (same origin and no own path, compared with
+   * platform.frontend_base_url and the given tenant frontend base) yields
+   * NULL: the frontend host does not serve /node/<nid>/edit, so the link
+   * would be dead. Each problem is logged once per request.
+   *
+   * @param string $tenantFrontendBase
+   *   The resolved tenant frontend base of the mail, when known.
+   *
+   * @return string|null
+   *   The base URL without trailing slash, or NULL when staff mails must
+   *   keep the dashboard link.
+   */
+  public function resolveStaffBackendBase(string $tenantFrontendBase = ''): ?string {
+    $configured = trim((string) ($this->configFactory
+      ->get('markaspot_mail.settings')
+      ->get('platform.staff_backend_base_url') ?? ''));
+    if ($configured !== '') {
+      $base = $this->urlValidator()->normalizeBaseUrl($configured);
+      if ($base === NULL) {
+        $this->warnOnce('Ignored invalid markaspot_mail.settings.platform.staff_backend_base_url: staff mails keep the dashboard link.');
+        return NULL;
+      }
+      $source = 'platform.staff_backend_base_url';
+    }
+    else {
+      $base = $this->resolveAbsoluteBaseUrl();
+      if ($base === '') {
+        $this->warnOnce('Staff backend links need markaspot_mail.settings.platform.staff_backend_base_url or platform.backend_base_url: staff mails keep the dashboard link.');
+        return NULL;
+      }
+      $source = 'platform.backend_base_url';
+    }
+
+    $frontendBases = [
+      (string) ($this->getPlatformDefaults()['frontend_base_url'] ?? ''),
+      $tenantFrontendBase,
+    ];
+    foreach ($frontendBases as $frontendBase) {
+      if ($this->pointsAtFrontend($base, $frontendBase)) {
+        $this->warnOnce('markaspot_mail.settings.@source points at the frontend host, which does not serve the Drupal backend: staff mails keep the dashboard link. Set platform.staff_backend_base_url to the backend host.', [
+          '@source' => $source,
+        ]);
+        return NULL;
+      }
+    }
+    return rtrim($base, '/');
   }
 
   /**
@@ -258,7 +359,6 @@ class MailBrandingService {
       'tenant_display_name' => NULL,
       'platform_footer' => $showPlatformFooter ? $this->getPlatformFooter() : NULL,
       'show_platform_footer' => $showPlatformFooter,
-      'staff_link_base' => $this->resolveStaffLinkBase(),
     ];
 
     // In self-hosted single-jurisdiction installs the tenant is the platform.
@@ -680,25 +780,80 @@ class MailBrandingService {
   }
 
   /**
-   * Returns the Drupal backend origin when staff links open the backend.
+   * Adds the effective staff link mode and backend base to a branding set.
    *
-   * Tenants whose staff work in the Drupal backend instead of the dashboard
-   * set markaspot_mail.settings:staff_links to "backend". The link then uses
-   * the configured backend origin; without one it stays on the dashboard.
+   * Runs once per memoized branding package, after the tenant frontend base
+   * is final, so the frontend guard sees the URL the mail will link to. The
+   * backend base is only resolved when the mode asks for it, so tenants on
+   * the dashboard never see staff link warnings.
    */
-  private function resolveStaffLinkBase(): ?string {
-    $choice = (string) ($this->configFactory
-      ->get('markaspot_mail.settings')
-      ->get('staff_links') ?? 'dashboard');
-    if ($choice !== 'backend') {
+  private function withStaffLinks(array $branding): array {
+    $mode = $this->getStaffLinksMode();
+    $backendBase = NULL;
+    if ($mode !== self::STAFF_LINKS_DASHBOARD) {
+      $backendBase = $this->resolveStaffBackendBase((string) ($branding['frontend_base_url'] ?? ''));
+      if ($backendBase === NULL) {
+        $mode = self::STAFF_LINKS_DASHBOARD;
+      }
+    }
+    $branding['staff_links'] = $mode;
+    $branding['staff_backend_base'] = $backendBase;
+    return $branding;
+  }
+
+  /**
+   * Returns whether a backend base URL would land on the frontend.
+   *
+   * Same scheme, host and port as the frontend base, and either no path of
+   * its own or the frontend's path. A distinct deployment path on the same
+   * host (for example /management) counts as a separate backend.
+   */
+  private function pointsAtFrontend(string $backendBase, string $frontendBase): bool {
+    $backend = $this->originAndPath($backendBase);
+    $frontend = $this->originAndPath($frontendBase);
+    if ($backend === NULL || $frontend === NULL || $backend['origin'] !== $frontend['origin']) {
+      return FALSE;
+    }
+    return $backend['path'] === '' || $backend['path'] === $frontend['path'];
+  }
+
+  /**
+   * Splits an absolute URL into a comparable origin and path.
+   *
+   * @return array{origin: string, path: string}|null
+   *   Lowercased scheme://host[:port] without default ports, and the path
+   *   without trailing slash; NULL when the URL has no scheme and host.
+   */
+  private function originAndPath(string $url): ?array {
+    $parts = parse_url(trim($url));
+    if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
       return NULL;
     }
-    $base = $this->resolveAbsoluteBaseUrl();
-    if ($base === '') {
-      $this->logger->warning('markaspot_mail.settings.staff_links is "backend", but platform.backend_base_url is not set: staff links keep opening the dashboard.');
-      return NULL;
+    $scheme = strtolower((string) $parts['scheme']);
+    $host = rtrim(strtolower((string) $parts['host']), '.');
+    $port = isset($parts['port']) ? (int) $parts['port'] : NULL;
+    if (($scheme === 'https' && $port === 443) || ($scheme === 'http' && $port === 80)) {
+      $port = NULL;
     }
-    return $base;
+    return [
+      'origin' => $scheme . '://' . $host . ($port !== NULL ? ':' . $port : ''),
+      'path' => rtrim((string) ($parts['path'] ?? ''), '/'),
+    ];
+  }
+
+  /**
+   * Logs a configuration warning once per request.
+   *
+   * Branding is resolved for every mail of a request (cron sends many), and
+   * a staff link misconfiguration is the same for all of them.
+   */
+  private function warnOnce(string $message, array $context = []): void {
+    $key = $message . "\0" . serialize($context);
+    if (isset($this->loggedWarnings[$key])) {
+      return;
+    }
+    $this->loggedWarnings[$key] = TRUE;
+    $this->logger->warning($message, $context);
   }
 
   /**

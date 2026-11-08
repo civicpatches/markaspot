@@ -95,6 +95,54 @@ final class MailHtmlRendererTest extends UnitTestCase {
     $this->assertStringContainsString('View report: https://mark-a-spot.com/amsterdam/requests/42', $out['plain']);
   }
 
+  /**
+   * A second staff link is validated and listed after the button.
+   */
+  public function testSecondaryCtaIsValidatedAndFollowsThePrimaryInPlain(): void {
+    $content = [
+      'headline' => 'Request #7-2026 assigned to Tiefbauamt',
+      'intro' => 'A citizen request is ready for review.',
+      'body_blocks' => [],
+      'cta_label' => 'Open request',
+      'cta_url' => 'https://bonn.example.org/dashboard/requests/7-2026/edit',
+      'secondary_cta_label' => 'Open in the backend',
+      'secondary_cta_url' => 'https://management.bonn.example.org/node/123/edit',
+      'preheader' => '',
+    ];
+
+    $out = $this->buildRenderer()->render('card_transactional', $this->buildBranding(), $content, 'en');
+
+    $this->assertStringContainsString('secondary_cta_url_is_safe:1', $out['html']);
+    $this->assertStringContainsString(
+      "Open request: https://bonn.example.org/dashboard/requests/7-2026/edit\n\nOpen in the backend: https://management.bonn.example.org/node/123/edit",
+      $out['plain'],
+    );
+  }
+
+  /**
+   * An unsafe second link is flagged and kept out of the plain text.
+   */
+  public function testUnsafeSecondaryCtaIsFlaggedAsUnsafe(): void {
+    $content = [
+      'headline' => 'Request',
+      'intro' => 'hi',
+      'body_blocks' => [],
+      'cta_label' => 'Open request',
+      'cta_url' => 'https://bonn.example.org/dashboard/requests/7-2026/edit',
+      'secondary_cta_label' => 'Open in the backend',
+      'secondary_cta_url' => 'http://drupal/node/123/edit',
+      'preheader' => '',
+    ];
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->expects($this->once())->method('warning');
+
+    $out = $this->buildRenderer($logger)->render('card_transactional', $this->buildBranding(), $content, 'en');
+
+    $this->assertStringContainsString('cta_url_is_safe:1', $out['html']);
+    $this->assertStringContainsString('secondary_cta_url_is_safe:0', $out['html']);
+    $this->assertStringNotContainsString('http://drupal/node/123/edit', $out['plain']);
+  }
+
   public function testCardTransactionalPlainConvertsMailHtmlFragments(): void {
     $branding = $this->buildBranding();
     $content = [
@@ -293,6 +341,10 @@ final class MailHtmlRendererTest extends UnitTestCase {
       if (!empty($content['cta_url'])) {
         $parts[] = 'cta_url:' . ($content['cta_url'] ?? '');
         $parts[] = 'cta_url_is_safe:' . (int) (!empty($content['cta_url_is_safe']));
+      }
+      if (!empty($content['secondary_cta_url'])) {
+        $parts[] = 'secondary_cta_url:' . ($content['secondary_cta_url'] ?? '');
+        $parts[] = 'secondary_cta_url_is_safe:' . (int) (!empty($content['secondary_cta_url_is_safe']));
       }
     }
     $parts[] = '</div>';

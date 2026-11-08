@@ -192,6 +192,34 @@ class MailTextResolver {
   }
 
   /**
+   * Runs Drupal token replacement over one plain-text label.
+   *
+   * For label fields outside the six notification slots, such as the
+   * backend_cta_label of staff mails. Labels render escaped, so no HTML
+   * filtering happens here; line breaks collapse to spaces.
+   *
+   * @param string $label
+   *   The label template.
+   * @param array<string, mixed> $tokenData
+   *   Token replacement data, e.g. ['node' => $node].
+   * @param string $langcode
+   *   The langcode to replace tokens for.
+   *
+   * @return string
+   *   The label with tokens replaced, or '' for an empty template.
+   */
+  public function replaceLabelTokens(string $label, array $tokenData, string $langcode): string {
+    $label = trim(str_replace(["\r\n", "\r", "\n"], ' ', $label));
+    if ($label === '') {
+      return '';
+    }
+    return trim((string) $this->token->replace($label, $tokenData, [
+      'langcode' => $langcode,
+      'clear' => TRUE,
+    ]));
+  }
+
+  /**
    * Turns single line breaks in an HTML text slot into <br> tags.
    *
    * Editors type Enter in a plain textarea, but intro and body_blocks are

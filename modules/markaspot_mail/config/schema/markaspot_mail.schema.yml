@@ -39,13 +39,17 @@ markaspot_mail.settings:
         backend_base_url:
           type: string
           label: 'Public origin of this Drupal install for mail assets and generated URLs. When empty, already public URLs are preserved and internal URLs fall back to relative paths. Operators set this via settings.php from an environment variable.'
+        staff_backend_base_url:
+          type: string
+          label: 'Optional public base URL of the Drupal backend that staff open from mail links (/node/<nid>/edit). When empty, staff backend links use platform.backend_base_url. A base that points at the frontend host yields no backend link. Operators set this via settings.php from MARKASPOT_MAIL_STAFF_BACKEND_BASE_URL.'
     staff_links:
       type: string
-      label: 'Where links in staff mails open: dashboard (markaspot-ui) or backend (Drupal edit form at platform.backend_base_url)'
+      label: 'Where links in staff mails open: dashboard (markaspot-ui), backend (Drupal backend) or both. A missing or unknown value keeps the dashboard link.'
       constraints:
         Choice:
           - dashboard
           - backend
+          - both
     features:
       type: mapping
       label: 'Feature flags'
@@ -165,6 +169,9 @@ markaspot_mail.texts.slot_set:
     cta_label:
       type: label
       label: 'Call-to-action label'
+    backend_cta_label:
+      type: label
+      label: 'Label of the Drupal backend link in staff mails when markaspot_mail.settings:staff_links is both'
     preheader:
       type: label
       label: 'Preheader (inbox preview text)'

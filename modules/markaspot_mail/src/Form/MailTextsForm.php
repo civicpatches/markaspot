@@ -25,6 +25,8 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  * One details group per notification key, each exposing the six
  * MailTextResolver slots (subject, headline, intro, body_blocks, cta_label,
  * preheader). body_blocks is edited as a textarea, one paragraph per line.
+ * The two staff keys also expose backend_cta_label, the label of the
+ * Drupal backend link that staff_links both adds.
  *
  * Tokens are resolved against the acted-upon service_request node
  * (['node' => $node]) exactly as ResubmissionRequestBuilder and the legacy
@@ -47,6 +49,16 @@ final class MailTextsForm extends ConfigFormBase {
     'status_open',
     'status_closed',
     'status_not_responsible',
+    'group_assignment',
+    'assignee_notification',
+  ];
+
+  /**
+   * Notification keys sent to staff, whose links follow staff_links.
+   *
+   * @var list<string>
+   */
+  private const STAFF_KEYS = [
     'group_assignment',
     'assignee_notification',
   ];
@@ -138,6 +150,15 @@ final class MailTextsForm extends ConfigFormBase {
         '#default_value' => (string) ($slots['cta_label'] ?? ''),
         '#maxlength' => 254,
       ];
+      if (in_array($key, self::STAFF_KEYS, TRUE)) {
+        $form[$key]['backend_cta_label'] = [
+          '#type' => 'textfield',
+          '#title' => $this->t('Backend link label'),
+          '#description' => $this->t('Label of the second link to the Drupal backend, shown when staff mails carry both links (markaspot_mail.settings:staff_links both). Leave empty to keep the platform default label.'),
+          '#default_value' => (string) ($slots['backend_cta_label'] ?? ''),
+          '#maxlength' => 254,
+        ];
+      }
       $form[$key]['preheader'] = [
         '#type' => 'textfield',
         '#title' => $this->t('Preheader'),
@@ -163,14 +184,21 @@ final class MailTextsForm extends ConfigFormBase {
         static fn(string $line): bool => $line !== '',
       ));
 
-      $config->set($key, [
+      $slots = [
         'subject' => trim((string) ($values['subject'] ?? '')),
         'headline' => trim((string) ($values['headline'] ?? '')),
         'intro' => trim((string) ($values['intro'] ?? '')),
         'body_blocks' => $bodyBlocks,
         'cta_label' => trim((string) ($values['cta_label'] ?? '')),
         'preheader' => trim((string) ($values['preheader'] ?? '')),
-      ]);
+      ];
+      // Only staff mails have a backend link. An empty label is not stored,
+      // so tenants that never set one keep their config/sync copy unchanged.
+      $backendCtaLabel = trim((string) ($values['backend_cta_label'] ?? ''));
+      if (in_array($key, self::STAFF_KEYS, TRUE) && $backendCtaLabel !== '') {
+        $slots['backend_cta_label'] = $backendCtaLabel;
+      }
+      $config->set($key, $slots);
     }
 
     $config->save();

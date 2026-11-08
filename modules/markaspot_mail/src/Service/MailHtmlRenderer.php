@@ -55,16 +55,21 @@ class MailHtmlRenderer {
       ? $variant
       : 'card_transactional';
 
-    // Validate CTA URL if present; if it doesn't pass, degrade to plaintext.
-    if ($variant === 'card_transactional' && !empty($content['cta_url'])) {
-      if (!$this->isSafeUrl((string) $content['cta_url'])) {
-        $this->logger->warning('Unsafe CTA URL in transactional mail, rendering as plain text: @url', [
-          '@url' => $this->branding->redactUrlForLog((string) $content['cta_url']),
-        ]);
-        $content['cta_url_is_safe'] = FALSE;
-      }
-      else {
-        $content['cta_url_is_safe'] = TRUE;
+    // Validate CTA URLs if present; if one doesn't pass, degrade it to
+    // plaintext. The secondary CTA is the second staff link (staff_links
+    // both) and follows the same rule.
+    if ($variant === 'card_transactional') {
+      foreach (['cta_url', 'secondary_cta_url'] as $urlKey) {
+        if (empty($content[$urlKey])) {
+          continue;
+        }
+        $isSafe = $this->isSafeUrl((string) $content[$urlKey]);
+        if (!$isSafe) {
+          $this->logger->warning('Unsafe CTA URL in transactional mail, rendering as plain text: @url', [
+            '@url' => $this->branding->redactUrlForLog((string) $content[$urlKey]),
+          ]);
+        }
+        $content[$urlKey . '_is_safe'] = $isSafe;
       }
     }
 
@@ -145,16 +150,18 @@ class MailHtmlRenderer {
           $lines[] = '';
         }
       }
-      $ctaUrl = trim((string) ($content['cta_url'] ?? ''));
-      $ctaLabel = trim((string) ($content['cta_label'] ?? ''));
-      if ($ctaUrl !== '' && !empty($content['cta_url_is_safe'])) {
-        if ($ctaLabel !== '') {
-          $lines[] = $ctaLabel . ': ' . $ctaUrl;
+      foreach (['cta', 'secondary_cta'] as $ctaKey) {
+        $ctaUrl = trim((string) ($content[$ctaKey . '_url'] ?? ''));
+        $ctaLabel = trim((string) ($content[$ctaKey . '_label'] ?? ''));
+        if ($ctaUrl !== '' && !empty($content[$ctaKey . '_url_is_safe'])) {
+          if ($ctaLabel !== '') {
+            $lines[] = $ctaLabel . ': ' . $ctaUrl;
+          }
+          else {
+            $lines[] = $ctaUrl;
+          }
+          $lines[] = '';
         }
-        else {
-          $lines[] = $ctaUrl;
-        }
-        $lines[] = '';
       }
       foreach ((array) ($content['features_block'] ?? []) as $pair) {
         if (!is_array($pair)) {
