@@ -32,7 +32,7 @@ class DeprecatedStatsAliasSubscriberTest extends UnitTestCase {
       $this->assertSame($canonical, $alias);
       $logger = $this->createMock(LoggerInterface::class);
       $logger->expects($this->exactly(2))->method('notice')->with(
-        $this->stringContains('removed in the release after 11.9.247'),
+        $this->stringContains('removed in the release after 11.9.249'),
         ['@route' => '/stats/' . $name],
       );
       $subscriber = new DeprecatedStatsAliasSubscriber($logger);
