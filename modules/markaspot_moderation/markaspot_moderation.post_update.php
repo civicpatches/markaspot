@@ -13,9 +13,9 @@ declare(strict_types=1);
  * Before profile 11.9.227 a moderation hide wrote only a translated sentence
  * into the revision log. The publication hold decodes civic.revision.v1
  * events and ignores prose, so those reports could be published again by the
- * publisher. This wraps each exact legacy message in an event envelope and
- * keeps the original sentence as the message. Other revision logs are left
- * untouched; running it again converts nothing.
+ * publisher. This wraps each legacy message, matched as the whole sentence,
+ * in an event envelope and keeps the original sentence as the message. Other
+ * revision logs are left untouched; running it again converts nothing.
  */
 function markaspot_moderation_post_update_legacy_hide_events(array &$sandbox): string {
   $database = \Drupal::database();
@@ -24,6 +24,7 @@ function markaspot_moderation_post_update_legacy_hide_events(array &$sandbox): s
     $sandbox['last_vid'] = 0;
     $sandbox['converted'] = 0;
   }
+  $limit = max(1, (int) ($sandbox['limit'] ?? 200));
 
   $query = $database->select('node_revision', 'r');
   $query->join('node_field_data', 'n', 'n.nid = r.nid AND n.default_langcode = 1');
@@ -31,12 +32,10 @@ function markaspot_moderation_post_update_legacy_hide_events(array &$sandbox): s
     ->condition('n.type', 'service_request')
     ->condition('r.vid', $sandbox['last_vid'], '>')
     ->orderBy('r.vid')
-    ->range(0, 200);
+    ->range(0, $limit);
   $matches = $query->orConditionGroup();
   foreach ($sandbox['patterns'] as $pattern) {
-    $matches->condition('r.revision_log', $pattern['exact']
-      ? $pattern['text']
-      : $database->escapeLike($pattern['text']) . '%', $pattern['exact'] ? '=' : 'LIKE');
+    $matches->condition('r.revision_log', $pattern['like'], 'LIKE');
   }
   $query->condition($matches);
   $rows = $query->execute()->fetchAll();
@@ -56,7 +55,7 @@ function markaspot_moderation_post_update_legacy_hide_events(array &$sandbox): s
         'changes' => [],
         'events' => [$event],
         'message' => $log,
-      ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)])
+      ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)])
       ->condition('vid', (int) $row->vid)
       ->execute();
     $sandbox['converted']++;
@@ -68,18 +67,18 @@ function markaspot_moderation_post_update_legacy_hide_events(array &$sandbox): s
       static fn(int $nid): string => 'node:' . $nid, array_values($nids)));
   }
 
-  $sandbox['#finished'] = count($rows) < 200 ? 1 : 0;
+  $sandbox['#finished'] = count($rows) < $limit ? 1 : 0;
   return (string) t('Converted @count legacy moderation revision logs into hide events.', [
     '@count' => $sandbox['converted'],
   ]);
 }
 
 /**
- * Lists the legacy hide messages in English and every stored translation.
+ * Lists the legacy hide sentences in English and every stored translation.
  *
- * @return array<int, array{text: string, exact: bool, event: string}>
- *   The manual hide message is matched exactly; the automatic one carries a
- *   count, so only the text before its placeholder is matched as a prefix.
+ * @return array<int, array{like: string, regex: string, event: string}>
+ *   Each sentence as an SQL pre-filter and an anchored regular expression in
+ *   which the @count placeholder of the automatic message matches a number.
  */
 function _markaspot_moderation_legacy_hide_patterns(): array {
   $sources = [
@@ -103,15 +102,14 @@ function _markaspot_moderation_legacy_hide_patterns(): array {
 
   $patterns = [];
   foreach ($texts as [$text, $event]) {
-    $placeholder = strpos($text, '@count');
-    $prefix = $placeholder === FALSE ? $text : rtrim(substr($text, 0, $placeholder), " (\t");
-    // A translation that starts with the placeholder leaves no safe prefix.
-    if (trim($prefix) === '') {
+    $parts = explode('@count', $text);
+    if (trim(implode('', $parts)) === '') {
       continue;
     }
-    $patterns[$event . "\0" . $prefix] = [
-      'text' => $prefix,
-      'exact' => $placeholder === FALSE,
+    $patterns[$event . "\0" . $text] = [
+      'like' => implode('%', array_map([$database, 'escapeLike'], $parts)),
+      'regex' => '/^' . implode('\d+', array_map(
+        static fn(string $part): string => preg_quote($part, '/'), $parts)) . '$/u',
       'event' => $event,
     ];
   }
@@ -119,11 +117,11 @@ function _markaspot_moderation_legacy_hide_patterns(): array {
 }
 
 /**
- * Returns the hide event for a legacy message, or NULL for anything else.
+ * Returns the hide event for a legacy sentence, or NULL for anything else.
  */
 function _markaspot_moderation_legacy_hide_event(string $log, array $patterns): ?string {
   foreach ($patterns as $pattern) {
-    if ($pattern['exact'] ? $log === $pattern['text'] : str_starts_with($log, $pattern['text'])) {
+    if (preg_match($pattern['regex'], $log) === 1) {
       return $pattern['event'];
     }
   }
