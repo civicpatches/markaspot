@@ -50,5 +50,11 @@ This module works with:
   existed or while anonymization was off), keeping their changed time. Plain
   values are recognized in e-mail, telephone and string fields (anonymized
   strings are 10 character hex tokens).
+- `drush markaspot:archive:backfill` (alias `mas:archive-backfill`) runs both
+  catch-ups in one go instead of 50 requests per cron run, in batches of 200
+  (`--batch-size`). `--dry-run` only counts what is left, `--limit=N` stops
+  each step after N requests, `--only=unpublish|anonymize` runs one step.
+  The saves are the same as on cron: the changed time is kept and no mail goes
+  out. A rerun is safe; cron skips the catch-up while the command runs.
 - Category-specific overrides via taxonomy term fields
 - Implements data privacy protections through field anonymization

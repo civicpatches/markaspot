@@ -106,10 +106,11 @@ interface ArchiveServiceInterface {
    * @param int $time_budget
    *   Seconds after which no further node is started.
    *
-   * @return int
-   *   Number of unpublished nodes.
+   * @return array{processed: int, changed: int, failed: int}
+   *   Nodes passed, unpublished and failed in this call. Nothing processed
+   *   means the setting is off or the pass has ended.
    */
-  public function unpublishArchivedBacklog(int $limit, int $time_budget): int;
+  public function unpublishArchivedBacklog(int $limit, int $time_budget): array;
 
   /**
    * Anonymizes archived requests that still hold plain contact data.
@@ -124,10 +125,34 @@ interface ArchiveServiceInterface {
    * @param int $time_budget
    *   Seconds after which no further node is started.
    *
-   * @return int
-   *   Number of anonymized nodes.
+   * @return array{processed: int, changed: int, failed: int}
+   *   Nodes passed, anonymized and failed in this call. Nothing processed
+   *   means the setting is off or no candidate is left above the cursor; the
+   *   next call then starts over at the first node.
    */
-  public function backfillArchived(int $limit, int $time_budget): int;
+  public function backfillArchived(int $limit, int $time_budget): array;
+
+  /**
+   * Counts the requests the one-time unpublish pass still has to visit.
+   *
+   * Published archived requests above the pass cursor, independent of the
+   * "unpublish" setting. Zero once the pass has ended.
+   *
+   * @return int
+   *   Number of published archived requests left in the pass.
+   */
+  public function countUnpublishBacklog(): int;
+
+  /**
+   * Counts archived requests that still hold plain contact data.
+   *
+   * Covers the current and every previous revision, independent of the
+   * "anonymize" setting and of the backfill cursor.
+   *
+   * @return int
+   *   Number of archived requests the backfill would anonymize.
+   */
+  public function countBackfillCandidates(): int;
 
   /**
    * Updates previous revision field tables with anonymized values.

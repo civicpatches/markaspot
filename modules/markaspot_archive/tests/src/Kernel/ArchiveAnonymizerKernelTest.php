@@ -840,7 +840,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
 
     $count = $this->container->get('markaspot_archive.archive')
-      ->backfillArchived(10, 20);
+      ->backfillArchived(10, 20)['changed'];
 
     self::assertSame(2, $count);
     $plain = Node::load($plain->id());
@@ -868,13 +868,13 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
 
     $count = $this->container->get('markaspot_archive.archive')
-      ->backfillArchived(10, 20);
+      ->backfillArchived(10, 20)['changed'];
 
     self::assertSame(1, $count);
     $current = Node::load($node->id())->get('field_e_mail')->value;
     self::assertStringEndsWith('@anonymized.off', $current);
     self::assertSame($current, $this->revisionFieldValue($first_revision, 'field_e_mail'));
-    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20));
+    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20)['changed']);
   }
 
   /**
@@ -896,9 +896,9 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->save();
     $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
 
-    self::assertSame(1, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20));
+    self::assertSame(1, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20)['changed']);
     self::assertMatchesRegularExpression('/^[0-9a-f]{10}$/', (string) $this->revisionFieldValue($first_revision, 'field_first_name'));
-    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20));
+    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20)['changed']);
   }
 
   /**
@@ -918,10 +918,10 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $service = $this->container->get('markaspot_archive.archive');
     $state = $this->container->get('state');
 
-    self::assertSame(2, $service->backfillArchived(2, 20));
+    self::assertSame(2, $service->backfillArchived(2, 20)['changed']);
     self::assertSame($nids[1], (int) $state->get(ArchiveService::BACKFILL_CURSOR_STATE));
-    self::assertSame(1, $service->backfillArchived(2, 20));
-    self::assertSame(0, $service->backfillArchived(2, 20));
+    self::assertSame(1, $service->backfillArchived(2, 20)['changed']);
+    self::assertSame(0, $service->backfillArchived(2, 20)['changed']);
     self::assertSame(0, (int) $state->get(ArchiveService::BACKFILL_CURSOR_STATE));
   }
 
@@ -936,7 +936,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $node->save();
 
     self::assertSame('citizen@example.org', $node->get('field_e_mail')->value);
-    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20));
+    self::assertSame(0, $this->container->get('markaspot_archive.archive')->backfillArchived(10, 20)['changed']);
     self::assertSame('citizen@example.org', Node::load($node->id())->get('field_e_mail')->value);
   }
 
@@ -1088,7 +1088,7 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $service = $this->container->get('markaspot_archive.archive');
     $state = $this->container->get('state');
 
-    self::assertSame(1, $service->unpublishArchivedBacklog(10, 20));
+    self::assertSame(1, $service->unpublishArchivedBacklog(10, 20)['changed']);
 
     $published = Node::load($published->id());
     self::assertFalse($published->isPublished());
@@ -1103,14 +1103,14 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     ));
 
     // The next run finds nothing and ends the pass.
-    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20));
+    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20)['changed']);
     self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
     self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE));
 
     // A report staff republish after the pass stays published.
     $published->setPublished();
     $published->save();
-    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20));
+    self::assertSame(0, $service->unpublishArchivedBacklog(10, 20)['changed']);
     self::assertTrue(Node::load($published->id())->isPublished());
   }
 
@@ -1131,21 +1131,165 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
     $state = $this->container->get('state');
 
     // Unpublish off: nothing happens and the pass stays pending.
-    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20));
+    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20)['changed']);
     self::assertNull($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
 
     // Unpublish on, anonymize off: unpublished, contact data untouched.
     $this->config('markaspot_archive.settings')->set('unpublish', 1)->save();
-    self::assertSame(2, $service->unpublishArchivedBacklog(2, 20));
+    self::assertSame(2, $service->unpublishArchivedBacklog(2, 20)['changed']);
     self::assertSame($nids[1], (int) $state->get(ArchiveService::UNPUBLISH_BACKLOG_CURSOR_STATE));
-    self::assertSame(1, $service->unpublishArchivedBacklog(2, 20));
-    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20));
+    self::assertSame(1, $service->unpublishArchivedBacklog(2, 20)['changed']);
+    self::assertSame(0, $service->unpublishArchivedBacklog(2, 20)['changed']);
     self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
     foreach ($nids as $i => $nid) {
       $node = Node::load($nid);
       self::assertFalse($node->isPublished());
       self::assertSame(['a', 'b', 'c'][$i] . '@example.org', $node->get('field_e_mail')->value);
     }
+  }
+
+  /**
+   * The backfill command dry run counts both steps and writes nothing.
+   */
+  public function testBackfillCommandDryRunCountsWithoutWriting(): void {
+    $nids = $this->createArchivedBacklog(3);
+    $revisions = array_map(static fn (int $nid): int => (int) Node::load($nid)->getRevisionId(), $nids);
+
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions(['dry-run' => TRUE])
+    ));
+
+    self::assertSame([
+      ['unpublish', 'on', 3, 0, 0, 0, 3, 'Dry run: nothing was changed.'],
+      ['anonymize', 'on', 3, 0, 0, 0, 3, 'Dry run: nothing was changed.'],
+    ], array_map('array_values', $rows));
+    foreach ($nids as $i => $nid) {
+      $node = Node::load($nid);
+      self::assertTrue($node->isPublished());
+      self::assertSame('plain' . $i . '@example.org', $node->get('field_e_mail')->value);
+      self::assertSame($revisions[$i], (int) $node->getRevisionId());
+    }
+  }
+
+  /**
+   * The command honors its limit, finishes in a rerun and stays idempotent.
+   */
+  public function testBackfillCommandLimitRerunAndIdempotence(): void {
+    $nids = $this->createArchivedBacklog(5);
+    $state = $this->container->get('state');
+
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions(['limit' => 2, 'batch-size' => 1])
+    ));
+    self::assertSame(['unpublish', 'on', 5, 2, 2, 0, 3], array_slice(array_values($rows[0]), 0, 7));
+    self::assertSame(['anonymize', 'on', 5, 2, 2, 0, 3], array_slice(array_values($rows[1]), 0, 7));
+    self::assertSame('Limit reached: cron or the next run continues.', $rows[1]['note']);
+
+    // Wherever cron left the backfill cursor, the command covers all.
+    $state->set(ArchiveService::BACKFILL_CURSOR_STATE, max($nids));
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions(['batch-size' => 2])
+    ));
+    self::assertSame(['unpublish', 'on', 3, 3, 3, 0, 0, 'The one-time pass has ended.'], array_values($rows[0]));
+    self::assertSame(['anonymize', 'on', 3, 3, 3, 0, 0, ''], array_values($rows[1]));
+    self::assertTrue($state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE));
+    foreach ($nids as $nid) {
+      $node = Node::load($nid);
+      self::assertFalse($node->isPublished());
+      self::assertStringEndsWith('@anonymized.off', $node->get('field_e_mail')->value);
+      self::assertSame(1000000000, (int) $node->getChangedTime());
+    }
+    $revisions = array_map(static fn (int $nid): int => (int) Node::load($nid)->getRevisionId(), $nids);
+
+    // A further run finds nothing and saves nothing.
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions()
+    ));
+    self::assertSame(['unpublish', 'on', 0, 0, 0, 0, 0], array_slice(array_values($rows[0]), 0, 7));
+    self::assertStringStartsWith('The one-time pass has ended;', $rows[0]['note']);
+    self::assertSame(['anonymize', 'on', 0, 0, 0, 0, 0, ''], array_values($rows[1]));
+    foreach ($nids as $i => $nid) {
+      self::assertSame($revisions[$i], (int) Node::load($nid)->getRevisionId());
+    }
+  }
+
+  /**
+   * One step can run alone; the settings and the options are respected.
+   */
+  public function testBackfillCommandOnlyOptionAndSettings(): void {
+    $nids = $this->createArchivedBacklog(2);
+    $this->config('markaspot_archive.settings')->set('unpublish', 0)->save();
+
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions(['only' => 'unpublish'])
+    ));
+    self::assertSame([['unpublish', 'off', 2, 0, 0, 0, 2, 'The "unpublish" setting is off: nothing is unpublished.']], array_map('array_values', $rows));
+
+    $rows = $this->rowsToArray($this->archiveCommand()->backfill(
+      $this->backfillOptions(['only' => 'anonymize'])
+    ));
+    self::assertCount(1, $rows);
+    self::assertSame(['anonymize', 'on', 2, 2, 2, 0, 0, ''], array_values($rows[0]));
+    foreach ($nids as $nid) {
+      $node = Node::load($nid);
+      self::assertTrue($node->isPublished());
+      self::assertStringEndsWith('@anonymized.off', $node->get('field_e_mail')->value);
+    }
+
+    foreach ([['only' => 'publish'], ['limit' => -1], ['batch-size' => 0]] as $invalid) {
+      try {
+        $this->archiveCommand()->backfill($this->backfillOptions($invalid));
+        self::fail('Invalid options were accepted: ' . json_encode($invalid));
+      }
+      catch (\InvalidArgumentException) {
+        // Expected.
+      }
+    }
+  }
+
+  /**
+   * Creates archived, published requests with plain contact data.
+   *
+   * They reach the archived status while the settings are off, as requests
+   * archived before transition handling existed; the settings are on after.
+   *
+   * @return int[]
+   *   Node ids in ascending order.
+   */
+  private function createArchivedBacklog(int $count): array {
+    $this->createQueueRequest();
+    $this->config('markaspot_archive.settings')->set('anonymize', 0)->save();
+    $nids = [];
+    for ($i = 0; $i < $count; $i++) {
+      $nids[] = (int) $this->createRequest([
+        'field_status' => $this->archivedStatusId(),
+        'field_e_mail' => 'plain' . $i . '@example.org',
+        'changed' => 1000000000,
+      ])->id();
+    }
+    $this->config('markaspot_archive.settings')
+      ->set('anonymize', 1)
+      ->set('unpublish', 1)
+      ->save();
+    return $nids;
+  }
+
+  /**
+   * Returns backfill command options with Drush-like defaults.
+   *
+   * @param array<string, mixed> $overrides
+   *   Option overrides.
+   *
+   * @return array<string, mixed>
+   *   Command options.
+   */
+  private function backfillOptions(array $overrides = []): array {
+    return $overrides + [
+      'dry-run' => FALSE,
+      'only' => NULL,
+      'limit' => 0,
+      'batch-size' => ArchiveCommands::BACKFILL_BATCH_SIZE,
+    ];
   }
 
   /**
@@ -1296,6 +1440,8 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
       $this->container->get('entity_type.manager'),
       $this->testLogger(),
       $this->container->get('database'),
+      $this->container->get('state'),
+      $this->container->get('lock'),
       NULL
     );
   }

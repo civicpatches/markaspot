@@ -34,6 +34,11 @@ class ArchiveService implements ArchiveServiceInterface {
   public const BACKFILL_TIME_BUDGET = 20;
 
   /**
+   * Lock shared by the cron catch-up and the operator command.
+   */
+  public const CATCH_UP_LOCK = 'markaspot_archive.catch_up';
+
+  /**
    * State key of the last node id the backfill has processed.
    */
   public const BACKFILL_CURSOR_STATE = 'markaspot_archive.backfill_last_nid';
@@ -417,7 +422,8 @@ class ArchiveService implements ArchiveServiceInterface {
   public function unpublishArchivedBacklog(
     int $limit = self::BACKFILL_LIMIT,
     int $time_budget = self::BACKFILL_TIME_BUDGET,
-  ): int {
+  ): array {
+    $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $config = $this->configFactory->get('markaspot_archive.settings');
     $archived_status = (string) $config->get('status_archived');
     if (
@@ -425,7 +431,7 @@ class ArchiveService implements ArchiveServiceInterface {
       || $archived_status === ''
       || $this->state->get(self::UNPUBLISH_BACKLOG_DONE_STATE)
     ) {
-      return 0;
+      return $result;
     }
 
     $cursor = (int) $this->state->get(self::UNPUBLISH_BACKLOG_CURSOR_STATE, 0);
@@ -435,18 +441,17 @@ class ArchiveService implements ArchiveServiceInterface {
       // on presave, and a report staff republish afterwards stays published.
       $this->state->set(self::UNPUBLISH_BACKLOG_DONE_STATE, TRUE);
       $this->state->delete(self::UNPUBLISH_BACKLOG_CURSOR_STATE);
-      return 0;
+      return $result;
     }
 
     $storage = $this->entityTypeManager->getStorage('node');
     $started = microtime(TRUE);
-    $unpublished = 0;
-    $failed = 0;
     foreach ($nids as $nid) {
       if (microtime(TRUE) - $started > $time_budget) {
         break;
       }
       $cursor = (int) $nid;
+      $result['processed']++;
       try {
         $node = $storage->load($nid);
         if (!$node instanceof NodeInterface || !$this->unpublishTranslations($node)) {
@@ -455,13 +460,13 @@ class ArchiveService implements ArchiveServiceInterface {
         // Keep the changed time: unpublishing is no change of the request.
         $node->setSyncing(TRUE);
         $node->save();
-        $unpublished++;
+        $result['changed']++;
       }
       catch (DatabaseException $e) {
         throw $e;
       }
       catch (\Throwable $e) {
-        $failed++;
+        $result['failed']++;
         $this->logger->warning(
           'Archived node @nid could not be unpublished: @error',
           ['@nid' => $nid, '@error' => $e->getMessage()]
@@ -470,13 +475,13 @@ class ArchiveService implements ArchiveServiceInterface {
     }
     $this->state->set(self::UNPUBLISH_BACKLOG_CURSOR_STATE, $cursor);
 
-    if ($unpublished > 0 || $failed > 0) {
+    if ($result['changed'] > 0 || $result['failed'] > 0) {
       $this->logger->notice(
         'Unpublished @count archived service requests that were still published (@failed failed, up to node ID @nid).',
-        ['@count' => $unpublished, '@failed' => $failed, '@nid' => $cursor]
+        ['@count' => $result['changed'], '@failed' => $result['failed'], '@nid' => $cursor]
       );
     }
-    return $unpublished;
+    return $result;
   }
 
   /**
@@ -485,17 +490,18 @@ class ArchiveService implements ArchiveServiceInterface {
   public function backfillArchived(
     int $limit = self::BACKFILL_LIMIT,
     int $time_budget = self::BACKFILL_TIME_BUDGET,
-  ): int {
+  ): array {
+    $result = ['processed' => 0, 'changed' => 0, 'failed' => 0];
     $config = $this->configFactory->get('markaspot_archive.settings');
     $archived_status = (string) $config->get('status_archived');
     if ($config->get('anonymize') != 1 || $archived_status === '') {
-      return 0;
+      return $result;
     }
     $fields = $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'));
     $storage = $this->entityTypeManager->getStorage('node');
     $detectable = $this->detectableFields($fields);
     if ($detectable === []) {
-      return 0;
+      return $result;
     }
 
     $cursor = (int) $this->state->get(self::BACKFILL_CURSOR_STATE, 0);
@@ -505,17 +511,16 @@ class ArchiveService implements ArchiveServiceInterface {
       if ($cursor > 0) {
         $this->state->set(self::BACKFILL_CURSOR_STATE, 0);
       }
-      return 0;
+      return $result;
     }
 
     $started = microtime(TRUE);
-    $anonymized = 0;
-    $failed = 0;
     foreach ($nids as $nid) {
       if (microtime(TRUE) - $started > $time_budget) {
         break;
       }
       $cursor = (int) $nid;
+      $result['processed']++;
       try {
         $node = $storage->load($nid);
         if (!$node instanceof NodeInterface) {
@@ -539,13 +544,13 @@ class ArchiveService implements ArchiveServiceInterface {
         $node->setSyncing(TRUE);
         $node->save();
         $this->anonymizeRevisions($node, $anonymized_values);
-        $anonymized++;
+        $result['changed']++;
       }
       catch (DatabaseException $e) {
         throw $e;
       }
       catch (\Throwable $e) {
-        $failed++;
+        $result['failed']++;
         $this->logger->warning(
           'Archived node @nid could not be anonymized: @error',
           ['@nid' => $nid, '@error' => $e->getMessage()]
@@ -554,13 +559,42 @@ class ArchiveService implements ArchiveServiceInterface {
     }
     $this->state->set(self::BACKFILL_CURSOR_STATE, $cursor);
 
-    if ($anonymized > 0 || $failed > 0) {
+    if ($result['changed'] > 0 || $result['failed'] > 0) {
       $this->logger->notice(
         'Anonymized @count archived service requests with plain contact data (@failed failed, up to node ID @nid).',
-        ['@count' => $anonymized, '@failed' => $failed, '@nid' => $cursor]
+        ['@count' => $result['changed'], '@failed' => $result['failed'], '@nid' => $cursor]
       );
     }
-    return $anonymized;
+    return $result;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function countUnpublishBacklog(): int {
+    $archived_status = (string) $this->configFactory
+      ->get('markaspot_archive.settings')
+      ->get('status_archived');
+    if ($archived_status === '' || $this->state->get(self::UNPUBLISH_BACKLOG_DONE_STATE)) {
+      return 0;
+    }
+    $cursor = (int) $this->state->get(self::UNPUBLISH_BACKLOG_CURSOR_STATE, 0);
+    return count($this->publishedArchivedCandidates($archived_status, $cursor, NULL));
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function countBackfillCandidates(): int {
+    $config = $this->configFactory->get('markaspot_archive.settings');
+    $archived_status = (string) $config->get('status_archived');
+    $detectable = $this->detectableFields(
+      $this->normalizeConfiguredFields((array) $config->get('anonymize_fields'))
+    );
+    if ($archived_status === '' || $detectable === []) {
+      return 0;
+    }
+    return count($this->backfillCandidates($archived_status, $detectable, 0, NULL));
   }
 
   /**
@@ -598,13 +632,13 @@ class ArchiveService implements ArchiveServiceInterface {
    *   Field types keyed by field machine name.
    * @param int $cursor
    *   Only node ids above this one are returned.
-   * @param int $limit
-   *   Maximum number of node ids.
+   * @param int|null $limit
+   *   Maximum number of node ids, NULL for all.
    *
    * @return int[]
    *   Node ids in ascending order.
    */
-  protected function backfillCandidates(string $archived_status, array $detectable, int $cursor, int $limit): array {
+  protected function backfillCandidates(string $archived_status, array $detectable, int $cursor, ?int $limit): array {
     $storage = $this->entityTypeManager->getStorage('node');
     if (!$storage instanceof SqlContentEntityStorage) {
       return [];
@@ -636,12 +670,15 @@ class ArchiveService implements ArchiveServiceInterface {
         'telephone' => $query->condition($column, self::ANONYMIZED_PHONE, '<>'),
         default => $query->condition($column, '^[0-9a-f]{10}$', 'NOT REGEXP'),
       };
-      $query->distinct()->orderBy('r.entity_id')->range(0, $limit);
+      $query->distinct()->orderBy('r.entity_id');
+      if ($limit !== NULL) {
+        $query->range(0, $limit);
+      }
       $nids = array_merge($nids, array_map('intval', $query->execute()->fetchCol()));
     }
     $nids = array_values(array_unique($nids));
     sort($nids);
-    return array_slice($nids, 0, $limit);
+    return $limit === NULL ? $nids : array_slice($nids, 0, $limit);
   }
 
   /**
@@ -651,13 +688,13 @@ class ArchiveService implements ArchiveServiceInterface {
    *   The archived status term id.
    * @param int $cursor
    *   Only node ids above this one are returned.
-   * @param int $limit
-   *   Maximum number of node ids.
+   * @param int|null $limit
+   *   Maximum number of node ids, NULL for all.
    *
    * @return int[]
    *   Node ids in ascending order.
    */
-  protected function publishedArchivedCandidates(string $archived_status, int $cursor, int $limit): array {
+  protected function publishedArchivedCandidates(string $archived_status, int $cursor, ?int $limit): array {
     $storage = $this->entityTypeManager->getStorage('node');
     if (!$storage instanceof SqlContentEntityStorage) {
       return [];
@@ -675,7 +712,10 @@ class ArchiveService implements ArchiveServiceInterface {
       ->condition('n.status', 1)
       ->condition('n.nid', $cursor, '>')
       ->condition('s.' . $mapping->getFieldColumnName($status, 'target_id'), $archived_status);
-    $query->distinct()->orderBy('n.nid')->range(0, $limit);
+    $query->distinct()->orderBy('n.nid');
+    if ($limit !== NULL) {
+      $query->range(0, $limit);
+    }
     return array_map('intval', $query->execute()->fetchCol());
   }
 

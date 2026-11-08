@@ -11,7 +11,10 @@ use Drupal\Core\Database\Connection;
 use Drupal\Core\Datetime\DateFormatterInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
+use Drupal\Core\State\StateInterface;
+use Drupal\markaspot_archive\ArchiveService;
 use Drupal\markaspot_archive\ArchiveServiceInterface;
 use Drupal\node\NodeInterface;
 use Drush\Attributes as CLI;
@@ -28,6 +31,16 @@ final class ArchiveCommands extends DrushCommands {
    */
   private const REQUEST_LINK_SERVICE = 'markaspot_dashboard.request_link';
 
+  /**
+   * Requests per catch-up batch of the backfill command.
+   */
+  public const BACKFILL_BATCH_SIZE = 200;
+
+  /**
+   * Seconds a catch-up batch of the backfill command may take.
+   */
+  private const BACKFILL_BATCH_TIME_BUDGET = 300;
+
   public function __construct(
     protected readonly ArchiveServiceInterface $archiveService,
     protected readonly ConfigFactoryInterface $configFactory,
@@ -35,6 +48,8 @@ final class ArchiveCommands extends DrushCommands {
     protected readonly EntityTypeManagerInterface $entityTypeManager,
     protected readonly LoggerChannelInterface $archiveLogger,
     protected readonly Connection $database,
+    protected readonly StateInterface $state,
+    protected readonly LockBackendInterface $lock,
     protected readonly ?object $requestLinkService,
   ) {
     parent::__construct();
@@ -51,6 +66,8 @@ final class ArchiveCommands extends DrushCommands {
       $container->get('entity_type.manager'),
       $container->get('logger.factory')->get('markaspot_archive'),
       $container->get('database'),
+      $container->get('state'),
+      $container->get('lock'),
       $container->has(self::REQUEST_LINK_SERVICE)
         ? $container->get(self::REQUEST_LINK_SERVICE) : NULL,
     );
@@ -124,6 +141,240 @@ final class ArchiveCommands extends DrushCommands {
       'retention',
       'fields',
     ], $rows);
+  }
+
+  /**
+   * Catches up on archived requests in one run instead of 50 per cron run.
+   *
+   * Runs the one-time unpublish pass and the anonymization backfill that cron
+   * otherwise works through in steps of 50, with the same saves: the changed
+   * time is kept and no mail goes out. Running it again is safe; finished
+   * requests are no longer candidates.
+   */
+  #[CLI\Command(
+    name: 'markaspot:archive:backfill',
+    aliases: ['mas:archive-backfill'],
+  )]
+  #[CLI\Option(
+    name: 'dry-run',
+    description: 'Only count the archived requests each step would still process.',
+  )]
+  #[CLI\Option(
+    name: 'only',
+    description: 'Run one step only: "unpublish" or "anonymize".',
+  )]
+  #[CLI\Option(
+    name: 'limit',
+    description: 'Process at most this many requests per step (0: all).',
+  )]
+  #[CLI\Option(
+    name: 'batch-size',
+    description: 'Requests per batch.',
+  )]
+  #[CLI\FieldLabels(labels: [
+    'step' => 'Step',
+    'setting' => 'Setting',
+    'pending' => 'Pending before',
+    'processed' => 'Processed',
+    'changed' => 'Changed',
+    'failed' => 'Failed',
+    'remaining' => 'Pending after',
+    'note' => 'Note',
+  ])]
+  #[CLI\Usage(
+    name: 'markaspot:archive:backfill --dry-run',
+    description: 'Count the archived requests still published or holding plain contact data.',
+  )]
+  #[CLI\Usage(
+    name: 'markaspot:archive:backfill --limit=100',
+    description: 'Trial run on the first 100 requests of each step.',
+  )]
+  #[CLI\Usage(
+    name: 'markaspot:archive:backfill',
+    description: 'Unpublish and anonymize every remaining archived request now.',
+  )]
+  public function backfill(
+    array $options = [
+      'dry-run' => FALSE,
+      'only' => NULL,
+      'limit' => 0,
+      'batch-size' => self::BACKFILL_BATCH_SIZE,
+    ],
+  ): RowsOfFields {
+    $only = (string) ($options['only'] ?? '');
+    if (!in_array($only, ['', 'unpublish', 'anonymize'], TRUE)) {
+      throw new \InvalidArgumentException(
+        '--only must be "unpublish" or "anonymize".'
+      );
+    }
+    $limit = filter_var(
+      $options['limit'] ?? 0,
+      FILTER_VALIDATE_INT,
+      ['options' => ['min_range' => 0]]
+    );
+    $batch_size = filter_var(
+      $options['batch-size'] ?? self::BACKFILL_BATCH_SIZE,
+      FILTER_VALIDATE_INT,
+      ['options' => ['min_range' => 1]]
+    );
+    if ($limit === FALSE || $batch_size === FALSE) {
+      throw new \InvalidArgumentException(
+        '--limit must be 0 or more and --batch-size 1 or more.'
+      );
+    }
+    $dry_run = !empty($options['dry-run']);
+
+    if (!$dry_run && !$this->lock->acquire(
+      ArchiveService::CATCH_UP_LOCK,
+      self::BACKFILL_BATCH_TIME_BUDGET + 60
+    )) {
+      throw new \RuntimeException(
+        'Cron is running the archive catch-up right now. Try again in a minute.'
+      );
+    }
+    try {
+      $rows = [];
+      if ($only !== 'anonymize') {
+        $rows[] = $this->unpublishStep($dry_run, $limit, $batch_size);
+      }
+      if ($only !== 'unpublish') {
+        $rows[] = $this->anonymizeStep($dry_run, $limit, $batch_size);
+      }
+    }
+    finally {
+      if (!$dry_run) {
+        $this->lock->release(ArchiveService::CATCH_UP_LOCK);
+      }
+    }
+    return new RowsOfFields($rows);
+  }
+
+  /**
+   * Runs or counts the one-time unpublish pass.
+   *
+   * @return array<string, int|string>
+   *   The result row.
+   */
+  private function unpublishStep(bool $dry_run, int $limit, int $batch_size): array {
+    $enabled = $this->configFactory->get('markaspot_archive.settings')
+      ->get('unpublish') == 1;
+    $row = $this->stepRow('unpublish', $enabled, $this->archiveService->countUnpublishBacklog());
+    if ($this->state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE)) {
+      $row['note'] = 'The one-time pass has ended; requests published now were republished by staff.';
+    }
+    elseif (!$enabled) {
+      $row['note'] = 'The "unpublish" setting is off: nothing is unpublished.';
+    }
+    elseif ($dry_run) {
+      $row['note'] = 'Dry run: nothing was changed.';
+    }
+    else {
+      $this->runBatches('Unpublish', $row, $limit, $batch_size,
+        fn (int $size): array => $this->archiveService->unpublishArchivedBacklog(
+          $size,
+          self::BACKFILL_BATCH_TIME_BUDGET
+        ));
+      $row['note'] = $this->state->get(ArchiveService::UNPUBLISH_BACKLOG_DONE_STATE)
+        ? 'The one-time pass has ended.'
+        : 'Limit reached: cron or the next run continues.';
+    }
+    $row['remaining'] = $this->archiveService->countUnpublishBacklog();
+    return $row;
+  }
+
+  /**
+   * Runs or counts the anonymization backfill over every archived request.
+   *
+   * @return array<string, int|string>
+   *   The result row.
+   */
+  private function anonymizeStep(bool $dry_run, int $limit, int $batch_size): array {
+    $enabled = $this->configFactory->get('markaspot_archive.settings')
+      ->get('anonymize') == 1;
+    $row = $this->stepRow('anonymize', $enabled, $this->archiveService->countBackfillCandidates());
+    if (!$enabled) {
+      $row['note'] = 'The "anonymize" setting is off: nothing is anonymized.';
+    }
+    elseif ($dry_run) {
+      $row['note'] = 'Dry run: nothing was changed.';
+    }
+    else {
+      // One full pass from the first archived request, wherever cron stopped.
+      $this->state->set(ArchiveService::BACKFILL_CURSOR_STATE, 0);
+      $this->runBatches('Anonymize', $row, $limit, $batch_size,
+        fn (int $size): array => $this->archiveService->backfillArchived(
+          $size,
+          self::BACKFILL_BATCH_TIME_BUDGET
+        ));
+      $row['note'] = $row['failed'] > 0
+        ? 'Some requests failed: the markaspot_archive log names them and the reason.'
+        : '';
+    }
+    $row['remaining'] = $this->archiveService->countBackfillCandidates();
+    if ($row['note'] === '' && $row['remaining'] > 0) {
+      $row['note'] = 'Limit reached: cron or the next run continues.';
+    }
+    return $row;
+  }
+
+  /**
+   * Returns an empty result row of one catch-up step.
+   *
+   * @return array<string, int|string>
+   *   The row.
+   */
+  private function stepRow(string $step, bool $enabled, int $pending): array {
+    return [
+      'step' => $step,
+      'setting' => $enabled ? 'on' : 'off',
+      'pending' => $pending,
+      'processed' => 0,
+      'changed' => 0,
+      'failed' => 0,
+      'remaining' => $pending,
+      'note' => '',
+    ];
+  }
+
+  /**
+   * Calls one catch-up step batch by batch until it ends or hits the limit.
+   *
+   * @param string $label
+   *   Step label for the progress log.
+   * @param array<string, int|string> $row
+   *   The result row, updated with the batch results.
+   * @param int $limit
+   *   Maximum number of requests to process, 0 for all.
+   * @param int $batch_size
+   *   Requests per batch.
+   * @param callable(int): array{processed: int, changed: int, failed: int} $batch
+   *   Processes one batch of the given size.
+   */
+  private function runBatches(string $label, array &$row, int $limit, int $batch_size, callable $batch): void {
+    while ($limit === 0 || $row['processed'] < $limit) {
+      $size = $limit === 0 ? $batch_size : min($batch_size, $limit - (int) $row['processed']);
+      // Keep the lock for the next batch.
+      $this->lock->acquire(
+        ArchiveService::CATCH_UP_LOCK,
+        self::BACKFILL_BATCH_TIME_BUDGET + 60
+      );
+      $result = $batch($size);
+      if ($result['processed'] === 0) {
+        break;
+      }
+      foreach (['processed', 'changed', 'failed'] as $key) {
+        $row[$key] = (int) $row[$key] + $result[$key];
+      }
+      $this->archiveLogger->notice(
+        '@step: @processed archived requests processed (@changed changed, @failed failed).',
+        [
+          '@step' => $label,
+          '@processed' => $row['processed'],
+          '@changed' => $row['changed'],
+          '@failed' => $row['failed'],
+        ]
+      );
+    }
   }
 
   /**

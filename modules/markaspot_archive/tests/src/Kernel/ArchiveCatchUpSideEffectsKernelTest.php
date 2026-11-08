@@ -12,6 +12,7 @@ use Drupal\group\Entity\Group;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_archive\ArchiveService;
+use Drupal\markaspot_archive\Drush\Commands\ArchiveCommands;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
@@ -244,6 +245,31 @@ final class ArchiveCatchUpSideEffectsKernelTest extends KernelTestBase {
 
     $this->assertSame([], $this->collectedMails());
     $this->assertCatchUpResult($before, $nodeCount);
+  }
+
+  /**
+   * The operator command sends no mail either and finishes in one run.
+   */
+  public function testOperatorCommandSendsNoMail(): void {
+    $before = $this->watchedValues();
+    $nodeCount = $this->nodeCount();
+
+    $this->probing = TRUE;
+    $rows = ArchiveCommands::create($this->container)->backfill([
+      'dry-run' => FALSE,
+      'only' => NULL,
+      'limit' => 0,
+      'batch-size' => 2,
+    ]);
+    $this->probing = FALSE;
+
+    $this->assertSame([], $this->collectedMails());
+    $this->assertCatchUpResult($before, $nodeCount);
+    $remaining = [];
+    foreach ($rows as $row) {
+      $remaining[$row['step']] = $row['remaining'];
+    }
+    $this->assertSame(['unpublish' => 0, 'anonymize' => 0], $remaining);
   }
 
   /**

@@ -33,18 +33,29 @@ function markaspot_archive_help($route_name, RouteMatchInterface $route_match) {
  */
 function markaspot_archive_cron() {
   $archive = \Drupal::service('markaspot_archive.archive');
-  // Unpublish archived requests that are still published, once per site. It
-  // depends only on the unpublish setting, not on the archive throttle.
-  $archive->unpublishArchivedBacklog(
-    ArchiveService::BACKFILL_LIMIT,
-    ArchiveService::BACKFILL_TIME_BUDGET
-  );
-  // Catch up on archived requests that still hold plain contact data on every
-  // run. It depends only on the anonymize setting, not on the archive throttle.
-  $archive->backfillArchived(
-    ArchiveService::BACKFILL_LIMIT,
-    ArchiveService::BACKFILL_TIME_BUDGET
-  );
+  // While an operator runs markaspot:archive:backfill, cron leaves the
+  // catch-up to it.
+  $lock = \Drupal::lock();
+  if ($lock->acquire(ArchiveService::CATCH_UP_LOCK, 2 * ArchiveService::BACKFILL_TIME_BUDGET + 30)) {
+    try {
+      // Unpublish archived requests that are still published, once per site.
+      // It depends only on the unpublish setting, not on the archive throttle.
+      $archive->unpublishArchivedBacklog(
+        ArchiveService::BACKFILL_LIMIT,
+        ArchiveService::BACKFILL_TIME_BUDGET
+      );
+      // Catch up on archived requests that still hold plain contact data on
+      // every run. It depends only on the anonymize setting, not on the
+      // archive throttle.
+      $archive->backfillArchived(
+        ArchiveService::BACKFILL_LIMIT,
+        ArchiveService::BACKFILL_TIME_BUDGET
+      );
+    }
+    finally {
+      $lock->release(ArchiveService::CATCH_UP_LOCK);
+    }
+  }
 
   // Get the configuration and check if cron‐based archiving is enabled.
   $config = \Drupal::config('markaspot_archive.settings');
