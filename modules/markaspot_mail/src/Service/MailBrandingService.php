@@ -264,7 +264,7 @@ class MailBrandingService {
   /**
    * Resolves the Drupal backend base URL for staff links.
    *
-   * Platform.staff_backend_base_url wins and may carry a deployment path
+   * The setting platform.staff_backend_base_url wins and may carry a path
    * (for example https://example.org/management). When it is empty, the
    * mail asset origin platform.backend_base_url is used as before. A base
    * that points at the frontend (same origin and no own path, compared with
@@ -280,9 +280,8 @@ class MailBrandingService {
    *   keep the dashboard link.
    */
   public function resolveStaffBackendBase(string $tenantFrontendBase = ''): ?string {
-    $configured = trim((string) ($this->configFactory
-      ->get('markaspot_mail.settings')
-      ->get('platform.staff_backend_base_url') ?? ''));
+    $settings = $this->configFactory->get('markaspot_mail.settings');
+    $configured = trim((string) ($settings->get('platform.staff_backend_base_url') ?? ''));
     if ($configured !== '') {
       $base = $this->urlValidator()->normalizeBaseUrl($configured);
       if ($base === NULL) {
@@ -301,7 +300,7 @@ class MailBrandingService {
     }
 
     $frontendBases = [
-      (string) ($this->getPlatformDefaults()['frontend_base_url'] ?? ''),
+      $this->validateHttpUrl((string) ($settings->get('platform.frontend_base_url') ?? ''), ''),
       $tenantFrontendBase,
     ];
     foreach ($frontendBases as $frontendBase) {
