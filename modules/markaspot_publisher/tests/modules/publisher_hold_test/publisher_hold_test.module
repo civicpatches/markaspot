@@ -1,0 +1,21 @@
+<?php
+
+/**
+ * @file
+ * Fixture for the publisher candidate query extension point.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Database\Query\AlterableInterface;
+use Drupal\Core\Database\Query\SelectInterface;
+
+/**
+ * Implements hook_query_markaspot_publisher_candidates_alter().
+ */
+function publisher_hold_test_query_markaspot_publisher_candidates_alter(AlterableInterface $query): void {
+  $excluded = \Drupal::state()->get('publisher_hold_test.excluded');
+  if ($excluded && $query instanceof SelectInterface) {
+    $query->condition('base_table.nid', $excluded, '<>');
+  }
+}

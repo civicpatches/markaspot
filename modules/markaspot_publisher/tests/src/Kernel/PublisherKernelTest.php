@@ -19,7 +19,7 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
  * @group markaspot_publisher
  */
 #[RunTestsInSeparateProcesses]
-final class PublisherKernelTest extends KernelTestBase {
+class PublisherKernelTest extends KernelTestBase {
 
   /**
    * {@inheritdoc}
@@ -39,12 +39,12 @@ final class PublisherKernelTest extends KernelTestBase {
   /**
    * The category under test.
    */
-  private Term $category;
+  protected Term $category;
 
   /**
    * The publishable workflow status.
    */
-  private Term $status;
+  protected Term $status;
 
   /**
    * {@inheritdoc}
@@ -130,6 +130,19 @@ final class PublisherKernelTest extends KernelTestBase {
   }
 
   /**
+   * Candidate query alterations apply before enqueueing, without moderation.
+   */
+  public function testCandidateQueryTag(): void {
+    $this->enableModules(['publisher_hold_test']);
+    $excluded = $this->report(31);
+    $allowed = $this->report(31);
+    $this->container->get('state')->set('publisher_hold_test.excluded', $excluded->id());
+    $candidates = $this->container->get('markaspot_publisher.publisher')->load();
+    $this->assertSame([(int) $allowed->id()], array_map('intval', array_keys($candidates)));
+    $this->assertFalse($this->container->get('module_handler')->moduleExists('markaspot_moderation'));
+  }
+
+  /**
    * A category override replaces the global publication delay.
    */
   public function testCategoryDeadlineOverride(): void {
@@ -176,7 +189,7 @@ final class PublisherKernelTest extends KernelTestBase {
   /**
    * Saves a report with explicit creation and modification timestamps.
    */
-  private function report(int $ageDays, array $values = []): Node {
+  protected function report(int $ageDays, array $values = []): Node {
     $created = time() - $ageDays * 86400;
     $node = Node::create($values + [
       'type' => 'service_request',

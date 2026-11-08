@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_health\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\Core\Extension\ProfileExtensionList;
+use Drupal\Core\Extension\Exception\UnknownExtensionException;
 use Drupal\markaspot_health\Controller\HealthCheckController;
 use Drupal\markaspot_health\HealthCheckPluginManager;
 use Drupal\markaspot_health\HealthCheckResult;
@@ -103,6 +104,18 @@ class HealthCheckEndpointTest extends KernelTestBase {
       'infos' => 0,
       'passed' => 1,
     ], $payload['summary']);
+  }
+
+  /**
+   * Sites without profile extension metadata still receive a health report.
+   */
+  public function testMissingProfileVersionFallback(): void {
+    $manager = $this->createMock(HealthCheckPluginManager::class);
+    $manager->method('runAll')->willReturn([]);
+    $profiles = $this->createMock(ProfileExtensionList::class);
+    $profiles->method('getExtensionInfo')->willThrowException(new UnknownExtensionException('Missing profile'));
+    $response = (new HealthCheckController($manager, $profiles))->report(new Request());
+    $this->assertSame('dev', json_decode((string) $response->getContent(), TRUE)['profile_version']);
   }
 
   /**

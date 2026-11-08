@@ -21,6 +21,36 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 final class DuplicateReviewAccessKernelTest extends DuplicateAccessKernelTestBase {
 
   /**
+   * Read endpoints list only matches whose both reports are accessible.
+   */
+  public function testReadEndpointsHideForeignMatches(): void {
+    $source = $this->request($this->tenantA, 'Own source');
+    $this->createMatch($source, $this->request($this->tenantA, 'Own duplicate'));
+    $this->createMatch($source, $this->request($this->tenantB, 'Foreign duplicate'));
+    $foreignSource = $this->request($this->tenantB, 'Foreign source');
+    $this->createMatch($foreignSource, $this->request($this->tenantB, 'Foreign twin'));
+    $this->actAs($this->adminA);
+
+    $own = json_decode((string) $this->controller()->getDuplicates($source)->getContent(), TRUE);
+    $this->assertSame(['Own duplicate'], array_column($own['duplicates'], 'title'));
+
+    $foreign = $this->controller()->getDuplicates($foreignSource);
+    $this->assertSame(403, $foreign->getStatusCode());
+    $this->assertStringNotContainsString('Foreign', (string) $foreign->getContent());
+
+    $pending = json_decode((string) $this->controller()->getPendingMatches(
+      Request::create('/api/ai/duplicates/pending', 'GET', ['jurisdiction_id' => (string) $this->tenantA->id()]),
+    )->getContent(), TRUE);
+    $this->assertSame(['Own duplicate'], array_column($pending['matches'], 'match_title'));
+    $this->assertStringNotContainsString('Foreign', json_encode($pending));
+
+    $denied = json_decode((string) $this->controller()->getPendingMatches(
+      Request::create('/api/ai/duplicates/pending', 'GET', ['jurisdiction_id' => (string) $this->tenantB->id()]),
+    )->getContent(), TRUE);
+    $this->assertSame([], $denied['matches']);
+  }
+
+  /**
    * Same-tenant review renders both reports and stores the decision.
    */
   public function testSameTenantReviewIsAllowed(): void {
@@ -231,7 +261,7 @@ final class DuplicateReviewAccessKernelTest extends DuplicateAccessKernelTestBas
       $this->detection(),
       $this->container->get('entity_type.manager'),
       $this->container->get('database'),
-      NULL,
+      $this->container->get('markaspot_group.hierarchy_resolver'),
       $this->policy(),
     );
     $controller->setStringTranslation($this->container->get('string_translation'));

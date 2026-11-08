@@ -1,11 +1,10 @@
 <?php
 
-declare(strict_types=1);
-
 namespace Drupal\markaspot_nuxt\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Extension\ProfileExtensionList;
+use Drupal\Core\Extension\Exception\UnknownExtensionException;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Site\Settings;
 use Drupal\Core\StreamWrapper\PublicStream;
@@ -126,7 +125,8 @@ class MarkASpotSettingsController extends ControllerBase {
    * @param \Drupal\markaspot_nuxt\Image\LogoDimensionResolver $logo_dimension_resolver
    *   The logo dimension resolver.
    * @param \Drupal\Core\Extension\ProfileExtensionList $profileExtensionList
-   *   The profile extension list.
+   *   Profile versions serve frontend compatibility checks on the server;
+   *   the Nuxt proxy must strip this field from browser responses.
    */
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
@@ -231,8 +231,15 @@ class MarkASpotSettingsController extends ControllerBase {
     // SECURITY: mapbox_token, fallback_api_key, and frontend config are
     // intentionally excluded. API keys must stay server-side (Nuxt ENV).
     // See: markaspot/markaspot-ui#133.
+    try {
+      $profileVersion = $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev';
+    }
+    catch (UnknownExtensionException) {
+      $profileVersion = 'dev';
+    }
+
     $settings = [
-      'profile_version' => $this->profileExtensionList->getExtensionInfo('markaspot')['version'] ?? 'dev',
+      'profile_version' => $profileVersion,
       // Map configuration - styles only, no keys.
       'mapbox_style' => $nuxt_config->get('mapbox_style'),
       'mapbox_style_dark' => $nuxt_config->get('mapbox_style_dark'),
