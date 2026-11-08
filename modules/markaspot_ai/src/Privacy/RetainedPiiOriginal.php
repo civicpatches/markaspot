@@ -47,10 +47,24 @@ final class RetainedPiiOriginal {
   private const LEGACY_NOTES_KEY = 'markaspot_legacy_notes';
 
   /**
+   * Note that replaces the original once the report is anonymized.
+   */
+  public const ERASED_NOTE = '[Removed when the report was anonymized.]';
+
+  /**
    * Builds the remark text that retains the unredacted original.
    */
   public static function remarkText(string $original): string {
     return self::MARKER . "\n\n" . $original;
+  }
+
+  /**
+   * Builds the remark text that replaces an erased original.
+   *
+   * Keeps the marker, so the remark stays recognizable and excluded from AI.
+   */
+  public static function erasedText(): string {
+    return self::remarkText(self::ERASED_NOTE);
   }
 
   /**

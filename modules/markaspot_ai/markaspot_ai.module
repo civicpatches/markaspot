@@ -15,6 +15,7 @@ use Drupal\markaspot_ai\Utility\SovereignPolicy;
 use Drupal\Core\Database\Query\AlterableInterface;
 use Drupal\Core\Database\Query\SelectInterface;
 use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_ai\Privacy\NameScreeningResult;
 use Drupal\markaspot_ai\Privacy\PiiScreeningHold;
@@ -529,7 +530,9 @@ function _markaspot_ai_sentiment_source_fields(): array {
  *
  * Archive anonymisation and GDPR erasure keep the report and overwrite only
  * contact fields, so neither the delete hook nor the text-change check runs.
- * The stored reasoning can still quote the reporter: clear it.
+ * The stored reasoning can still quote the reporter: clear it. The original
+ * text retained by PII redaction holds exactly the personal data the
+ * redaction removed from the public text: erase it as well.
  */
 function markaspot_ai_markaspot_report_anonymized(EntityInterface $entity): void {
   if (!$entity instanceof NodeInterface || $entity->bundle() !== 'service_request') {
@@ -538,6 +541,105 @@ function markaspot_ai_markaspot_report_anonymized(EntityInterface $entity): void
   /** @var \Drupal\markaspot_ai\Service\SentimentService $sentiment_service */
   $sentiment_service = \Drupal::service('markaspot_ai.sentiment');
   $sentiment_service->clearReasoning((int) $entity->id());
+  _markaspot_ai_erase_retained_pii_originals($entity);
+}
+
+/**
+ * Overwrites the PII originals retained for a report in every revision.
+ *
+ * Covers every remark any revision or translation of the report references,
+ * so a remark staff removed later is erased too. Revision rows are updated
+ * directly, like the archive anonymizes previous node revisions. Ordinary
+ * remarks stay untouched.
+ *
+ * @param \Drupal\node\NodeInterface $node
+ *   The anonymized report.
+ *
+ * @return int
+ *   Number of remarks whose retained original was erased.
+ */
+function _markaspot_ai_erase_retained_pii_originals(NodeInterface $node): int {
+  $entity_type_manager = \Drupal::entityTypeManager();
+  if ($node->isNew() || !$node->hasField('field_internal_remark') || !$entity_type_manager->hasDefinition('paragraph')) {
+    return 0;
+  }
+  $node_storage = $entity_type_manager->getStorage('node');
+  $paragraph_storage = $entity_type_manager->getStorage('paragraph');
+  $field_manager = \Drupal::service('entity_field.manager');
+  $host_field = $field_manager->getFieldStorageDefinitions('node')['field_internal_remark'] ?? NULL;
+  $text_field = $field_manager->getFieldStorageDefinitions('paragraph')['field_internal_remark_text'] ?? NULL;
+  if (
+    !$node_storage instanceof SqlContentEntityStorage
+    || !$paragraph_storage instanceof SqlContentEntityStorage
+    || $host_field === NULL
+    || $text_field === NULL
+  ) {
+    return 0;
+  }
+  $node_mapping = $node_storage->getTableMapping();
+  $paragraph_mapping = $paragraph_storage->getTableMapping();
+  if (!$node_mapping->requiresDedicatedTableStorage($host_field) || !$paragraph_mapping->requiresDedicatedTableStorage($text_field)) {
+    return 0;
+  }
+
+  $database = \Drupal::database();
+  $remark_ids = $database->select($node_mapping->getDedicatedRevisionTableName($host_field), 'r')
+    ->fields('r', [$node_mapping->getFieldColumnName($host_field, 'target_id')])
+    ->condition('r.entity_id', $node->id())
+    ->distinct()
+    ->execute()
+    ->fetchCol();
+  if ($remark_ids === []) {
+    return 0;
+  }
+
+  // A remark is an original when its default revision is marked or carries
+  // the marker, or when any of its revisions carries the marker.
+  $text_revision_table = $paragraph_mapping->getDedicatedRevisionTableName($text_field);
+  $value_column = $paragraph_mapping->getFieldColumnName($text_field, 'value');
+  $original_ids = array_map('intval', $database->select($text_revision_table, 't')
+    ->fields('t', ['entity_id'])
+    ->condition('t.entity_id', $remark_ids, 'IN')
+    ->condition('t.' . $value_column, '%' . $database->escapeLike(RetainedPiiOriginal::MARKER) . '%', 'LIKE')
+    ->distinct()
+    ->execute()
+    ->fetchCol());
+  foreach ($paragraph_storage->loadMultiple($remark_ids) as $paragraph) {
+    if ($paragraph instanceof ParagraphInterface && RetainedPiiOriginal::isPiiOriginal($paragraph)) {
+      $original_ids[] = (int) $paragraph->id();
+    }
+  }
+  $original_ids = array_values(array_unique($original_ids));
+  if ($original_ids === []) {
+    return 0;
+  }
+
+  $erased = RetainedPiiOriginal::erasedText();
+  foreach ([$paragraph_mapping->getDedicatedDataTableName($text_field), $text_revision_table] as $table) {
+    $database->update($table)
+      ->fields([$value_column => $erased])
+      ->condition('entity_id', $original_ids, 'IN')
+      ->execute();
+  }
+  $paragraph_storage->resetCache($original_ids);
+
+  // The report object still holds the remarks it loaded on save. A later
+  // save of the same object would write their text back as a new revision.
+  foreach ($node->getTranslationLanguages() as $langcode => $language) {
+    foreach ($node->getTranslation($langcode)->get('field_internal_remark') as $item) {
+      $remark = $item->entity;
+      if ($remark instanceof ParagraphInterface && in_array((int) $remark->id(), $original_ids, TRUE)) {
+        $format = $remark->get('field_internal_remark_text')->format ?? 'plain_text';
+        $remark->set('field_internal_remark_text', ['value' => $erased, 'format' => $format]);
+      }
+    }
+  }
+
+  \Drupal::logger('markaspot_ai')->notice('Erased the retained PII original of @count internal remarks of anonymized node @nid.', [
+    '@count' => count($original_ids),
+    '@nid' => $node->id(),
+  ]);
+  return count($original_ids);
 }
 
 /**
