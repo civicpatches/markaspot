@@ -855,21 +855,28 @@ class ArchiveService implements ArchiveServiceInterface {
       if ($definition === NULL || !$mapping->requiresDedicatedTableStorage($definition)) {
         continue;
       }
-      $column = 'r.' . $mapping->getFieldColumnName($definition, 'value');
       $query = $this->database->select($mapping->getDedicatedRevisionTableName($definition), 'r');
       $query->join($status_table, 's', 's.entity_id = r.entity_id');
       $query->addField('r', 'entity_id');
       $query->condition('s.bundle', 'service_request')
         ->condition('s.' . $status_column, $archived_status)
-        ->condition('r.entity_id', $cursor, '>')
-        ->condition($column, '', '<>');
-      match (TRUE) {
-        // Any stored text left is plain.
-        $field_name === self::ERASED_FIELD => NULL,
-        $type === 'email' => $query->condition($column, '%' . $this->database->escapeLike('@anonymized.off'), 'NOT LIKE'),
-        $type === 'telephone' => $query->condition($column, self::ANONYMIZED_PHONE, '<>'),
-        default => $query->condition($column, '^[0-9a-f]{10}$', 'NOT REGEXP'),
-      };
+        ->condition('r.entity_id', $cursor, '>');
+      // A text with summary keeps plain data in either column; the cleanup
+      // writes the token to both.
+      $plain = $query->orConditionGroup();
+      foreach ($type === 'text_with_summary' ? ['value', 'summary'] : ['value'] as $property) {
+        $column = 'r.' . $mapping->getFieldColumnName($definition, $property);
+        $condition = $query->andConditionGroup()->condition($column, '', '<>');
+        match (TRUE) {
+          // Any stored text left is plain.
+          $field_name === self::ERASED_FIELD => NULL,
+          $type === 'email' => $condition->condition($column, '%' . $this->database->escapeLike('@anonymized.off'), 'NOT LIKE'),
+          $type === 'telephone' => $condition->condition($column, self::ANONYMIZED_PHONE, '<>'),
+          default => $condition->condition($column, '^[0-9a-f]{10}$', 'NOT REGEXP'),
+        };
+        $plain->condition($condition);
+      }
+      $query->condition($plain);
       $query->distinct()->orderBy('r.entity_id');
       if ($limit !== NULL) {
         $query->range(0, $limit);

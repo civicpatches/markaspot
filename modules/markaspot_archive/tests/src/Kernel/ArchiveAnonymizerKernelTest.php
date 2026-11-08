@@ -984,6 +984,64 @@ final class ArchiveAnonymizerKernelTest extends KernelTestBase {
   }
 
   /**
+   * The backfill finds personal data held only in the summary of a text.
+   *
+   * The value is a token already, so only the summary column shows the
+   * plain data, in the current revision of one request and in a previous
+   * revision of another. Both columns are anonymized in every revision.
+   */
+  public function testBackfillFindsPersonalDataOnlyInTheSummary(): void {
+    $this->createQueueRequest();
+    $this->createNodeField('field_reporter_text', 'text_with_summary');
+    $this->config('markaspot_archive.settings')
+      ->set('anonymize', 0)
+      ->set('anonymize_fields', [
+        'field_e_mail' => 'field_e_mail',
+        'field_reporter_text' => 'field_reporter_text',
+      ])
+      ->save();
+    $archived = $this->archivedStatusId();
+    $text = static fn (string $summary): array => [
+      'value' => '0a1b2c3d4e',
+      'summary' => $summary,
+      'format' => 'plain_text',
+    ];
+    $current = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => 'abc@anonymized.off',
+      'field_reporter_text' => $text('plain@example.org'),
+    ]);
+    $historic = $this->createRequest([
+      'field_status' => $archived,
+      'field_e_mail' => 'abc@anonymized.off',
+      'field_reporter_text' => $text('Jordan, second floor'),
+    ]);
+    $historic->setNewRevision(TRUE);
+    $historic->set('field_reporter_text', $text('5f4e3d2c1b'));
+    $historic->save();
+    $this->config('markaspot_archive.settings')->set('anonymize', 1)->save();
+    $service = $this->container->get('markaspot_archive.archive');
+
+    self::assertSame(2, $service->countBackfillCandidates());
+    self::assertSame(2, $service->backfillArchived(10, 20)['changed']);
+
+    foreach ([$current, $historic] as $node) {
+      $rows = $this->container->get('database')
+        ->select('node_revision__field_reporter_text', 'f')
+        ->fields('f', ['field_reporter_text_value', 'field_reporter_text_summary'])
+        ->condition('entity_id', $node->id())
+        ->execute()
+        ->fetchAll(\PDO::FETCH_NUM);
+      self::assertNotEmpty($rows);
+      foreach ($rows as [$value, $summary]) {
+        self::assertMatchesRegularExpression('/^[0-9a-f]{10}$/', (string) $value);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{10}$/', (string) $summary);
+      }
+    }
+    self::assertSame(0, $service->countBackfillCandidates());
+  }
+
+  /**
    * The backfill honors its limit and starts over once it is exhausted.
    */
   public function testBackfillLimitAndCursorReset(): void {
