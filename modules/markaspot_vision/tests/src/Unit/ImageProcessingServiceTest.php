@@ -222,12 +222,15 @@ class ImageProcessingServiceTest extends UnitTestCase {
         2 => $term(2, 'Sauberkeit', 0),
         21 => $term(21, 'Müll', 2),
         24 => $term(24, 'Hundekot', 2),
+        3 => $term(3, 'Grün', 0),
+        31 => $term(31, 'Baum', 3),
       ]);
     $entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
     $entityTypeManager->method('getStorage')->with('taxonomy_term')->willReturn($storage);
     $resolver = $this->createMock(JurisdictionHierarchyResolverInterface::class);
     $resolver->method('getRootJurisdictionId')->with(5)->willReturn(1);
-    $resolver->method('getAllowedCategoryIds')->with(5)->willReturn([21]);
+    // Parent 3 is selected but its only child is offline: no leaf to offer.
+    $resolver->method('getAllowedCategoryIds')->with(5)->willReturn([21, 3]);
 
     $service = $this->createService([], $entityTypeManager, NULL, $resolver);
 

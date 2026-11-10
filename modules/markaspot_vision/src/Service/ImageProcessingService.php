@@ -1885,13 +1885,12 @@ class ImageProcessingService {
 
       foreach ($owned as $term) {
         $term_lookup[$term->id()] = $term;
-      }
-      foreach ($terms as $term) {
         $children_count[$term->id()] = 0;
       }
 
-      // Count children for each term.
-      foreach ($terms as $term) {
+      // Count children over every published term of the owner: a selected
+      // parent whose children are all offline is no leaf to offer.
+      foreach ($owned as $term) {
         $parent_id = $term->get('parent')->target_id ?? 0;
         if ($parent_id && isset($children_count[$parent_id])) {
           $children_count[$parent_id]++;
