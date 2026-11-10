@@ -13,8 +13,9 @@ use Drupal\node\NodeInterface;
  * When name detection is enabled but the screening service fails, the report
  * is saved unpublished and recorded here. Staff review the description and
  * publish it themselves; publishing releases the hold. Automatic publication
- * (markaspot_publisher) skips held reports, so an outage can never make an
- * unscreened text public by itself.
+ * (markaspot_publisher) skips held reports in its candidates query and rechecks
+ * the hold in its queue worker. A failed hold-store read is the exception:
+ * core key/value returns "not held" on a database error.
  *
  * Entries are keyed by node UUID because the hold is placed in presave,
  * before a new node has an ID; hook_node_insert() adds the ID.

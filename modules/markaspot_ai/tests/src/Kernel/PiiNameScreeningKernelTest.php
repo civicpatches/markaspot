@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_ai\Kernel;
 
 use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\KeyValueStore\KeyValueDatabaseFactory;
+use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Logger\RfcLoggerTrait;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
@@ -18,10 +19,13 @@ use Drupal\markaspot_ai\Privacy\PiiScreeningHold;
 use Drupal\markaspot_ai\Privacy\RetainedPiiOriginal;
 use Drupal\markaspot_ai\Service\AiClientService;
 use Drupal\markaspot_ai\Service\NlpClientService;
+use Drupal\markaspot_publisher\Plugin\QueueWorker\PublisherQueueWorker;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
 use Drupal\paragraphs\Entity\ParagraphsType;
+use Drupal\taxonomy\Entity\Term;
+use Drupal\taxonomy\Entity\Vocabulary;
 use Drupal\Tests\content_moderation\Traits\ContentModerationTestTrait;
 use Drupal\user\Entity\User;
 use GuzzleHttp\Client;
@@ -57,6 +61,7 @@ final class PiiNameScreeningKernelTest extends KernelTestBase {
     'entity_reference_revisions', 'paragraphs',
     'workflows', 'content_moderation',
     'markaspot_ai', 'markaspot_ai_pii_test',
+    'taxonomy', 'markaspot_publisher',
   ];
 
   /**
@@ -497,6 +502,152 @@ final class PiiNameScreeningKernelTest extends KernelTestBase {
 
     $this->assertNotContains((int) $held->id(), $nids);
     $this->assertContains((int) $waiting->id(), $nids);
+  }
+
+  /**
+   * A stale queue item preserves a screening hold until explicit release.
+   */
+  public function testWorkerPreservesScreeningHold(): void {
+    $this->nlpHandler->append(new Response(503));
+    $node = $this->submit(self::PROBE . ' held for screening.');
+    $this->preparePublisherReport($node);
+    $this->assertHeld($node, NameScreeningResult::REASON_UNAVAILABLE);
+
+    $this->assertWorkerHonoursScreeningHold($node, ['nid' => $node->id()]);
+  }
+
+  /**
+   * A screening hold placed after cron enqueueing vetoes the queued item.
+   */
+  public function testWorkerRechecksScreeningHoldAfterEnqueue(): void {
+    $this->nlpHandler->append($this->healthy(), $this->redacted([]));
+    $node = $this->submit(self::PROBE . ' screened before enqueueing.');
+    $this->assertNotHeld($node);
+    $this->preparePublisherReport($node);
+
+    markaspot_publisher_cron();
+    $queue = $this->container->get('queue')->get('markaspot_publisher_queue_worker');
+    $this->assertSame(1, $queue->numberOfItems());
+    $item = $queue->claimItem();
+    $this->assertNotFalse($item);
+    $this->assertSame((int) $node->id(), (int) $item->data['nid']);
+
+    PiiScreeningHold::place($node, NameScreeningResult::REASON_UNAVAILABLE);
+    $this->assertWorkerHonoursScreeningHold($node, $item->data);
+    $queue->deleteItem($item);
+  }
+
+  /**
+   * An unbound UUID hold vetoes publication even without a held node ID.
+   */
+  public function testWorkerHonoursUnboundScreeningHold(): void {
+    $this->nlpHandler->append(new Response(503));
+    $node = $this->submit(self::PROBE . ' with an unbound hold.');
+    $this->preparePublisherReport($node);
+    $hold = PiiScreeningHold::get($node);
+    $this->assertNotNull($hold);
+    $hold['nid'] = NULL;
+    $this->container->get('keyvalue')->get(PiiScreeningHold::COLLECTION)->set($node->uuid(), $hold);
+    $this->assertNull(PiiScreeningHold::get($node)['nid']);
+    $this->assertNotContains((int) $node->id(), PiiScreeningHold::heldIds());
+
+    $this->assertWorkerHonoursScreeningHold($node, ['nid' => $node->id()]);
+  }
+
+  /**
+   * The screening hook preserves earlier vetoes and accepts unheld bundles.
+   */
+  public function testScreeningAlterPreservesEarlierVeto(): void {
+    NodeType::create(['type' => 'page', 'name' => 'Page'])->save();
+    foreach (['service_request', 'page'] as $bundle) {
+      $node = Node::create(['type' => $bundle, 'title' => 'Unheld node']);
+      $held = FALSE;
+      $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $node);
+      $this->assertFalse($held);
+      $held = TRUE;
+      $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $node);
+      $this->assertTrue($held);
+    }
+  }
+
+  /**
+   * Adds the publisher's status, category and age guards to a saved report.
+   */
+  private function preparePublisherReport(NodeInterface $node): void {
+    $this->installEntitySchema('taxonomy_term');
+    $terms = [];
+    foreach (['status', 'category'] as $name) {
+      $vid = 'service_' . $name;
+      Vocabulary::create(['vid' => $vid, 'name' => $vid])->save();
+      $this->addField('node', 'service_request', 'field_' . $name, 'entity_reference', [
+        'settings' => ['target_type' => 'taxonomy_term'],
+      ]);
+      $term = Term::create(['vid' => $vid, 'name' => $name]);
+      $term->save();
+      $terms[$name] = $term->id();
+    }
+    // Reload after adding fields so the saved entity sees their definitions.
+    $storage = $this->container->get('entity_type.manager')->getStorage('node');
+    $prepared = $storage->loadUnchanged($node->id());
+    $prepared->setUnpublished();
+    $prepared->set('field_status', $terms['status']);
+    $prepared->set('field_category', $terms['category']);
+    $prepared->save();
+    $past = $this->container->get('datetime.time')->getRequestTime() - 40 * 86400;
+    $this->container->get('database')->update('node_field_data')
+      ->fields(['created' => $past, 'changed' => $past])
+      ->condition('nid', $node->id())
+      ->execute();
+    $storage->resetCache();
+
+    // Written to storage directly: the publisher settings have no schema.
+    $this->container->get('config.storage')->write('markaspot_publisher.settings', [
+      'status_publishable' => [$terms['status'] => $terms['status']],
+      'days' => [$terms['category'] => 30],
+      'default_days' => 30,
+      'manual_unpublish_threshold' => 6,
+      'cron_enable' => 1,
+      'cron_always_run' => 1,
+    ]);
+  }
+
+  /**
+   * Checks the veto, the untouched held report and publication after release.
+   */
+  private function assertWorkerHonoursScreeningHold(NodeInterface $node, array $item): void {
+    $storage = $this->container->get('entity_type.manager')->getStorage('node');
+    $node = $storage->loadUnchanged($node->id());
+    $revision = $node->getRevisionId();
+    $hold = PiiScreeningHold::get($node);
+    $held = FALSE;
+    $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $node);
+    $this->assertTrue($held, 'The alter vetoes directly, without relying on a caught exception.');
+
+    $logger = $this->createMock(LoggerChannelInterface::class);
+    $logger->expects($this->never())->method('error');
+    $logger->expects($this->never())->method('critical');
+    $worker = new PublisherQueueWorker(
+      [], 'markaspot_publisher_queue_worker', [],
+      $this->container->get('markaspot_publisher.publisher'),
+      $logger,
+      $this->container->get('entity_type.manager'),
+      $this->container->get('module_handler'),
+    );
+    $worker->processItem($item);
+    $stored = $storage->loadUnchanged($node->id());
+    $this->assertFalse($stored->isPublished());
+    $this->assertTrue(PiiScreeningHold::isHeld($stored));
+    $this->assertSame($hold, PiiScreeningHold::get($stored), 'The worker does not change or bind the hold.');
+    $this->assertSame($revision, $stored->getRevisionId());
+
+    PiiScreeningHold::release($stored);
+    $held = FALSE;
+    $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $stored);
+    $this->assertFalse($held, 'Release removes the veto in the same request.');
+    $worker->processItem($item);
+    $stored = $storage->loadUnchanged($node->id());
+    $this->assertTrue($stored->isPublished(), 'The same item publishes after release.');
+    $this->assertFalse(PiiScreeningHold::isHeld($stored));
   }
 
   /**

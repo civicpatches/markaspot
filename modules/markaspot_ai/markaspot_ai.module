@@ -357,8 +357,9 @@ function markaspot_ai_node_update(NodeInterface $node): void {
   }
 
   // Publishing a report held after a failed name screening is the staff
-  // review decision: release the hold. Automatic publication never gets
-  // here because markaspot_publisher skips held reports.
+  // review decision: release the hold. The publisher's queue-time hold hook
+  // prevents this path for held reports, except when a failed hold-store read
+  // returns "not held" on a database error.
   if ($node->isPublished() && PiiScreeningHold::isHeld($node)) {
     $original = $node->getOriginal();
     if ($original === NULL || !$original->isPublished()) {
@@ -755,14 +756,21 @@ function _markaspot_ai_clear_stale_sentiment_reasoning(NodeInterface $node): voi
 /**
  * Implements hook_query_TAG_alter() for markaspot_publisher_candidates.
  *
- * Automatic publication never releases a report held after a failed
- * personal-name screening; only a person publishing it does.
+ * Excludes screening holds before the candidate limit. The queue-time hook
+ * rechecks holds, except that a failed store read can return "not held".
  */
 function markaspot_ai_query_markaspot_publisher_candidates_alter(AlterableInterface $query): void {
   $held = PiiScreeningHold::heldIds();
   if ($held !== [] && $query instanceof SelectInterface) {
     $query->condition('base_table.nid', $held, 'NOT IN');
   }
+}
+
+/**
+ * Implements hook_markaspot_publisher_hold_alter().
+ */
+function markaspot_ai_markaspot_publisher_hold_alter(bool &$held, NodeInterface $node): void {
+  $held = $held || PiiScreeningHold::isHeld($node);
 }
 
 /**

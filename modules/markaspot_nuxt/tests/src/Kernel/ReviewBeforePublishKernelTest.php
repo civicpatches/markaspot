@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_nuxt\Kernel;
 
 use Drupal\Core\Entity\EntityStorageInterface;
+use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
@@ -14,7 +15,10 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_ai\Privacy\NameScreeningResult;
+use Drupal\markaspot_ai\Privacy\PiiScreeningHold;
 use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
+use Drupal\markaspot_publisher\Plugin\QueueWorker\PublisherQueueWorker;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
@@ -340,6 +344,178 @@ final class ReviewBeforePublishKernelTest extends KernelTestBase {
 
     // Switching the flag off later does not release reports held earlier.
     $this->assertTrue($this->service()->isHeld($this->reload($held)));
+  }
+
+  /**
+   * A hold written after enqueueing is read despite the cached candidate list.
+   */
+  public function testWorkerRechecksReviewHoldAfterEnqueue(): void {
+    $node = $this->newReport('tenantA', FALSE);
+    $node->save();
+    $node = $this->backdatePublisherReport($node);
+
+    markaspot_publisher_cron();
+    $this->assertSame([], $this->service()->heldIds(), 'The candidates query cached an empty hold list.');
+    $queue = $this->container->get('queue')->get('markaspot_publisher_queue_worker');
+    $this->assertSame(1, $queue->numberOfItems());
+    $item = $queue->claimItem();
+    $this->assertNotFalse($item);
+    $this->assertSame((int) $node->id(), (int) $item->data['nid']);
+
+    // Another process writes the hold without invalidating this service's memo.
+    $this->container->get('keyvalue')->get(ReviewBeforePublish::COLLECTION)->set((string) $node->id(), [
+      'created' => $this->container->get('datetime.time')->getRequestTime(),
+    ]);
+    $this->assertSame([], $this->service()->heldIds());
+    $this->assertWorkerHonoursReviewHold($node, $item->data);
+    $queue->deleteItem($item);
+  }
+
+  /**
+   * A production insert hold survives a stale item until explicit release.
+   */
+  public function testWorkerPreservesReviewHoldFromInsert(): void {
+    $this->setFlag($this->tenantA, TRUE);
+    $node = $this->newReport('tenantA');
+    $node->save();
+    $node = $this->backdatePublisherReport($node);
+    $this->assertFalse($node->isPublished());
+    $this->assertTrue($this->service()->isHeld($node));
+
+    $this->assertWorkerHonoursReviewHold($node, ['nid' => $node->id()]);
+  }
+
+  /**
+   * The review hook preserves earlier vetoes and accepts unheld bundles.
+   */
+  public function testReviewAlterPreservesEarlierVeto(): void {
+    NodeType::create(['type' => 'page', 'name' => 'Page'])->save();
+    foreach (['service_request', 'page'] as $bundle) {
+      $node = Node::create(['type' => $bundle, 'title' => 'Unheld node']);
+      $this->assertPublisherHold(FALSE, $node);
+      $held = TRUE;
+      $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $node);
+      $this->assertTrue($held);
+    }
+  }
+
+  /**
+   * Both hold implementations must release before the same item can publish.
+   */
+  #[DataProvider('holdReleaseOrderProvider')]
+  public function testWorkerComposesScreeningAndReviewHolds(bool $releaseScreeningFirst): void {
+    $this->enableModules(['markaspot_ai']);
+    // Enabling a module rebuilds the container and drops the processor stub.
+    $this->stubProcessor();
+    $this->setFlag($this->tenantA, TRUE);
+    $node = $this->newReport('tenantA');
+    $node->save();
+    $node = $this->backdatePublisherReport($node);
+    PiiScreeningHold::place($node, NameScreeningResult::REASON_UNAVAILABLE);
+    $this->assertTrue(PiiScreeningHold::isHeld($node));
+    $this->assertTrue($this->service()->isHeld($node));
+    $revision = $node->getRevisionId();
+    $item = ['nid' => $node->id()];
+    $worker = $this->publisherWorker();
+
+    $this->assertPublisherHold(TRUE, $node);
+    $worker->processItem($item);
+    $node = $this->reload($node);
+    $this->assertFalse($node->isPublished());
+    $this->assertSame($revision, $node->getRevisionId());
+    $this->assertTrue(PiiScreeningHold::isHeld($node));
+    $this->assertTrue($this->service()->isHeld($node));
+
+    if ($releaseScreeningFirst) {
+      PiiScreeningHold::release($node);
+    }
+    else {
+      $this->service()->release($node);
+    }
+    $this->assertPublisherHold(TRUE, $node);
+    $worker->processItem($item);
+    $node = $this->reload($node);
+    $this->assertFalse($node->isPublished(), 'One remaining veto is sufficient.');
+    $this->assertSame($revision, $node->getRevisionId());
+    $this->assertSame(!$releaseScreeningFirst, PiiScreeningHold::isHeld($node));
+    $this->assertSame($releaseScreeningFirst, $this->service()->isHeld($node));
+
+    PiiScreeningHold::release($node);
+    $this->service()->release($node);
+    $this->assertPublisherHold(FALSE, $node);
+    $worker->processItem($item);
+    $node = $this->reload($node);
+    $this->assertTrue($node->isPublished(), 'Only release of every veto permits publication.');
+    $this->assertFalse(PiiScreeningHold::isHeld($node));
+    $this->assertFalse($this->service()->isHeld($node));
+  }
+
+  /**
+   * Exercises either hold as the last remaining veto.
+   */
+  public static function holdReleaseOrderProvider(): array {
+    return [
+      'screening released first' => [TRUE],
+      'review released first' => [FALSE],
+    ];
+  }
+
+  /**
+   * Backdates a report after insert hooks have finished their saves.
+   */
+  private function backdatePublisherReport(NodeInterface $node): NodeInterface {
+    $past = $this->container->get('datetime.time')->getRequestTime() - 40 * 86400;
+    $this->container->get('database')->update('node_field_data')
+      ->fields(['created' => $past, 'changed' => $past])
+      ->condition('nid', $node->id())
+      ->execute();
+    return $this->reload($node);
+  }
+
+  /**
+   * Asserts the alter result directly, without the worker's exception handler.
+   */
+  private function assertPublisherHold(bool $expected, NodeInterface $node): void {
+    $held = FALSE;
+    $this->container->get('module_handler')->alter('markaspot_publisher_hold', $held, $node);
+    $this->assertSame($expected, $held);
+  }
+
+  /**
+   * Builds the real worker with assertions against swallowed exceptions.
+   */
+  private function publisherWorker(): PublisherQueueWorker {
+    $logger = $this->createMock(LoggerChannelInterface::class);
+    $logger->expects($this->never())->method('error');
+    $logger->expects($this->never())->method('critical');
+    return new PublisherQueueWorker(
+      [], 'markaspot_publisher_queue_worker', [],
+      $this->container->get('markaspot_publisher.publisher'),
+      $logger,
+      $this->container->get('entity_type.manager'),
+      $this->container->get('module_handler'),
+    );
+  }
+
+  /**
+   * Checks a review veto and publication of the same item after release.
+   */
+  private function assertWorkerHonoursReviewHold(NodeInterface $node, array $item): void {
+    $this->assertPublisherHold(TRUE, $node);
+    $revision = $node->getRevisionId();
+    $worker = $this->publisherWorker();
+    $worker->processItem($item);
+    $node = $this->reload($node);
+    $this->assertFalse($node->isPublished());
+    $this->assertTrue($this->service()->isHeld($node));
+    $this->assertSame($revision, $node->getRevisionId());
+
+    $this->service()->release($node);
+    $this->assertPublisherHold(FALSE, $node);
+    $worker->processItem($item);
+    $node = $this->reload($node);
+    $this->assertTrue($node->isPublished(), 'The same item publishes after release.');
+    $this->assertFalse($this->service()->isHeld($node));
   }
 
   /**

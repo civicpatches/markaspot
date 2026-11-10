@@ -277,11 +277,18 @@ function markaspot_nuxt_node_delete(NodeInterface $node): void {
 /**
  * Implements hook_query_TAG_alter() for markaspot_publisher_candidates.
  *
- * Automatic publication never releases a report held for review; only a
- * person publishing it does.
+ * Excludes review holds before the candidate limit. The queue-time hook
+ * rechecks holds, except that a failed store read can return "not held".
  */
 function markaspot_nuxt_query_markaspot_publisher_candidates_alter(AlterableInterface $query): void {
   \Drupal::service('markaspot_nuxt.review_before_publish')->excludeHeldReports($query);
+}
+
+/**
+ * Implements hook_markaspot_publisher_hold_alter().
+ */
+function markaspot_nuxt_markaspot_publisher_hold_alter(bool &$held, NodeInterface $node): void {
+  $held = $held || \Drupal::service('markaspot_nuxt.review_before_publish')->isHeld($node);
 }
 
 /**

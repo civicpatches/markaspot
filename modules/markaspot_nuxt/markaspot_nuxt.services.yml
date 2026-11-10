@@ -29,7 +29,8 @@ services:
     class: Drupal\markaspot_nuxt\Service\FeatureScopeResolver
     arguments: ['@entity_type.manager', '@config.factory', '@markaspot_group.hierarchy_resolver', '@module_handler']
   # Root-only flag reviewBeforePublish: holds new reports unpublished and
-  # keeps them out of automatic publication until staff publish them.
+  # keeps them out of automatic publication until staff publish them. The one
+  # exception, a failed read of the hold store, is described on the class.
   markaspot_nuxt.review_before_publish:
     class: Drupal\markaspot_nuxt\Service\ReviewBeforePublish
     arguments:

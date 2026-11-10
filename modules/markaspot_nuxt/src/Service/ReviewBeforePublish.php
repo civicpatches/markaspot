@@ -29,7 +29,9 @@ use Psr\Log\LoggerInterface;
  * citizen form (JSON:API), GeoReport POST, the dashboard or mail intake. The
  * check runs on the entity save, so no create path can skip it. Each held
  * report is recorded so that automatic publication (markaspot_publisher)
- * skips it; staff publishing the report by hand releases the hold.
+ * skips it in the candidates query and rechecks the hold in the queue worker;
+ * staff publishing the report by hand releases the hold. A failed hold-store
+ * read is the exception: core key/value returns "not held" on a database error.
  *
  * With the flag off nothing changes: the publish default of the service
  * request content type applies, including tenants that already default to
@@ -229,8 +231,9 @@ final class ReviewBeforePublish {
   /**
    * Releases the hold when a person publishes a held report.
    *
-   * Called from hook_node_update(). Automatic publication never gets here for
-   * a held report because markaspot_publisher skips held reports.
+   * Called from hook_node_update(). The publisher's queue-time hold hook
+   * prevents this path for held reports, except when a failed hold-store read
+   * returns "not held" on a database error.
    */
   public function releaseOnPublish(NodeInterface $node): void {
     if ($node->bundle() !== 'service_request' || !$node->isPublished()) {
