@@ -1,5 +1,76 @@
 # Changelog
 
+## [11.9.249](https://github.com/markaspot/markaspot/compare/11.9.248...11.9.249) (2026-11-10)
+
+### Features
+
+* add a drush command that finishes the archive catch-up in one run ([fdf6972](https://github.com/markaspot/markaspot/commit/fdf69725fccdfbe2bae6d2387efb0953213274dd))
+* add optional switch that leaves all organisation mail to ECA ([53c97de](https://github.com/markaspot/markaspot/commit/53c97deb89f5bb21636fa82d1f728f06a99845a6))
+* **mail:** add dashboard and backend edit URL tokens for service requests ([2d1d374](https://github.com/markaspot/markaspot/commit/2d1d374d81799b561bcfb2a4be91afad3c3e38a9))
+* **mail:** let staff mails carry the dashboard and the backend link and resolve the backend from an optional staff base ([06cf87d](https://github.com/markaspot/markaspot/commit/06cf87d1dde79435a6e02879f99b1fd609edcc09))
+* **mail:** ship the backend link label of staff mails in every mail language ([b70442b](https://github.com/markaspot/markaspot/commit/b70442b42452081c162b925be3a10a17c848d5d0))
+* **nuxt:** add per-jurisdiction requireDashboardDescription form flag ([15f8dfd](https://github.com/markaspot/markaspot/commit/15f8dfdf5ab3dc522737f45f9da07b5774286e95))
+
+### Bug Fixes
+
+* add the shipped token tracking defaults where the AI settings lack them ([21bc554](https://github.com/markaspot/markaspot/commit/21bc5542c7c39187fb8b82621e59941b30868f26))
+* align profile contracts and cover publication workflows ([edf58be](https://github.com/markaspot/markaspot/commit/edf58bed17bbc611626ddb2fa9ee095fb938d790))
+* announce statistics alias removal after 11.9.249 ([eb20563](https://github.com/markaspot/markaspot/commit/eb205633d13c99625659c4d10c19ca2b8d2cd37b))
+* anonymize service requests on every transition to the archived status and catch up on archived plain contact data ([78cdaea](https://github.com/markaspot/markaspot/commit/78cdaea9315070bd67e27e3d388a8c69537c9ddd))
+* archive a queued request in one attempt after a database lock conflict and leave the retry to the queue ([45756bb](https://github.com/markaspot/markaspot/commit/45756bbc809507c878a03fc11b4c628c0b9fc4c4))
+* archive a queued request in one locked save and transaction so a failure never leaves it anonymized without the archived status ([a8555d3](https://github.com/markaspot/markaspot/commit/a8555d3237634a6ef18688be5361c837b65c0573))
+* archive requests on search indexes with a tracker other than the default one and warn once that their tracking could not be verified ([923e7c4](https://github.com/markaspot/markaspot/commit/923e7c4e03fa37108b834919202d8c5b822ffb14))
+* convert legacy prose moderation hides into publication hold events ([36ce565](https://github.com/markaspot/markaspot/commit/36ce565c117db7d5e586b43a5dec1e8884d941bf))
+* **dashboard:** keep the backend link label of staff mails when the dashboard saves a mail text ([f6a71df](https://github.com/markaspot/markaspot/commit/f6a71dfe7bec9938f2154b5d817d592a2c94faa1))
+* erase retained PII originals and scrub the revision log of requests created in the archived status ([c958108](https://github.com/markaspot/markaspot/commit/c9581088c51517078ffe9028bf1d7af89ffbe688))
+* erase the original text retained by PII redaction when a report is anonymized ([be320e0](https://github.com/markaspot/markaspot/commit/be320e0ec0cac9d5b9edb857379d3a709980615b))
+* index archived requests waiting in a search index in the archive catch-up command and fail while an index keeps old data ([213ddaa](https://github.com/markaspot/markaspot/commit/213ddaa421606eba35190c0e60bdb3e8ff17751c))
+* keep reporting a disabled search index without a server, since nothing proves its former backend removed the data ([daa3cab](https://github.com/markaspot/markaspot/commit/daa3cab02ab36281e609bda99622a6c113e46bd0))
+* keep source and channel of service requests on syncing saves ([eae7501](https://github.com/markaspot/markaspot/commit/eae750168c39421d3479ce3a773e9c3308014e8b))
+* keep syncing saves of service requests silent and syncing when they repair group relations ([041012c](https://github.com/markaspot/markaspot/commit/041012c451fadb4aeeb28224f802f884ad2b4a2e))
+* keep tenant ECA models from reacting to the archive catch-up saves ([9a10501](https://github.com/markaspot/markaspot/commit/9a10501bca38b82059b5ba3ea251bf70e4a4ab5e))
+* let the archive anonymization backfill find plain contact data in previous revisions ([ed5a416](https://github.com/markaspot/markaspot/commit/ed5a416b012e42d92cd2b3ad6b0c955523e3c890))
+* let the archive anonymization backfill recognize plain string values in previous revisions ([2088c71](https://github.com/markaspot/markaspot/commit/2088c715d7eab3634d39bafcfc37af7209530b88))
+* let the archive backfill find personal data held only in the summary of a text field ([4825579](https://github.com/markaspot/markaspot/commit/4825579ffd2fe95968807f9343176cce4c865288))
+* let the archive backfill find retained PII originals, revision logs and text fields that still hold personal data ([03aee1a](https://github.com/markaspot/markaspot/commit/03aee1afcac2fedf173f5909b77024c3dac1f0f0))
+* **mail:** insert tokens of the backend link label as plain text ([833458e](https://github.com/markaspot/markaspot/commit/833458e5befc9945d4fc40af174f96608a9f5649))
+* **mail:** keep staff backend links when a mail is sent from the staff backend host ([e1375bc](https://github.com/markaspot/markaspot/commit/e1375bcbc341557f372b585296a6440d02e3b2d7))
+* **mail:** keep transactional mails without a second link byte-identical ([ca54a6c](https://github.com/markaspot/markaspot/commit/ca54a6c3ddfc191ef03b08b605478af114b8d215))
+* **mail:** let staff link tokens depend on the jurisdiction list and bundle ([7336934](https://github.com/markaspot/markaspot/commit/7336934141622138ee66f6155abee80d384d6fdb))
+* mark archived requests for reindexing after an erasure without a save and fail the catch-up on search indexes it cannot update ([74162f9](https://github.com/markaspot/markaspot/commit/74162f9602dba52b56f8f1fd0ead2c341d8676a3))
+* match legacy moderation hide sentences whole, including the count ([7a95046](https://github.com/markaspot/markaspot/commit/7a9504667bc78efdcc0d2e11ead206f035076e9d))
+* **nuxt:** keep the profile version out of the public settings response ([7d957a3](https://github.com/markaspot/markaspot/commit/7d957a3ae8e655c4299d7ddf4a14fc2ab2874dd4))
+* preserve statistics aliases and respect moderation publication holds ([c1bca73](https://github.com/markaspot/markaspot/commit/c1bca73b910f57375ac60c0ad7ddb75d9b427862))
+* read node field storage definitions from field storage config in the archive backfill ([b41e7d4](https://github.com/markaspot/markaspot/commit/b41e7d4fa1566f5bb6e4beb2802b5383237a4735))
+* recheck the archive catch-up lock after every request and indexing chunk and record no progress once it is lost ([543869c](https://github.com/markaspot/markaspot/commit/543869c7c410fc0f6614b63c2b6a87d0263428a1))
+* recheck the archived status under a row lock before the archive catch-up changes a request ([9fd04a6](https://github.com/markaspot/markaspot/commit/9fd04a6d390eb2a6ec0425e9b3952c9b17d6ccca))
+* remove duplicate jurisdiction relations of text templates ([a090c46](https://github.com/markaspot/markaspot/commit/a090c463199602804839020422e7e2ce5e0583fa))
+* renew the catch-up lock before the archive backfill command resets the shared cursor ([f17ba9a](https://github.com/markaspot/markaspot/commit/f17ba9a9833c8233202c15eb240e5772c5ea8846))
+* replace the free-text message of every revision log of an anonymized report with a fixed placeholder ([a673284](https://github.com/markaspot/markaspot/commit/a6732849c15d7103501df4d84028966aa89fb546))
+* report disabled search indexes whose server may still hold the text of erased archived requests ([309b46c](https://github.com/markaspot/markaspot/commit/309b46c3dc2a26fa3239523b6e83bfe21cbfdb1b))
+* retry archive and catch-up transactions up to three times after a database deadlock or lock wait timeout ([46380d1](https://github.com/markaspot/markaspot/commit/46380d1b381b6308b728a4fde3c44e5108d87930))
+* retry requests the unpublish catch-up failed on and exit with a failure while the archive catch-up is incomplete ([38dab31](https://github.com/markaspot/markaspot/commit/38dab31e88c0f9e15b06871804f9af7e722c61c7))
+* roll back an archive erasure when a search index tracker silently fails to record the request for reindexing ([ca3b24e](https://github.com/markaspot/markaspot/commit/ca3b24e580dc288874d9fd6c534555db88096ab6))
+* run the archive anonymization backfill on every cron run independent of the archive throttle ([6b42523](https://github.com/markaspot/markaspot/commit/6b4252315e5df6d9472ced1990c44bb89d88703f))
+* scope moderation history checks to publisher candidates ([03a937e](https://github.com/markaspot/markaspot/commit/03a937e31ca59538019e6abd2c9db07540baa8d3)), closes [civicpatches/markaspot-ui#690](https://github.com/civicpatches/markaspot-ui/issues/690) [#693](https://github.com/markaspot/markaspot/issues/693) [#694](https://github.com/markaspot/markaspot/issues/694)
+* scrub reporter contact data from every revision log of an anonymized report ([3268627](https://github.com/markaspot/markaspot/commit/3268627f4256d1d875967c4414a896991cf79d17))
+* skip geocoding on syncing saves that keep the location ([d5f6bde](https://github.com/markaspot/markaspot/commit/d5f6bdecf7820bce2c9a5999d5c2f1fc1495249f))
+* stop the archive catch-up with a failure once it cannot renew its lock, also between indexing chunks ([98e19b1](https://github.com/markaspot/markaspot/commit/98e19b17c528ac684cc34de23d2a820e77ec0517))
+* stop the cron catch-up without recording progress once it cannot renew its lock, also before resetting the backfill cursor ([b6a2d2e](https://github.com/markaspot/markaspot/commit/b6a2d2ebd801b2ec9deddebf9d752080eb727dd9))
+* translate the organisation notification fallback mail ([4ff0920](https://github.com/markaspot/markaspot/commit/4ff09202919e25fbdf1970b430d3db0fb7fb1a9c))
+* unpublish archived service requests that are still published in a one-time cron pass ([5c9abdb](https://github.com/markaspot/markaspot/commit/5c9abdb772587e87b1b0668c86844c01beb31fa1))
+* unpublish service requests on every transition to the archived status ([9cf5bfa](https://github.com/markaspot/markaspot/commit/9cf5bfacb3955db8f6d98e1f9fc16cafa9568593))
+
+### Refactoring
+
+* **mail:** compare staff backend bases with the configured frontend base without the platform defaults ([6de75c2](https://github.com/markaspot/markaspot/commit/6de75c20b971186749237c26a7658e07a01a760b))
+
+### Documentation
+
+* describe the archive catch-up as bounded passes and the queue lock conflict handling without a promised attempt count ([9286a1f](https://github.com/markaspot/markaspot/commit/9286a1fab04fbcacfd4d1f5eddb6b2ad733ccec6))
+* describe what staff see after the archive anonymization and the safeguards of the archive catch-up ([23d86e6](https://github.com/markaspot/markaspot/commit/23d86e64685f5598ef4f90b6cf56089d7bda355e))
+* **mail:** update the message count of the mail translation template ([50e8394](https://github.com/markaspot/markaspot/commit/50e8394e05eeca4105a23c085fe3e268f61c7686))
+
 ## [11.9.248](https://github.com/markaspot/markaspot/compare/11.9.247...11.9.248) (2026-11-08)
 
 ### Features
