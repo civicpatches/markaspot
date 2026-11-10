@@ -19,9 +19,7 @@ final class StatsRouteSubscriber extends RouteSubscriberBase {
   protected function alterRoutes(RouteCollection $collection): void {
     $handlers = [
       'markaspot_stats.status' => ['/stats/status', 'getStatusStats'],
-      'markaspot_stats.api_status' => ['/api/stats/status', 'getStatusStats'],
       'markaspot_stats.categories' => ['/stats/categories', 'getCategoryStats'],
-      'markaspot_stats.api_categories' => ['/api/stats/categories', 'getCategoryStats'],
       'markaspot_stats.categories_hierarchical' => ['/stats/categories/hierarchical', 'getHierarchicalCategoryStats'],
     ];
     foreach ($handlers as $name => [$path, $method]) {

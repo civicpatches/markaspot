@@ -169,9 +169,9 @@ else {
     assert_true(is_int($data[0]['count']), '/stats/status[0].count is int');
   }
 
-  // GET /api/stats/status (alias)
+  // GET /api/stats/status (removed alias).
   [$code] = http_get("$base/api/stats/status?jurisdiction=$jur_id");
-  assert_equal(200, $code, 'GET /api/stats/status returns 200');
+  assert_equal(404, $code, 'GET /api/stats/status returns 404');
 
   // GET /stats/categories.
   [$code, $data] = http_get("$base/stats/categories?jurisdiction=$jur_id");
@@ -181,9 +181,9 @@ else {
     assert_json_keys($data[0], ['category', 'count', 'color'], '/stats/categories[0]');
   }
 
-  // GET /api/stats/categories (alias)
+  // GET /api/stats/categories (removed alias).
   [$code] = http_get("$base/api/stats/categories?jurisdiction=$jur_id");
-  assert_equal(200, $code, 'GET /api/stats/categories returns 200');
+  assert_equal(404, $code, 'GET /api/stats/categories returns 404');
 
   // GET /stats/categories/hierarchical.
   [$code, $data] = http_get("$base/stats/categories/hierarchical?jurisdiction=$jur_id");

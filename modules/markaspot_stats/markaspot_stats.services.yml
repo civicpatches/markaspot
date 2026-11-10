@@ -3,13 +3,3 @@ services:
     class: Drupal\markaspot_stats\Routing\StatsRouteSubscriber
     tags:
       - { name: event_subscriber }
-
-  markaspot_stats.deprecated_alias_subscriber:
-    class: Drupal\markaspot_stats\EventSubscriber\DeprecatedStatsAliasSubscriber
-    arguments: ['@logger.channel.markaspot_stats']
-    tags:
-      - { name: event_subscriber }
-
-  logger.channel.markaspot_stats:
-    parent: logger.channel_base
-    arguments: ['markaspot_stats']

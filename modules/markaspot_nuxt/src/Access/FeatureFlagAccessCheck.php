@@ -28,7 +28,7 @@ use Symfony\Component\Routing\Route;
  * Usage in routing.yml:
  * @code
  * markaspot_stats.status:
- *   path: '/api/stats/status'
+ *   path: '/stats/status'
  *   defaults:
  *     _controller: '\Drupal\markaspot_stats\Controller\StatsController::getStatusStats'
  *   requirements:

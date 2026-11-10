@@ -9,6 +9,7 @@ use Drupal\markaspot_stats\Routing\StatsRouteSubscriber;
 use Drupal\Tests\UnitTestCase;
 use Symfony\Component\Routing\Route;
 use Symfony\Component\Routing\RouteCollection;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * Tests legacy Views displays cannot take over protected statistics routes.
@@ -16,6 +17,24 @@ use Symfony\Component\Routing\RouteCollection;
  * @group markaspot_stats
  */
 class StatsRouteSubscriberTest extends UnitTestCase {
+
+  /**
+   * The routing file defines only the four canonical statistics routes.
+   */
+  public function testRoutingFileDefinesOnlyCanonicalRoutes(): void {
+    $routes = Yaml::parseFile(dirname(__DIR__, 3) . '/markaspot_stats.routing.yml');
+    $expected = [
+      'markaspot_stats.annual' => '/stats/annual',
+      'markaspot_stats.status' => '/stats/status',
+      'markaspot_stats.categories' => '/stats/categories',
+      'markaspot_stats.categories_hierarchical' => '/stats/categories/hierarchical',
+    ];
+    $this->assertEqualsCanonicalizing(array_keys($expected), array_keys($routes));
+    foreach ($routes as $name => $route) {
+      $this->assertSame($expected[$name], $route['path']);
+      $this->assertStringStartsNotWith('/api/stats', $route['path']);
+    }
+  }
 
   /**
    * Reproduces the installed legacy Views override, preserving other routes.
@@ -26,8 +45,6 @@ class StatsRouteSubscriberTest extends UnitTestCase {
       'markaspot_stats.status' => '/stats/status',
       'markaspot_stats.categories' => '/stats/categories',
       'markaspot_stats.categories_hierarchical' => '/stats/categories/hierarchical',
-      'markaspot_stats.api_status' => '/api/stats/status',
-      'markaspot_stats.api_categories' => '/api/stats/categories',
     ] as $name => $path) {
       $legacy_path = in_array($name, ['markaspot_stats.status', 'markaspot_stats.categories'], TRUE)
         ? $path . '/{arg_0}/{arg_1}/{arg_2}' : $path;
