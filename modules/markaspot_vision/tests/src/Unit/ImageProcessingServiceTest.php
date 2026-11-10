@@ -25,6 +25,7 @@ use Drupal\markaspot_ai\Service\NodeAnalysisService;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
 use Drupal\markaspot_ai\Service\AiClientService;
 use Drupal\markaspot_ai\Service\TokenTrackingService;
+use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\media\MediaInterface;
 use Drupal\Tests\UnitTestCase;
 use Drupal\Core\State\StateInterface;
@@ -130,11 +131,13 @@ class ImageProcessingServiceTest extends UnitTestCase {
    *   Optional entity storage test double.
    * @param \GuzzleHttp\ClientInterface|null $httpClient
    *   Optional provider client test double.
+   * @param \Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface|null $hierarchyResolver
+   *   Optional resolver test double for the offered categories.
    *
    * @return \Drupal\markaspot_vision\Service\ImageProcessingService
    *   The service instance.
    */
-  protected function createService(array $configValues = [], ?EntityTypeManagerInterface $entityTypeManager = NULL, ?ClientInterface $httpClient = NULL): ImageProcessingService {
+  protected function createService(array $configValues = [], ?EntityTypeManagerInterface $entityTypeManager = NULL, ?ClientInterface $httpClient = NULL, ?JurisdictionHierarchyResolverInterface $hierarchyResolver = NULL): ImageProcessingService {
     $defaults = [
       'auth_type' => 'bearer',
       'api_key' => 'test-key',
@@ -188,7 +191,56 @@ class ImageProcessingServiceTest extends UnitTestCase {
       $fileUsage,
       aiClient: new AiClientService($httpClient, $configFactory, $loggerFactory, $tracking),
       tokenTracking: $tracking,
+      hierarchyResolver: $hierarchyResolver,
     );
+  }
+
+  /**
+   * The jurisdiction's own selection decides which categories the model sees.
+   *
+   * A category taken offline stays published and keeps field_jurisdiction,
+   * so the term filter must not run when the jurisdiction has a selection
+   * (#702).
+   */
+  public function testOfferedCategoriesFollowTheJurisdictionSelection(): void {
+    $term = function (int $id, bool $published, string $bundle = 'service_category'): TermInterface {
+      $term = $this->createMock(TermInterface::class);
+      $term->method('id')->willReturn($id);
+      $term->method('bundle')->willReturn($bundle);
+      $term->method('isPublished')->willReturn($published);
+      return $term;
+    };
+    $storage = $this->createMock(EntityStorageInterface::class);
+    $storage->expects($this->once())->method('loadMultiple')->with([10, 11, 13])
+      ->willReturn([10 => $term(10, TRUE), 11 => $term(11, FALSE), 13 => $term(13, TRUE, 'tags')]);
+    $storage->expects($this->never())->method('loadByProperties');
+    $entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
+    $entityTypeManager->method('getStorage')->with('taxonomy_term')->willReturn($storage);
+    $resolver = $this->createMock(JurisdictionHierarchyResolverInterface::class);
+    $resolver->method('getAllowedCategoryIds')->with(1)->willReturn([10, 11, 13]);
+
+    $service = $this->createService([], $entityTypeManager, NULL, $resolver);
+
+    $this->assertSame([10], array_keys($this->invokeMethod($service, 'loadOfferedCategoryTerms', [1])));
+  }
+
+  /**
+   * Without a selection the term filter applies as before.
+   */
+  public function testOfferedCategoriesFallBackToTheTermFilter(): void {
+    $storage = $this->createMock(EntityStorageInterface::class);
+    $storage->expects($this->once())->method('loadByProperties')
+      ->with(['vid' => 'service_category', 'status' => 1, 'field_jurisdiction' => 1])
+      ->willReturn([]);
+    $storage->expects($this->never())->method('loadMultiple');
+    $entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
+    $entityTypeManager->method('getStorage')->with('taxonomy_term')->willReturn($storage);
+    $resolver = $this->createMock(JurisdictionHierarchyResolverInterface::class);
+    $resolver->method('getAllowedCategoryIds')->with(1)->willReturn(NULL);
+
+    $service = $this->createService([], $entityTypeManager, NULL, $resolver);
+
+    $this->assertSame([], $this->invokeMethod($service, 'loadOfferedCategoryTerms', [1]));
   }
 
   /**
@@ -723,6 +775,9 @@ class ImageProcessingServiceTest extends UnitTestCase {
 
   /**
    * The report preset keeps the defect-oriented instruction unchanged.
+   *
+   * Since #701 it also counts a visible object of a tenant category without
+   * visible damage (a functional fault) as reportable.
    */
   public function testReportPresetInstructionIsUnchanged(): void {
     $service = $this->createService();
@@ -731,6 +786,12 @@ class ImageProcessingServiceTest extends UnitTestCase {
       . "Valid observations can include healthy trees, wildlife, inventory items, positive findings, "
       . "research entries or indoor construction observations when appropriate to that project. "
       . "A municipal defect, damage or public-space setting is not required for every project. "
+      . "For municipal defect reporting: a photo that clearly shows an object of one of the current tenant "
+      . "categories (for example a traffic light, street lamp, ticket machine, sign, display or drain) is "
+      . "reportable even when no damage is visible at first glance, because many faults are functional (not "
+      . "switching, switched off, flickering, not accepting payment) and the citizen describes them. In that "
+      . "case set is_reportable_issue to true, choose that category and state in the description that a damage "
+      . "or malfunction is not visible at first glance; never invent a defect. "
       . "Set is_reportable_issue to false for off-domain content (such as an unrelated portrait or selfie) "
       . "or content too unclear to assess. In that case, still return a best-guess category from the supplied "
       . "list to satisfy the schema, but describe only what is visible and state uncertainty; never invent "

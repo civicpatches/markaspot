@@ -1055,6 +1055,47 @@ class ImageProcessingControllerTest extends UnitTestCase {
   }
 
   /**
+   * Only a category the model was offered reaches the form (#702).
+   */
+  #[DataProvider('offeredCategoryCases')]
+  public function testCategoryOutsideTheOfferedListIsDropped(?array $offered, int $suggested, ?int $expected): void {
+    $this->flood->method('isAllowed')->willReturn(TRUE);
+    $media = $this->createMockMedia(1);
+    $media->method('set')->willReturn($media);
+    $this->mediaStorage->method('loadByProperties')->willReturn([1 => $media]);
+    $result = [
+      'ai_result' => json_encode([
+        'category' => $suggested,
+        'is_reportable_issue' => TRUE,
+        'description' => 'Dog waste on the pavement.',
+        'privacy_flag' => FALSE,
+        'privacy_issues' => [],
+      ]),
+      'blur_results' => [],
+    ];
+    if ($offered !== NULL) {
+      $result['category_ids'] = $offered;
+    }
+    $this->imageProcessingService->method('processImages')->willReturn($result);
+
+    $response = $this->controller->getAIResults($this->createJsonRequest(['media_ids' => ['uuid-1']]));
+
+    $this->assertEquals(200, $response->getStatusCode());
+    $this->assertSame($expected, json_decode($response->getContent(), TRUE)['category'] ?? NULL);
+  }
+
+  /**
+   * Offered categories, the suggestion and the category the form receives.
+   */
+  public static function offeredCategoryCases(): array {
+    return [
+      'offered category' => [[4, 23], 23, 23],
+      'category taken offline' => [[4, 23], 12, NULL],
+      'no list from an older service' => [NULL, 12, 12],
+    ];
+  }
+
+  /**
    * Tests successful analysis includes blur handling metadata.
    */
   public function testSuccessfulAnalysisReturnsBlurHandlingMetadata(): void {

@@ -37,6 +37,7 @@ services:
       - '@module_handler'
       - '@?markaspot_ai.client'
       - '@?markaspot_ai.token_tracking'
+      - '@?markaspot_group.hierarchy_resolver'
   markaspot_vision.original_image_store:
     class: Drupal\markaspot_vision\Service\OriginalImageStore
     arguments:

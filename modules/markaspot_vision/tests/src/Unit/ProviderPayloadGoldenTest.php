@@ -23,7 +23,10 @@ use PHPUnit\Framework\Attributes\Group;
  * touching how categories are offered, chosen and mapped back.
  *
  * Fixtures are written only with MARKASPOT_VISION_GOLDEN_RECORD=1; a missing
- * fixture fails. They were recorded once on the unchanged 11.9.222 service.
+ * fixture fails. They were recorded once on the unchanged 11.9.222 service
+ * and re-recorded for #701: the only differences to 11.9.222 are
+ * ImageProcessingService::FUNCTIONAL_FAULT_RULE in the report relevance part
+ * and the REPORT_OBSERVATION field leading the response schema.
  */
 #[CoversClass(ImageProcessingService::class)]
 #[Group('markaspot_vision')]
@@ -243,9 +246,17 @@ final class ProviderPayloadGoldenTest extends UnitTestCase {
     $text = $payload['messages'][1]['content'][0]['text'];
     $position = strpos($text, 'Analyze the provided image(s)');
     $suffix = $position === FALSE ? $text : substr($text, $position);
+    $format = $payload['response_format'] ?? NULL;
+    // The observation field leading the schema belongs to the framing, not to
+    // how categories are offered: the report preset and every map preset
+    // bring their own text (#701).
+    if (isset($format['json_schema']['schema']['properties']['observation'])) {
+      unset($format['json_schema']['schema']['properties']['observation']);
+      $format['json_schema']['schema']['required'] = array_values(array_diff($format['json_schema']['schema']['required'] ?? [], ['observation']));
+    }
     return json_encode([
       'user_prompt_from_image_prompt' => $suffix,
-      'response_format' => $payload['response_format'] ?? NULL,
+      'response_format' => $format,
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
   }
 

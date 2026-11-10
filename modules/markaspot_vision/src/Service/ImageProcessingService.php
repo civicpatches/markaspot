@@ -28,6 +28,7 @@ use Drupal\Component\Datetime\TimeInterface;
 use Drupal\markaspot_ai\Utility\ProviderError;
 use Drupal\markaspot_ai\Service\AiClientService;
 use Drupal\markaspot_ai\Service\TokenTrackingService;
+use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 
 // These standalone utilities are shared within the profile, including when
 // markaspot_ai is disabled and Drupal has not registered its namespace.
@@ -178,6 +179,32 @@ class ImageProcessingService {
   ];
 
   /**
+   * Observation field for the default (report) preset.
+   *
+   * Leads the response, so the model describes the scene before it chooses a
+   * category and judges relevance. Idea, observation and contribution maps
+   * set their own text through hook_markaspot_vision_prompt_alter().
+   */
+  public const REPORT_OBSERVATION = 'Before judging, describe in one or two sentences which objects from the '
+    . 'category list are visible and what visible condition they are in.';
+
+  /**
+   * Relevance rule for functional faults on report maps.
+   *
+   * Without it the model set is_reportable_issue to false for an intact
+   * looking traffic light or street lamp: the fault (stuck on red, switched
+   * off) does not show in a photo. Real-model check, 2026-11-10: 16 of 18
+   * runs reportable for such photos (before 0 of 7); selfie, living room and
+   * meal stayed not reportable in 18 of 18 runs.
+   */
+  public const FUNCTIONAL_FAULT_RULE = ' For municipal defect reporting: a photo that clearly shows an object of one of the '
+    . 'current tenant categories (for example a traffic light, street lamp, ticket machine, sign, display or drain) is '
+    . 'reportable even when no damage is visible at first glance, because many faults are functional (not switching, '
+    . 'switched off, flickering, not accepting payment) and the citizen describes them. In that case set '
+    . 'is_reportable_issue to true, choose that category and state in the description that a damage or malfunction is '
+    . 'not visible at first glance; never invent a defect.';
+
+  /**
    * How to answer when an image does not fit, including the category fallback.
    *
    * Appended by buildSystemInstruction() right after the PROJECT RELEVANCE
@@ -253,6 +280,8 @@ class ImageProcessingService {
    *   Central token accounting, when the AI module is installed.
    * @param \Drupal\markaspot_ai\Service\TokenTrackingService|null $tokenTracking
    *   Optional daily limit guard supplied by markaspot_ai.
+   * @param \Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface|null $hierarchyResolver
+   *   Optional resolver for the categories a jurisdiction offers.
    */
   public function __construct(
     ClientInterface $http_client,
@@ -267,6 +296,7 @@ class ImageProcessingService {
     protected ?ModuleHandlerInterface $moduleHandler = NULL,
     protected ?AiClientService $aiClient = NULL,
     protected ?TokenTrackingService $tokenTracking = NULL,
+    protected ?JurisdictionHierarchyResolverInterface $hierarchyResolver = NULL,
   ) {
     $this->httpClient = $http_client;
     $this->configFactory = $config_factory;
@@ -731,7 +761,7 @@ class ImageProcessingService {
         'user_prefix' => "The following set of {$image_count} images shows a single situation or issue. "
           . "Please analyze them together as one complete scene. Consider how the images relate to and complement each other. ",
         'user_framing' => '',
-        'observation' => '',
+        'observation' => self::REPORT_OBSERVATION,
       ], [
         'jurisdiction_id' => $jurisdictionId,
         'group' => $group,
@@ -822,6 +852,9 @@ class ImageProcessingService {
         'skipped_uris' => $skipped_uris,
         'usage' => $ai_data['usage'] ?? [],
         'model' => $ai_data['model'] ?? $api_config['model'],
+        // The categories the model was offered; the controller drops any
+        // other suggestion.
+        'category_ids' => array_map('intval', array_column($categories, 'tid')),
       ];
 
     }
@@ -991,7 +1024,8 @@ class ImageProcessingService {
       . "shows a visible observation that fits the project's purpose and one of the current tenant categories. "
       . "Valid observations can include healthy trees, wildlife, inventory items, positive findings, "
       . "research entries or indoor construction observations when appropriate to that project. "
-      . "A municipal defect, damage or public-space setting is not required for every project.";
+      . "A municipal defect, damage or public-space setting is not required for every project."
+      . self::FUNCTIONAL_FAULT_RULE;
   }
 
   /**
@@ -1777,6 +1811,39 @@ class ImageProcessingService {
   }
 
   /**
+   * Loads the published category terms a jurisdiction offers.
+   *
+   * The jurisdiction's own selection (field_service_categories, read through
+   * the hierarchy resolver like GeoReport services.json and the report form)
+   * wins: the tenant importer takes a category offline by removing it there,
+   * while the term stays published and keeps field_jurisdiction. Without a
+   * selection, a resolver or a jurisdiction the term filter applies as before.
+   *
+   * @param int|null $jurisdictionId
+   *   The jurisdiction group ID, or NULL for a single installation.
+   *
+   * @return \Drupal\taxonomy\TermInterface[]
+   *   Published service_category terms keyed by term ID.
+   */
+  protected function loadOfferedCategoryTerms(?int $jurisdictionId): array {
+    $storage = $this->entityTypeManager->getStorage('taxonomy_term');
+    $allowed = $jurisdictionId && $this->hierarchyResolver !== NULL
+      ? $this->hierarchyResolver->getAllowedCategoryIds($jurisdictionId)
+      : NULL;
+    if ($allowed !== NULL) {
+      return array_filter(
+        $storage->loadMultiple($allowed),
+        static fn ($term): bool => $term->bundle() === 'service_category' && $term->isPublished(),
+      );
+    }
+    $properties = ['vid' => 'service_category', 'status' => 1];
+    if ($jurisdictionId) {
+      $properties['field_jurisdiction'] = $jurisdictionId;
+    }
+    return $storage->loadByProperties($properties);
+  }
+
+  /**
    * Retrieves all leaf categories with their IDs and full paths.
    *
    * Public so that markaspot_mail_inbound's MailCategorySuggestionService can
@@ -1797,14 +1864,7 @@ class ImageProcessingService {
    */
   public function getAllCategoriesHierarchical(?int $jurisdictionId = NULL, ?string $langcode = NULL): array {
     try {
-      $vid = 'service_category';
-      $properties = ['vid' => $vid, 'status' => 1];
-      if ($jurisdictionId) {
-        $properties['field_jurisdiction'] = $jurisdictionId;
-      }
-      // Load taxonomy terms for the vocabulary, filtered by jurisdiction.
-      $terms = $this->entityTypeManager->getStorage('taxonomy_term')
-        ->loadByProperties($properties);
+      $terms = $this->loadOfferedCategoryTerms($jurisdictionId);
 
       // Translate terms if a specific language is requested.
       if ($langcode) {
@@ -1895,13 +1955,7 @@ class ImageProcessingService {
    */
   private function getServiceDefinitionsForPrompt(?int $jurisdictionId, ?string $langcode): string {
     try {
-      $properties = ['vid' => 'service_category', 'status' => 1];
-      if ($jurisdictionId) {
-        $properties['field_jurisdiction'] = $jurisdictionId;
-      }
-
-      $terms = $this->entityTypeManager->getStorage('taxonomy_term')
-        ->loadByProperties($properties);
+      $terms = $this->loadOfferedCategoryTerms($jurisdictionId);
 
       if (empty($terms)) {
         return '';
