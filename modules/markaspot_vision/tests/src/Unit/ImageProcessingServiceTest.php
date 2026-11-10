@@ -196,51 +196,64 @@ class ImageProcessingServiceTest extends UnitTestCase {
   }
 
   /**
-   * The jurisdiction's own selection decides which categories the model sees.
+   * The model sees the categories a jurisdiction offers, like GeoReport.
    *
-   * A category taken offline stays published and keeps field_jurisdiction,
-   * so the term filter must not run when the jurisdiction has a selection
-   * (#702).
+   * Terms belong to the root jurisdiction; a category taken offline stays
+   * published with field_jurisdiction but is missing from the selection, so
+   * it must not be offered (#702). A parent outside the selection still names
+   * its children.
    */
-  public function testOfferedCategoriesFollowTheJurisdictionSelection(): void {
-    $term = function (int $id, bool $published, string $bundle = 'service_category'): TermInterface {
+  public function testCategoryListFollowsTheJurisdictionSelection(): void {
+    $term = function (int $id, string $label, int $parentId): TermInterface {
+      $parent = $this->createMock(FieldItemListInterface::class);
+      // The service reads target_id with ??, which asks __isset first.
+      $parent->method('__isset')->willReturnCallback(static fn (string $name): bool => $name === 'target_id' && $parentId > 0);
+      $parent->method('__get')->willReturnCallback(static fn (string $name): ?int => $name === 'target_id' && $parentId ? $parentId : NULL);
       $term = $this->createMock(TermInterface::class);
       $term->method('id')->willReturn($id);
-      $term->method('bundle')->willReturn($bundle);
-      $term->method('isPublished')->willReturn($published);
+      $term->method('label')->willReturn($label);
+      $term->method('get')->with('parent')->willReturn($parent);
       return $term;
     };
     $storage = $this->createMock(EntityStorageInterface::class);
-    $storage->expects($this->once())->method('loadMultiple')->with([10, 11, 13])
-      ->willReturn([10 => $term(10, TRUE), 11 => $term(11, FALSE), 13 => $term(13, TRUE, 'tags')]);
-    $storage->expects($this->never())->method('loadByProperties');
+    $storage->expects($this->once())->method('loadByProperties')
+      ->with(['vid' => 'service_category', 'status' => 1, 'field_jurisdiction' => 1])
+      ->willReturn([
+        2 => $term(2, 'Sauberkeit', 0),
+        21 => $term(21, 'Müll', 2),
+        24 => $term(24, 'Hundekot', 2),
+      ]);
     $entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
     $entityTypeManager->method('getStorage')->with('taxonomy_term')->willReturn($storage);
     $resolver = $this->createMock(JurisdictionHierarchyResolverInterface::class);
-    $resolver->method('getAllowedCategoryIds')->with(1)->willReturn([10, 11, 13]);
+    $resolver->method('getRootJurisdictionId')->with(5)->willReturn(1);
+    $resolver->method('getAllowedCategoryIds')->with(5)->willReturn([21]);
 
     $service = $this->createService([], $entityTypeManager, NULL, $resolver);
 
-    $this->assertSame([10], array_keys($this->invokeMethod($service, 'loadOfferedCategoryTerms', [1])));
+    $this->assertSame(
+      [['tid' => 21, 'path' => 'Sauberkeit > Müll', 'label' => 'Sauberkeit - Müll']],
+      $service->getAllCategoriesHierarchical(5),
+    );
   }
 
   /**
-   * Without a selection the term filter applies as before.
+   * Without a selection every published term of the owner is offered.
    */
-  public function testOfferedCategoriesFallBackToTheTermFilter(): void {
+  public function testCategoryListWithoutSelectionKeepsTheOwnerTerms(): void {
     $storage = $this->createMock(EntityStorageInterface::class);
     $storage->expects($this->once())->method('loadByProperties')
       ->with(['vid' => 'service_category', 'status' => 1, 'field_jurisdiction' => 1])
       ->willReturn([]);
-    $storage->expects($this->never())->method('loadMultiple');
     $entityTypeManager = $this->createMock(EntityTypeManagerInterface::class);
     $entityTypeManager->method('getStorage')->with('taxonomy_term')->willReturn($storage);
     $resolver = $this->createMock(JurisdictionHierarchyResolverInterface::class);
+    $resolver->method('getRootJurisdictionId')->with(1)->willReturn(1);
     $resolver->method('getAllowedCategoryIds')->with(1)->willReturn(NULL);
 
     $service = $this->createService([], $entityTypeManager, NULL, $resolver);
 
-    $this->assertSame([], $this->invokeMethod($service, 'loadOfferedCategoryTerms', [1]));
+    $this->assertSame(['owned' => [], 'offered' => []], $this->invokeMethod($service, 'loadCategoryTerms', [1]));
   }
 
   /**
@@ -774,12 +787,12 @@ class ImageProcessingServiceTest extends UnitTestCase {
   }
 
   /**
-   * The report preset keeps the defect-oriented instruction unchanged.
+   * The report preset keeps the defect-oriented instruction.
    *
    * Since #701 it also counts a visible object of a tenant category without
    * visible damage (a functional fault) as reportable.
    */
-  public function testReportPresetInstructionIsUnchanged(): void {
+  public function testReportPresetInstruction(): void {
     $service = $this->createService();
     $expected = "\n\nPROJECT RELEVANCE: Set is_reportable_issue to true when the image "
       . "shows a visible observation that fits the project's purpose and one of the current tenant categories. "

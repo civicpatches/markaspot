@@ -852,9 +852,6 @@ class ImageProcessingService {
         'skipped_uris' => $skipped_uris,
         'usage' => $ai_data['usage'] ?? [],
         'model' => $ai_data['model'] ?? $api_config['model'],
-        // The categories the model was offered; the controller drops any
-        // other suggestion.
-        'category_ids' => array_map('intval', array_column($categories, 'tid')),
       ];
 
     }
@@ -1811,36 +1808,41 @@ class ImageProcessingService {
   }
 
   /**
-   * Loads the published category terms a jurisdiction offers.
+   * Loads the category terms a jurisdiction offers, like GeoReport does.
    *
-   * The jurisdiction's own selection (field_service_categories, read through
-   * the hierarchy resolver like GeoReport services.json and the report form)
-   * wins: the tenant importer takes a category offline by removing it there,
-   * while the term stays published and keeps field_jurisdiction. Without a
-   * selection, a resolver or a jurisdiction the term filter applies as before.
+   * Mirrors GeoreportProcessorService::getTaxonomyTree(): the published terms
+   * of the owning (root) jurisdiction, narrowed to the jurisdiction's own
+   * selection (field_service_categories) when it has one. The tenant importer
+   * takes a category offline by removing it from that selection while the
+   * term stays published and keeps field_jurisdiction (#702).
    *
    * @param int|null $jurisdictionId
    *   The jurisdiction group ID, or NULL for a single installation.
    *
-   * @return \Drupal\taxonomy\TermInterface[]
-   *   Published service_category terms keyed by term ID.
+   * @return array{owned: \Drupal\taxonomy\TermInterface[], offered: \Drupal\taxonomy\TermInterface[]}
+   *   All published terms of the owner (for parent paths) and the offered
+   *   subset, both keyed by term ID.
    */
-  protected function loadOfferedCategoryTerms(?int $jurisdictionId): array {
-    $storage = $this->entityTypeManager->getStorage('taxonomy_term');
+  protected function loadCategoryTerms(?int $jurisdictionId): array {
+    $properties = ['vid' => 'service_category', 'status' => 1];
+    if ($jurisdictionId) {
+      $owner = $this->hierarchyResolver !== NULL
+        ? $this->hierarchyResolver->getRootJurisdictionId($jurisdictionId)
+        : $jurisdictionId;
+      if ($owner === NULL) {
+        return ['owned' => [], 'offered' => []];
+      }
+      $properties['field_jurisdiction'] = $owner;
+    }
+    $owned = $this->entityTypeManager->getStorage('taxonomy_term')->loadByProperties($properties);
+    $offered = $owned;
     $allowed = $jurisdictionId && $this->hierarchyResolver !== NULL
       ? $this->hierarchyResolver->getAllowedCategoryIds($jurisdictionId)
       : NULL;
     if ($allowed !== NULL) {
-      return array_filter(
-        $storage->loadMultiple($allowed),
-        static fn ($term): bool => $term->bundle() === 'service_category' && $term->isPublished(),
-      );
+      $offered = array_filter($owned, static fn ($term): bool => in_array((int) $term->id(), $allowed, TRUE));
     }
-    $properties = ['vid' => 'service_category', 'status' => 1];
-    if ($jurisdictionId) {
-      $properties['field_jurisdiction'] = $jurisdictionId;
-    }
-    return $storage->loadByProperties($properties);
+    return ['owned' => $owned, 'offered' => $offered];
   }
 
   /**
@@ -1864,23 +1866,27 @@ class ImageProcessingService {
    */
   public function getAllCategoriesHierarchical(?int $jurisdictionId = NULL, ?string $langcode = NULL): array {
     try {
-      $terms = $this->loadOfferedCategoryTerms($jurisdictionId);
+      ['owned' => $owned, 'offered' => $offered] = $this->loadCategoryTerms($jurisdictionId);
 
       // Translate terms if a specific language is requested.
       if ($langcode) {
-        foreach ($terms as $tid => $term) {
+        foreach ($owned as $tid => $term) {
           if ($term->hasTranslation($langcode)) {
-            $terms[$tid] = $term->getTranslation($langcode);
+            $owned[$tid] = $term->getTranslation($langcode);
           }
         }
       }
+      $terms = array_intersect_key($owned, $offered);
 
-      // Create a lookup array for quick parent-child checks.
+      // Parent paths use every term of the owner, so a parent outside the
+      // selection still names its children; leaves come from the selection.
       $term_lookup = [];
       $children_count = [];
 
-      foreach ($terms as $term) {
+      foreach ($owned as $term) {
         $term_lookup[$term->id()] = $term;
+      }
+      foreach ($terms as $term) {
         $children_count[$term->id()] = 0;
       }
 
@@ -1955,7 +1961,7 @@ class ImageProcessingService {
    */
   private function getServiceDefinitionsForPrompt(?int $jurisdictionId, ?string $langcode): string {
     try {
-      $terms = $this->loadOfferedCategoryTerms($jurisdictionId);
+      $terms = $this->loadCategoryTerms($jurisdictionId)['offered'];
 
       if (empty($terms)) {
         return '';

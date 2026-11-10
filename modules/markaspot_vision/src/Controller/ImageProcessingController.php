@@ -411,13 +411,6 @@ class ImageProcessingController extends ControllerBase {
       // free text outside the description's privacy rule, so it is neither
       // stored in field_ai_metadata nor returned.
       unset($decoded_result['observation'], $decoded_result['intake_screening'], $decoded_result['intake_suggestions']);
-      // Only a category the model was offered may reach the form; anything
-      // else (a category taken offline, an invented ID) counts as no
-      // suggestion, so the citizen chooses.
-      if (isset($decoded_result['category'], $ai_result['category_ids']) && is_array($ai_result['category_ids'])
-        && !in_array((int) $decoded_result['category'], $ai_result['category_ids'], TRUE)) {
-        $decoded_result['category'] = NULL;
-      }
       // Normalized once: the media field holds 64 characters, and the raw
       // model value stays in field_ai_metadata for the audit trail.
       $hazard_category = $this->imageProcessingService->normalizeHazardCategory($decoded_result['hazard_category'] ?? NULL);
