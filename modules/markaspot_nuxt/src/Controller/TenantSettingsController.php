@@ -2358,6 +2358,8 @@ final class TenantSettingsController extends ControllerBase {
         'forms' => [
           'allowParentCategorySelection' => $this->getBooleanFeatureValue($forms, 'allowParentCategorySelection', FALSE),
           'lockPhotoLocation' => $this->getBooleanFeatureValue($forms, 'lockPhotoLocation', FALSE),
+          // Whole metres, 0 when off.
+          'photoLocationDeviationHint' => FeatureScopeResolver::readPhotoLocationDeviationHint($forms['photoLocationDeviationHint'] ?? NULL),
           'requireDashboardDescription' => $this->getBooleanFeatureValue($forms, 'requireDashboardDescription', FALSE),
         ],
         'unifiedReporting' => $this->normalizeUnifiedReporting($features['unifiedReporting'] ?? NULL),
@@ -2501,6 +2503,15 @@ final class TenantSettingsController extends ControllerBase {
           return new JsonResponse(['error' => "forms.$flag must be a boolean."], 422);
         }
       }
+      // The deviation hint threshold is a number, not a boolean flag. Digit
+      // strings are cast; invalid values are rejected, never clamped.
+      if (array_key_exists('photoLocationDeviationHint', $data['forms'])) {
+        $metres = FeatureScopeResolver::parsePhotoLocationDeviationHint($data['forms']['photoLocationDeviationHint']);
+        if ($metres === NULL) {
+          return new JsonResponse(['error' => 'forms.photoLocationDeviationHint must be a whole number of metres from 0 to ' . FeatureScopeResolver::MAX_PHOTO_LOCATION_DEVIATION_HINT . '.'], 422);
+        }
+        $data['forms']['photoLocationDeviationHint'] = $metres;
+      }
     }
 
     // Validate the report form configuration. Only the three editable keys
@@ -2586,6 +2597,9 @@ final class TenantSettingsController extends ControllerBase {
         if (array_key_exists($flag, $data['forms'])) {
           $config['features']['forms'][$flag] = $data['forms'][$flag];
         }
+      }
+      if (array_key_exists('photoLocationDeviationHint', $data['forms'])) {
+        $config['features']['forms']['photoLocationDeviationHint'] = $data['forms']['photoLocationDeviationHint'];
       }
     }
 

@@ -529,6 +529,15 @@ class MarkASpotSettingsController extends ControllerBase {
         $settings['features'][$feature] ?? NULL
       );
     }
+    // The photo location deviation hint is a whole number of metres, 0 when
+    // off. Normalised here as well, so settings without a jurisdiction also
+    // deliver an integer.
+    if (!is_array($settings['features']['forms'] ?? NULL)) {
+      $settings['features']['forms'] = [];
+    }
+    $settings['features']['forms']['photoLocationDeviationHint'] = FeatureScopeResolver::readPhotoLocationDeviationHint(
+      $settings['features']['forms']['photoLocationDeviationHint'] ?? NULL
+    );
     $module_handler = $this->moduleHandler();
 
     foreach ($module_feature_map as $module => $features) {

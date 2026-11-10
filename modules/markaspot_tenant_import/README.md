@@ -276,7 +276,9 @@ Runtime input supported by both bootstrap and subsequent imports:
   `unifiedReporting` is an object with `enabled`, `aiMode` and `photoPolicy`.
   `photoRequiredCategories` is a list of category term IDs and replaces the
   stored list; `forms` accepts the booleans `allowParentCategorySelection`,
-  `lockPhotoLocation` and `requireDashboardDescription`.
+  `lockPhotoLocation` and `requireDashboardDescription`, and the number
+  `photoLocationDeviationHint` (whole metres from 0 to 5000, digit strings are
+  cast, 0 switches it off; anything else is rejected).
   Platform flags such as `passwordless` are configured by stack orchestration.
 - `boilerplates`: owned plain-text templates, applied by dedicated bootstrap.
 - Existing platform name, email, address, client name and short name.

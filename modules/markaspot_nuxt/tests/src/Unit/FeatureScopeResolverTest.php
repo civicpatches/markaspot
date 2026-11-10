@@ -181,6 +181,103 @@ final class FeatureScopeResolverTest extends UnitTestCase {
   }
 
   /**
+   * The deviation hint resolves to an integer, 0 when off or invalid.
+   *
+   * @covers ::resolveEffectiveFeatures
+   * @dataProvider photoLocationDeviationHintConfigProvider
+   */
+  public function testPhotoLocationDeviationHintResolvesToInteger(array $config, int $expected): void {
+    new Settings(['markaspot_operating_mode' => 'self_hosted']);
+    $group = $this->createGroup(1, ['field_nuxt_config' => json_encode($config)]);
+
+    $features = $this->createResolver($group)->resolveEffectiveFeatures($group);
+
+    $this->assertSame($expected, $features['forms']['photoLocationDeviationHint']);
+  }
+
+  /**
+   * Provides stored deviation hint values and the resolved threshold.
+   */
+  public static function photoLocationDeviationHintConfigProvider(): array {
+    return [
+      'missing' => [['features' => []], 0],
+      'stored integer' => [['features' => ['forms' => ['photoLocationDeviationHint' => 200]]], 200],
+      'maximum' => [['features' => ['forms' => ['photoLocationDeviationHint' => 5000]]], 5000],
+      'above maximum' => [['features' => ['forms' => ['photoLocationDeviationHint' => 5001]]], 0],
+      'negative' => [['features' => ['forms' => ['photoLocationDeviationHint' => -200]]], 0],
+      'fraction' => [['features' => ['forms' => ['photoLocationDeviationHint' => 200.5]]], 0],
+      'digit string' => [['features' => ['forms' => ['photoLocationDeviationHint' => '200']]], 0],
+      'boolean' => [['features' => ['forms' => ['photoLocationDeviationHint' => TRUE]]], 0],
+      'legacy top-level forms' => [['features' => [], 'forms' => ['photoLocationDeviationHint' => 300]], 300],
+      'feature value wins over legacy' => [
+        [
+          'features' => ['forms' => ['photoLocationDeviationHint' => 0]],
+          'forms' => ['photoLocationDeviationHint' => 300],
+        ],
+        0,
+      ],
+      'invalid feature value falls back to legacy' => [
+        [
+          'features' => ['forms' => ['photoLocationDeviationHint' => 'far']],
+          'forms' => ['photoLocationDeviationHint' => 300],
+        ],
+        300,
+      ],
+    ];
+  }
+
+  /**
+   * The deviation hint shares the scope and editability of the photo lock.
+   *
+   * @covers ::isEditable
+   */
+  public function testPhotoLocationDeviationHintHasLockScope(): void {
+    new Settings(['markaspot_operating_mode' => 'self_hosted']);
+    $this->assertSame('jurisdiction', FeatureScopeResolver::SCOPE_MAP['forms.photoLocationDeviationHint']);
+    $this->assertSame(
+      FeatureScopeResolver::SCOPE_MAP['forms.lockPhotoLocation'],
+      FeatureScopeResolver::SCOPE_MAP['forms.photoLocationDeviationHint'],
+    );
+    $root = $this->createGroup(1, ['field_nuxt_config' => '{}']);
+    $child = $this->createGroup(2, [
+      'field_nuxt_config' => json_encode(['features' => ['forms' => ['photoLocationDeviationHint' => 150]]]),
+    ]);
+    $resolver = $this->createResolver($root, [], NULL, [], [2 => $child]);
+    foreach ([$root, $child] as $group) {
+      $this->assertSame(
+        $resolver->isEditable('forms.lockPhotoLocation', $group),
+        $resolver->isEditable('forms.photoLocationDeviationHint', $group),
+      );
+    }
+    // Jurisdiction scope: the child keeps its own value, not the root's.
+    $this->assertSame(150, $resolver->resolveEffectiveFeatures($child)['forms']['photoLocationDeviationHint']);
+    $this->assertSame(0, $resolver->resolveEffectiveFeatures($root)['forms']['photoLocationDeviationHint']);
+  }
+
+  /**
+   * Submitted thresholds accept integers and digit strings, nothing else.
+   *
+   * @covers ::parsePhotoLocationDeviationHint
+   * @covers ::readPhotoLocationDeviationHint
+   */
+  public function testPhotoLocationDeviationHintParsing(): void {
+    $valid = [[0, 0], [200, 200], [5000, 5000], ['0', 0], ['200', 200], ['5000', 5000], ['0200', 200]];
+    foreach ($valid as [$input, $expected]) {
+      $this->assertSame($expected, FeatureScopeResolver::parsePhotoLocationDeviationHint($input), var_export($input, TRUE));
+    }
+    $invalid = [
+      200.0, 200.5, '200.5', -1, '-1', 5001, '5001', TRUE, FALSE, NULL, '', 'abc', ' 200', "200\n", '2e2', [200],
+    ];
+    foreach ($invalid as $value) {
+      $this->assertNull(FeatureScopeResolver::parsePhotoLocationDeviationHint($value), var_export($value, TRUE));
+    }
+    $this->assertSame(200, FeatureScopeResolver::readPhotoLocationDeviationHint(200));
+    $this->assertSame(0, FeatureScopeResolver::readPhotoLocationDeviationHint('200'));
+    $this->assertSame(0, FeatureScopeResolver::readPhotoLocationDeviationHint(200.0));
+    $this->assertSame(0, FeatureScopeResolver::readPhotoLocationDeviationHint(NULL));
+  }
+
+  /**
    * Category IDs stay within the range the dashboard can hold exactly.
    */
   public function testCategoryIdBounds(): void {

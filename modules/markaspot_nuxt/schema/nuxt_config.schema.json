@@ -591,6 +591,14 @@
               "description": "A photo's EXIF location replaces the detected position and locks it",
               "default": false
             },
+            "photoLocationDeviationHint": {
+              "type": "integer",
+              "title": "Photo Location Deviation Hint (Metres)",
+              "description": "Shows a non-blocking hint when another photo was taken farther than this distance from the location set by a photo. 0 switches the hint off. Suggested value: 200",
+              "default": 0,
+              "minimum": 0,
+              "maximum": 5000
+            },
             "requireDashboardDescription": {
               "type": "boolean",
               "title": "Require Description in the Dashboard",

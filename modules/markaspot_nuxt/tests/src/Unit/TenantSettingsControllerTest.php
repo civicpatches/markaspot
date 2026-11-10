@@ -3644,6 +3644,186 @@ class TenantSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Tests the GET reads the deviation hint and advertises its key.
+   *
+   * @covers ::getFeatureSettings
+   * @dataProvider storedPhotoLocationDeviationHintProvider
+   */
+  public function testGetFeatureSettingsReadsPhotoLocationDeviationHint(array $features, int $expected): void {
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode(['features' => $features]),
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $data = json_decode($this->controller->getFeatureSettings(Request::create('/api/tenant/14/features', 'GET'), '14')->getContent(), TRUE);
+
+    $this->assertSame($expected, $data['features']['forms']['photoLocationDeviationHint']);
+    // The settings page shows the field only when the backend advertises
+    // this exact key.
+    $this->assertSame('jurisdiction', $data['scopes']['flags']['forms.photoLocationDeviationHint']);
+    $this->assertContains('forms.photoLocationDeviationHint', $data['scopes']['editable']);
+  }
+
+  /**
+   * Provides stored deviation hint values and what the GET returns.
+   */
+  public static function storedPhotoLocationDeviationHintProvider(): array {
+    return [
+      'missing reads as off' => [[], 0],
+      'stored integer' => [['forms' => ['photoLocationDeviationHint' => 200]], 200],
+      'stored zero' => [['forms' => ['photoLocationDeviationHint' => 0]], 0],
+      'digit string reads as off' => [['forms' => ['photoLocationDeviationHint' => '200']], 0],
+      'fraction reads as off' => [['forms' => ['photoLocationDeviationHint' => 200.5]], 0],
+      'negative reads as off' => [['forms' => ['photoLocationDeviationHint' => -1]], 0],
+      'above maximum reads as off' => [['forms' => ['photoLocationDeviationHint' => 5001]], 0],
+      'boolean reads as off' => [['forms' => ['photoLocationDeviationHint' => TRUE]], 0],
+    ];
+  }
+
+  /**
+   * Tests a PATCH stores the deviation hint as an integer.
+   *
+   * @covers ::updateFeatureSettings
+   * @dataProvider validPhotoLocationDeviationHintProvider
+   */
+  public function testUpdateFeatureSettingsStoresPhotoLocationDeviationHint(string $json, int $expected): void {
+    $storedNuxtConfig = json_encode(['features' => ['forms' => ['lockPhotoLocation' => TRUE]]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $body = '{"forms":{"photoLocationDeviationHint":' . $json . '}}';
+    $request = Request::create('/api/tenant/14/features', 'PATCH', [], [], [], ['CONTENT_TYPE' => 'application/json'], $body);
+    $response = $this->controller->updateFeatureSettings($request, '14');
+    $data = json_decode($response->getContent(), TRUE);
+    $updated = json_decode($storedNuxtConfig, TRUE)['features'];
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame(['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => $expected], $updated['forms']);
+    $this->assertSame($expected, $data['features']['forms']['photoLocationDeviationHint']);
+  }
+
+  /**
+   * Provides accepted deviation hint JSON literals and the stored integer.
+   */
+  public static function validPhotoLocationDeviationHintProvider(): array {
+    return [
+      'integer' => ['200', 200],
+      'zero switches off' => ['0', 0],
+      'maximum' => ['5000', 5000],
+      'digit string' => ['"350"', 350],
+    ];
+  }
+
+  /**
+   * Tests invalid deviation hint values are rejected without a write.
+   *
+   * @covers ::updateFeatureSettings
+   * @dataProvider invalidPhotoLocationDeviationHintProvider
+   */
+  public function testUpdateFeatureSettingsRejectsInvalidPhotoLocationDeviationHint(string $json): void {
+    $storedNuxtConfig = json_encode(['features' => ['forms' => ['photoLocationDeviationHint' => 100]]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $body = '{"forms":{"lockPhotoLocation":true,"photoLocationDeviationHint":' . $json . '}}';
+    $request = Request::create('/api/tenant/14/features', 'PATCH', [], [], [], ['CONTENT_TYPE' => 'application/json'], $body);
+    $response = $this->controller->updateFeatureSettings($request, '14');
+
+    $this->assertSame(422, $response->getStatusCode());
+    $this->assertSame(
+      ['error' => 'forms.photoLocationDeviationHint must be a whole number of metres from 0 to 5000.'],
+      json_decode($response->getContent(), TRUE),
+    );
+    $this->assertSame(['forms' => ['photoLocationDeviationHint' => 100]], json_decode($storedNuxtConfig, TRUE)['features']);
+  }
+
+  /**
+   * Provides rejected deviation hint JSON literals.
+   */
+  public static function invalidPhotoLocationDeviationHintProvider(): array {
+    return [
+      'fraction' => ['200.5'],
+      'whole-valued float' => ['200.0'],
+      'fraction string' => ['"200.5"'],
+      'negative' => ['-200'],
+      'negative string' => ['"-200"'],
+      'above maximum' => ['5001'],
+      'above maximum string' => ['"5001"'],
+      'true' => ['true'],
+      'false' => ['false'],
+      'null' => ['null'],
+      'empty string' => ['""'],
+      'text' => ['"far"'],
+      'object' => ['{"metres":200}'],
+    ];
+  }
+
+  /**
+   * Tests a child jurisdiction stores its own deviation hint, like the lock.
+   *
+   * @covers ::updateFeatureSettings
+   */
+  public function testUpdateFeatureSettingsStoresPhotoLocationDeviationHintInJurisdictionScope(): void {
+    $storedNuxtConfig = json_encode(['features' => ['forms' => ['lockPhotoLocation' => TRUE]]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->willReturn($group);
+    // Group 14 is a child of the tenant root 1.
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(1);
+
+    $response = $this->controller->updateFeatureSettings($this->createFeaturePatchRequest([
+      'forms' => ['lockPhotoLocation' => FALSE, 'photoLocationDeviationHint' => 250],
+    ]), '14');
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame(
+      ['lockPhotoLocation' => FALSE, 'photoLocationDeviationHint' => 250],
+      json_decode($storedNuxtConfig, TRUE)['features']['forms'],
+    );
+    $this->assertSame(250, $data['features']['forms']['photoLocationDeviationHint']);
+    $this->assertContains('forms.lockPhotoLocation', $data['scopes']['editable']);
+    $this->assertContains('forms.photoLocationDeviationHint', $data['scopes']['editable']);
+  }
+
+  /**
+   * Tests the deviation hint is discarded wherever the lock is not editable.
+   *
+   * Both keys run through the same scope filter: a context that may not
+   * change the lock may not change the hint either.
+   *
+   * @covers ::updateFeatureSettings
+   */
+  public function testUpdateFeatureSettingsDiscardsPhotoLocationDeviationHintOutsideScope(): void {
+    $storedNuxtConfig = json_encode(['features' => [
+      'forms' => ['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => 100],
+    ]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->willReturn($group);
+    $container = \Drupal::getContainer();
+    $resolver = $this->getMockBuilder(FeatureScopeResolver::class)
+      ->setConstructorArgs([$this->entityTypeManager, $container->get('config.factory'), $this->hierarchyResolver])
+      ->onlyMethods(['isEditable'])
+      ->getMock();
+    $resolver->method('isEditable')->willReturnCallback(
+      static fn(string $key): bool => !in_array($key, ['forms.lockPhotoLocation', 'forms.photoLocationDeviationHint'], TRUE),
+    );
+    $container->set('markaspot_nuxt.feature_scope_resolver', $resolver);
+    $controller = TenantSettingsController::create($container);
+
+    $response = $controller->updateFeatureSettings($this->createFeaturePatchRequest([
+      'forms' => ['lockPhotoLocation' => FALSE, 'photoLocationDeviationHint' => 900],
+    ]), '14');
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame(
+      ['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => 100],
+      json_decode($storedNuxtConfig, TRUE)['features']['forms'],
+    );
+    $this->assertNotContains('forms.photoLocationDeviationHint', $data['scopes']['editable']);
+  }
+
+  /**
    * Tests getFeatureSettings() reads legacy top-level form flags.
    *
    * @covers ::getFeatureSettings

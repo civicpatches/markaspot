@@ -59,6 +59,10 @@ class FeatureScopeResolver {
     'boundaries' => 'jurisdiction',
     'forms.allowParentCategorySelection' => 'jurisdiction',
     'forms.lockPhotoLocation' => 'jurisdiction',
+    // Distance in whole metres, not a boolean: same scope as the photo
+    // location lock. Resolved by readPhotoLocationDeviationHint(), never by
+    // the boolean defaults below.
+    'forms.photoLocationDeviationHint' => 'jurisdiction',
     // Staff must enter a description when they create a report in the
     // dashboard. Off by default.
     'forms.requireDashboardDescription' => 'jurisdiction',
@@ -167,6 +171,11 @@ class FeatureScopeResolver {
   public const MAX_CATEGORY_ID = 9007199254740991;
 
   /**
+   * Largest photo location deviation hint threshold in metres.
+   */
+  public const MAX_PHOTO_LOCATION_DEVIATION_HINT = 5000;
+
+  /**
    * Constructs a feature scope resolver.
    */
   public function __construct(
@@ -239,6 +248,16 @@ class FeatureScopeResolver {
     if (array_key_exists('photoRequiredCategories', $features)) {
       $features['photoRequiredCategories'] = self::readCategoryIdList($features['photoRequiredCategories']);
     }
+
+    // The deviation hint threshold is always delivered as an integer, 0 when
+    // off. Same precedence as the boolean form flags: a valid features.forms
+    // value wins over a valid legacy top-level forms value.
+    $features['forms'] = is_array($features['forms'] ?? NULL) ? $features['forms'] : [];
+    $hint = $this->readDotPath($jurisdiction_config, 'features.forms.photoLocationDeviationHint');
+    if (!self::isStoredPhotoLocationDeviationHint($hint)) {
+      $hint = $this->readDotPath($jurisdiction_config, 'forms.photoLocationDeviationHint');
+    }
+    $features['forms']['photoLocationDeviationHint'] = self::readPhotoLocationDeviationHint($hint);
 
     // Hard platform gate, applied last so no stored root or child opt-in can
     // resurrect an enterprise-only feature on the shared platform.
@@ -714,6 +733,52 @@ class FeatureScopeResolver {
       $id = (int) $id;
     }
     return is_int($id) && $id > 0 && $id <= self::MAX_CATEGORY_ID ? $id : NULL;
+  }
+
+  /**
+   * Reads a stored photo location deviation hint threshold.
+   *
+   * Only an integer from 0 to MAX_PHOTO_LOCATION_DEVIATION_HINT counts.
+   * Anything else, including numeric strings and fractions, reads as 0 (off).
+   *
+   * @param mixed $value
+   *   The stored value.
+   *
+   * @return int
+   *   The threshold in metres, 0 when off.
+   */
+  public static function readPhotoLocationDeviationHint(mixed $value): int {
+    return self::isStoredPhotoLocationDeviationHint($value) ? $value : 0;
+  }
+
+  /**
+   * Parses a submitted photo location deviation hint threshold.
+   *
+   * Accepts integers and strings of digits from 0 to
+   * MAX_PHOTO_LOCATION_DEVIATION_HINT. Rejects fractions (also 200.0),
+   * negative numbers, booleans, NULL, other strings and larger values; it
+   * never clamps.
+   *
+   * @param mixed $value
+   *   The submitted value.
+   *
+   * @return int|null
+   *   The threshold in metres, or NULL when the value is invalid.
+   */
+  public static function parsePhotoLocationDeviationHint(mixed $value): ?int {
+    if (is_string($value) && preg_match('/^0*[0-9]{1,4}$/D', $value)) {
+      $value = (int) $value;
+    }
+    return self::isStoredPhotoLocationDeviationHint($value) ? $value : NULL;
+  }
+
+  /**
+   * Checks whether a value is a valid stored deviation hint threshold.
+   *
+   * @phpstan-assert-if-true int $value
+   */
+  private static function isStoredPhotoLocationDeviationHint(mixed $value): bool {
+    return is_int($value) && $value >= 0 && $value <= self::MAX_PHOTO_LOCATION_DEVIATION_HINT;
   }
 
   /**

@@ -1685,6 +1685,63 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Tests the deviation hint reaches the frontend as an integer.
+   *
+   * @covers ::getMarkASpotSettings
+   * @dataProvider photoLocationDeviationHintConfigProvider
+   */
+  public function testGetSettingsExposesPhotoLocationDeviationHint(array $nuxtConfig, int $expected): void {
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode($nuxtConfig),
+      'field_slug' => 'riverton',
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
+    $response = $this->controller->getMarkASpotSettings($request);
+
+    $this->assertEquals(200, $response->getStatusCode());
+    $data = json_decode($response->getContent(), TRUE);
+    $this->assertSame($expected, $data['features']['forms']['photoLocationDeviationHint']);
+  }
+
+  /**
+   * Provides stored deviation hint values and the delivered integer.
+   */
+  public static function photoLocationDeviationHintConfigProvider(): array {
+    return [
+      'stored metres' => [['features' => ['forms' => ['photoLocationDeviationHint' => 200]]], 200],
+      'zero is off' => [['features' => ['forms' => ['photoLocationDeviationHint' => 0]]], 0],
+      'missing key is off' => [['features' => ['forms' => ['lockPhotoLocation' => TRUE]]], 0],
+      'no features' => [['features' => []], 0],
+      'string is off' => [['features' => ['forms' => ['photoLocationDeviationHint' => '200']]], 0],
+      'fraction is off' => [['features' => ['forms' => ['photoLocationDeviationHint' => 200.5]]], 0],
+      'out of range is off' => [['features' => ['forms' => ['photoLocationDeviationHint' => 5001]]], 0],
+      'legacy top-level forms' => [['features' => [], 'forms' => ['photoLocationDeviationHint' => 300]], 300],
+    ];
+  }
+
+  /**
+   * Tests settings without a jurisdiction also deliver the hint as 0.
+   *
+   * @covers ::getMarkASpotSettings
+   */
+  public function testGetSettingsWithoutJurisdictionDeliversPhotoLocationDeviationHint(): void {
+    $query = $this->createMock(QueryInterface::class);
+    $query->method('accessCheck')->willReturnSelf();
+    $query->method('condition')->willReturnSelf();
+    $query->method('sort')->willReturnSelf();
+    $query->method('range')->willReturnSelf();
+    $query->method('execute')->willReturn([]);
+    $this->groupStorage->method('getQuery')->willReturn($query);
+
+    $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings', 'GET'));
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertSame(0, $data['features']['forms']['photoLocationDeviationHint']);
+  }
+
+  /**
    * Tests custom WMS layers are enabled on self-hosted installations.
    *
    * The tier field is attached but empty after moving it to markaspot_group,

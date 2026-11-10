@@ -72,6 +72,36 @@ final class TenantRuntimeConfigurationTest extends UnitTestCase {
   }
 
   /**
+   * The deviation hint imports as whole metres and merges as an integer.
+   */
+  public function testPhotoLocationDeviationHintContract(): void {
+    $existing = ['features' => ['forms' => ['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => 100]]];
+    foreach ([[200, 200], [0, 0], [5000, 5000], ['350', 350], ['0', 0]] as [$input, $expected]) {
+      $tenant = ['features' => ['forms' => ['photoLocationDeviationHint' => $input]]];
+      $this->assertSame([], TenantRuntimeConfiguration::validate($tenant), var_export($input, TRUE));
+      $merged = TenantRuntimeConfiguration::merge($existing, $tenant)['features']['forms'];
+      $this->assertSame(['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => $expected], $merged, var_export($input, TRUE));
+    }
+    // The number sits next to the boolean form flags.
+    $this->assertSame([], TenantRuntimeConfiguration::validate(['features' => ['forms' => [
+      'lockPhotoLocation' => TRUE,
+      'photoLocationDeviationHint' => 200,
+    ]]]));
+    // A re-import without the key keeps the stored value.
+    $this->assertSame(100, TenantRuntimeConfiguration::merge($existing, ['features' => ['forms' => ['lockPhotoLocation' => FALSE]]])['features']['forms']['photoLocationDeviationHint']);
+    foreach ([200.0, 200.5, '200.5', -1, '-1', 5001, '5001', TRUE, FALSE, NULL, '', 'far', [200]] as $invalid) {
+      $errors = TenantRuntimeConfiguration::validate(['features' => ['forms' => ['photoLocationDeviationHint' => $invalid]]]);
+      $this->assertSame(
+        ['tenant.features.forms.photoLocationDeviationHint must be a whole number of metres from 0 to 5000.'],
+        $errors,
+        var_export($invalid, TRUE),
+      );
+    }
+    // The boolean flags keep their rule and do not accept numbers.
+    $this->assertNotEmpty(TenantRuntimeConfiguration::validate(['features' => ['forms' => ['lockPhotoLocation' => 200]]]));
+  }
+
+  /**
    * Rejects unsafe CSS, coordinates and unknown switches.
    */
   public function testValidationRejectsUnsupportedAndUnsafeValues(): void {

@@ -23,6 +23,16 @@ final class TenantRuntimeConfiguration {
   ];
 
   /**
+   * Numeric key below features.forms: deviation hint threshold in metres.
+   */
+  public const FORM_DEVIATION_HINT = 'photoLocationDeviationHint';
+
+  /**
+   * Mirrors FeatureScopeResolver::MAX_PHOTO_LOCATION_DEVIATION_HINT.
+   */
+  public const MAX_PHOTO_LOCATION_DEVIATION_HINT = 5000;
+
+  /**
    * Mirrors TenantSettingsController::MAX_PHOTO_REQUIRED_CATEGORIES.
    */
   public const MAX_PHOTO_REQUIRED_CATEGORIES = 1000;
@@ -106,9 +116,15 @@ final class TenantRuntimeConfiguration {
             continue;
           }
           if ($name === 'forms') {
-            if (!is_array($value) || $value === [] || array_diff(array_keys($value), self::FORM_FLAGS) !== []
-              || array_filter($value, static fn($flag): bool => !is_bool($flag)) !== []) {
-              $errors[] = 'tenant.features.forms supports only the booleans ' . implode(', ', self::FORM_FLAGS) . '.';
+            $flags = is_array($value) ? $value : [];
+            unset($flags[self::FORM_DEVIATION_HINT]);
+            if (!is_array($value) || $value === [] || array_diff(array_keys($flags), self::FORM_FLAGS) !== []
+              || array_filter($flags, static fn($flag): bool => !is_bool($flag)) !== []) {
+              $errors[] = 'tenant.features.forms supports only the booleans ' . implode(', ', self::FORM_FLAGS) . ' and the number ' . self::FORM_DEVIATION_HINT . '.';
+            }
+            if (is_array($value) && array_key_exists(self::FORM_DEVIATION_HINT, $value)
+              && self::parsePhotoLocationDeviationHint($value[self::FORM_DEVIATION_HINT]) === NULL) {
+              $errors[] = 'tenant.features.forms.' . self::FORM_DEVIATION_HINT . ' must be a whole number of metres from 0 to ' . self::MAX_PHOTO_LOCATION_DEVIATION_HINT . '.';
             }
             continue;
           }
@@ -228,6 +244,13 @@ final class TenantRuntimeConfiguration {
         $patch['features']['forms'][$form_flag] = $tenant['features']['forms'][$form_flag];
       }
     }
+    // Stored as an integer; validate() rejects anything the parser refuses.
+    if (isset($tenant['features']['forms'][self::FORM_DEVIATION_HINT])) {
+      $metres = self::parsePhotoLocationDeviationHint($tenant['features']['forms'][self::FORM_DEVIATION_HINT]);
+      if ($metres !== NULL) {
+        $patch['features']['forms'][self::FORM_DEVIATION_HINT] = $metres;
+      }
+    }
     // Personal assignment is opt-in. Seeds write the off state explicitly so
     // it is visible in the data; explicit input and a stored decision win.
     if (!isset($patch['features']['personalAssignment']) && !isset($existing['features']['personalAssignment'])) {
@@ -244,6 +267,26 @@ final class TenantRuntimeConfiguration {
       unset($patch['map']['center']);
     }
     return array_replace_recursive($existing, $patch);
+  }
+
+  /**
+   * Parses a deviation hint threshold.
+   *
+   * Mirrors FeatureScopeResolver::parsePhotoLocationDeviationHint(): integers
+   * and digit strings from 0 to the maximum; fractions, negative numbers,
+   * booleans, NULL, other strings and larger values are invalid.
+   *
+   * @param mixed $value
+   *   The input value.
+   *
+   * @return int|null
+   *   The threshold in metres, or NULL when the value is invalid.
+   */
+  public static function parsePhotoLocationDeviationHint(mixed $value): ?int {
+    if (is_string($value) && preg_match('/^0*[0-9]{1,4}$/D', $value)) {
+      $value = (int) $value;
+    }
+    return is_int($value) && $value >= 0 && $value <= self::MAX_PHOTO_LOCATION_DEVIATION_HINT ? $value : NULL;
   }
 
   /**
