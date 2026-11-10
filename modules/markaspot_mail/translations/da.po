@@ -161,6 +161,10 @@ msgid "Unverified workspaces are automatically removed after @days days."
 msgstr "Arbejdsområder, der ikke er bekræftet, fjernes automatisk efter @days dage."
 
 #: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address."
+msgstr "Åbn linket i den browser, du tilmeldte dig med, for at blive logget ind automatisk. I alle andre browsere kan du logge ind med en kode, som vi sender til denne e-mailadresse."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
 msgid "Verify email"
 msgstr "Bekræft e-mail"
 

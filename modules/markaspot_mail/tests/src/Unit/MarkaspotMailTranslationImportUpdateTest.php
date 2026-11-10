@@ -38,6 +38,7 @@ class MarkaspotMailTranslationImportUpdateTest extends UnitTestCase
         $this->assertStringContainsString('function markaspot_mail_update_10010(): string', $source);
         $this->assertStringContainsString('function markaspot_mail_update_10011(): string', $source);
         $this->assertStringContainsString('function markaspot_mail_update_10019(): string', $source);
+        $this->assertStringContainsString('function markaspot_mail_update_10020(): string', $source);
         $this->assertStringContainsString('_markaspot_mail_import_shipped_translations()', $source);
         $this->assertStringContainsString('Gettext::fileToDatabase', $source);
         $this->assertStringContainsString("\$report['skips']", $source);

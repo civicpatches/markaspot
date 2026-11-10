@@ -149,6 +149,9 @@ msgstr "Klicken Sie auf die Schaltfläche unten, um Ihre E-Mail-Adresse zu best�
 msgid "Unverified workspaces are automatically removed after @days days."
 msgstr "Nicht bestätigte Arbeitsbereiche werden nach @days Tagen automatisch gelöscht."
 
+msgid "Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address."
+msgstr "Öffnen Sie den Link in dem Browser, in dem Sie sich registriert haben, damit Sie automatisch angemeldet werden. In jedem anderen Browser können Sie sich mit einem Code anmelden, den wir an diese E-Mail-Adresse senden."
+
 msgid "Verify email"
 msgstr "E-Mail bestätigen"
 

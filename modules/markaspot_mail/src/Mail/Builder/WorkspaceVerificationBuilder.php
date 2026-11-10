@@ -110,6 +110,7 @@ final class WorkspaceVerificationBuilder implements MailBuilderInterface {
           (string) $this->t('Unverified workspaces are automatically removed after @days days.', [
             '@days' => $cleanupDays,
           ], ['langcode' => $langcode]),
+          (string) $this->t('Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address.', [], ['langcode' => $langcode]),
         ],
         'cta_label' => (string) $this->t('Verify email', [], ['langcode' => $langcode]),
         'cta_url' => $verifyUrl,

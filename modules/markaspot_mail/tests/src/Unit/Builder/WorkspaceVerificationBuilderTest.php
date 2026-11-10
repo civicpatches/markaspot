@@ -94,6 +94,11 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
     $this->assertStringContainsString('Amsterdam Demo', $msg->content['intro']);
     $this->assertSame('Verify email', $msg->content['cta_label']);
     $this->assertSame('https://civicspot.io/verify?token=xyz789', $msg->content['cta_url']);
+    $this->assertCount(3, $msg->content['body_blocks']);
+    $this->assertSame(
+      'Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address.',
+      $msg->content['body_blocks'][2],
+    );
     // Cleanup window must appear in the body so recipients know the
     // deadline without hunting through the full T&C.
     $this->assertTrue(array_any($msg->content['body_blocks'], fn($b) => str_contains($b, '14')));

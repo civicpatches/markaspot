@@ -8,7 +8,7 @@ one `.po` file per locale supported by the Mark-a-Spot frontend.
 
 | File              | Scope               | Status                        |
 |-------------------|---------------------|-------------------------------|
-| `markaspot_mail.pot` | Source strings (EN) | 76 messages, kept in sync by hand until `drush locale:check` is wired up |
+| `markaspot_mail.pot` | Source strings (EN) | 77 messages, kept in sync by hand until `drush locale:check` is wired up |
 | `de.po`              | German (primary)    | Fully translated (first-mover, Civic Patches in-house) |
 | `cs.po`              | Czech               | Custom-term mail path translated; broader catalog is partial |
 | `ar.po`              | Arabic              | Custom-term mail path translated; broader catalog is partial |

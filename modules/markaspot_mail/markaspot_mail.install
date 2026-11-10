@@ -1005,3 +1005,10 @@ function markaspot_mail_update_10017(): string {
 function markaspot_mail_update_10019(): string {
   return _markaspot_mail_import_shipped_translations();
 }
+
+/**
+ * Imports the workspace verification sign-in hint for existing tenants.
+ */
+function markaspot_mail_update_10020(): string {
+  return _markaspot_mail_import_shipped_translations();
+}
