@@ -3789,11 +3789,14 @@ class TenantSettingsControllerTest extends UnitTestCase {
    * Tests the deviation hint is discarded wherever the lock is not editable.
    *
    * Both keys run through the same scope filter: a context that may not
-   * change the lock may not change the hint either.
+   * change the lock may not change the hint either. The filter runs before
+   * validation, so an invalid value for a key outside the scope is dropped
+   * as well (200, nothing written) instead of answering 422.
    *
    * @covers ::updateFeatureSettings
+   * @dataProvider outOfScopePhotoLocationDeviationHintProvider
    */
-  public function testUpdateFeatureSettingsDiscardsPhotoLocationDeviationHintOutsideScope(): void {
+  public function testUpdateFeatureSettingsDiscardsPhotoLocationDeviationHintOutsideScope(string $json): void {
     $storedNuxtConfig = json_encode(['features' => [
       'forms' => ['lockPhotoLocation' => TRUE, 'photoLocationDeviationHint' => 100],
     ]]);
@@ -3810,9 +3813,9 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $container->set('markaspot_nuxt.feature_scope_resolver', $resolver);
     $controller = TenantSettingsController::create($container);
 
-    $response = $controller->updateFeatureSettings($this->createFeaturePatchRequest([
-      'forms' => ['lockPhotoLocation' => FALSE, 'photoLocationDeviationHint' => 900],
-    ]), '14');
+    $body = '{"forms":{"lockPhotoLocation":false,"photoLocationDeviationHint":' . $json . '}}';
+    $request = Request::create('/api/tenant/14/features', 'PATCH', [], [], [], ['CONTENT_TYPE' => 'application/json'], $body);
+    $response = $controller->updateFeatureSettings($request, '14');
     $data = json_decode($response->getContent(), TRUE);
 
     $this->assertSame(200, $response->getStatusCode());
@@ -3821,6 +3824,21 @@ class TenantSettingsControllerTest extends UnitTestCase {
       json_decode($storedNuxtConfig, TRUE)['features']['forms'],
     );
     $this->assertNotContains('forms.photoLocationDeviationHint', $data['scopes']['editable']);
+  }
+
+  /**
+   * Provides valid and invalid deviation hint literals outside the scope.
+   */
+  public static function outOfScopePhotoLocationDeviationHintProvider(): array {
+    return [
+      'valid value' => ['900'],
+      'fraction' => ['200.5'],
+      'negative' => ['-200'],
+      'above maximum' => ['5001'],
+      'text' => ['"far"'],
+      'null' => ['null'],
+      'boolean' => ['true'],
+    ];
   }
 
   /**
