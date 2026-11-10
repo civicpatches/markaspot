@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.9.250](https://github.com/markaspot/markaspot/compare/11.9.249...11.9.250) (2026-11-10)
+
+### Bug Fixes
+
+* **vision:** count visible objects with functional faults as reportable and offer only the jurisdiction's categories ([510c79d](https://github.com/markaspot/markaspot/commit/510c79dd63f8497b8bdf53769a7e82f97fc12c4e))
+* **vision:** never offer a parent category as a leaf when its children are offline ([7d92c0c](https://github.com/markaspot/markaspot/commit/7d92c0c7ea34c3fb85d6562fc0c72b2def6871f5))
+* **vision:** offer the categories like GeoReport and leave the model's category to the form ([01bd727](https://github.com/markaspot/markaspot/commit/01bd72773438ad3813dee3b21d3c5ce017145cfd))
+
 ## [11.9.249](https://github.com/markaspot/markaspot/compare/11.9.248...11.9.249) (2026-11-10)
 
 ### Features
