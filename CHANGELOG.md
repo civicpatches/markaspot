@@ -1,5 +1,16 @@
 # Changelog
 
+## [11.9.251](https://github.com/civicpatches/markaspot/compare/11.9.250...11.9.251) (2026-11-11)
+
+### Features
+
+* **mail:** explain sign-in after workspace verification in the verification mail ([a199c4a](https://github.com/civicpatches/markaspot/commit/a199c4ae65beb16973b8e6c7c6d154a4c8ad74bb))
+* **nuxt:** add a distance threshold setting for the photo location deviation hint ([321ecd8](https://github.com/civicpatches/markaspot/commit/321ecd8ff7d3b543b4ee471dd9acab7362f0df03))
+
+### Bug Fixes
+
+* **publisher:** let screening and review holds veto publication at queue time ([1dfdb46](https://github.com/civicpatches/markaspot/commit/1dfdb46da781b4d21f30476829fc222e2ac6ad18))
+
 ## [11.9.250](https://github.com/markaspot/markaspot/compare/11.9.249...11.9.250) (2026-11-10)
 
 ### Bug Fixes
