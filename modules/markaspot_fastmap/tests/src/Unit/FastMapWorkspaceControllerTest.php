@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_fastmap\Unit;
 
 use Drupal\markaspot_fastmap\Validation\WorkspaceBoundaryException;
+use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Database\Connection;
@@ -153,6 +154,16 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
   protected ?string $workspaceBaseUrl = NULL;
 
   /**
+   * Mutable cleanup_days setting for config callbacks.
+   */
+  protected mixed $cleanupDays = 7;
+
+  /**
+   * Pinned clock in Unix seconds; NULL follows the real time.
+   */
+  protected ?int $now = NULL;
+
+  /**
    * Transaction stub used by verifyWorkspace() tests.
    */
   protected object $transaction;
@@ -211,7 +222,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
       ->willReturnCallback(fn(string $key) => match ($key) {
         'service_key' => 'test-service-key-123',
         'verify_base_url' => 'https://example.com',
-        'cleanup_days' => 7,
+        'cleanup_days' => $this->cleanupDays,
         'mail_from' => 'noreply@example.com',
         'workspace_base_url' => $this->workspaceBaseUrl,
         default => NULL,
@@ -271,6 +282,9 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $this->lock = $this->createMock(LockBackendInterface::class);
     $this->lock->method('acquire')->willReturn(TRUE);
     $container->set('lock', $this->lock);
+    $time = $this->createMock(TimeInterface::class);
+    $time->method('getCurrentTime')->willReturnCallback(fn(): int => $this->now ?? time());
+    $container->set('datetime.time', $time);
     \Drupal::setContainer($container);
 
     $this->controller = FastMapWorkspaceController::create($container);
@@ -403,6 +417,16 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
       ->willReturn($insert);
     $this->database->method('delete')
       ->willReturn($delete);
+  }
+
+  /**
+   * Stubs the expired-signup cleanup that opens the create path.
+   */
+  protected function stubPendingCleanup(): void {
+    $delete = $this->createMock(Delete::class);
+    $delete->method('condition')->willReturnSelf();
+    $delete->method('execute')->willReturn(0);
+    $this->database->method('delete')->willReturn($delete);
   }
 
   /**
@@ -713,6 +737,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
    * @covers ::createWorkspace
    */
   public function testCreateWorkspaceDuplicateSlug(): void {
+    $this->stubPendingCleanup();
     // Override group storage to return an existing group.
     $groupStorage = $this->createMock(EntityStorageInterface::class);
     $groupStorage->method('loadByProperties')
@@ -753,6 +778,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $select->method('execute')->willReturn($statement);
 
     $this->database->method('select')->willReturn($select);
+    $this->stubPendingCleanup();
 
     $request = $this->createJsonRequest($this->validRequestData());
 
@@ -861,6 +887,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $insert->method('execute')
       ->willThrowException(new \Exception('DB write failed'));
     $this->database->method('insert')->willReturn($insert);
+    $this->stubPendingCleanup();
 
     $request = $this->createJsonRequest($this->validRequestData());
     $response = $this->controller->createWorkspace($request);
@@ -2740,7 +2767,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $this->assertSame([hash('sha256', self::SIGNUP_NONCE)], array_values($this->signupBindings));
     $this->assertStringNotContainsString(self::SIGNUP_NONCE, json_encode($this->signupBindings));
     // The binding outlives verification plus the recovery window.
-    $this->assertSame([172800 + 86400], array_values($this->signupBindingTtls));
+    $this->assertSame([7 * 86400 + 86400], array_values($this->signupBindingTtls));
   }
 
   /**
@@ -2799,6 +2826,254 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
 
     $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $token);
     $this->assertSame(['uid' => 99, 'slug' => 'bound-ws', 'binding' => $binding], $storedPayloads[0]);
+  }
+
+  /**
+   * The link validity follows cleanup_days, bounded to one to seven days.
+   *
+   * @dataProvider verificationTtlProvider
+   * @covers ::verificationTtl
+   */
+  public function testVerificationTtlReadingRule(mixed $setting, int $expectedDays): void {
+    $this->cleanupDays = $setting;
+
+    $ttl = (new \ReflectionMethod($this->controller, 'verificationTtl'))->invoke($this->controller);
+
+    $this->assertSame($expectedDays * 86400, $ttl);
+  }
+
+  /**
+   * Settings that are used as given and settings that read as seven days.
+   */
+  public static function verificationTtlProvider(): array {
+    return [
+      'one day' => [1, 1],
+      'seven days' => [7, 7],
+      'digit string' => ['3', 3],
+      'zero' => [0, 7],
+      'negative' => [-1, 7],
+      'eight' => [8, 7],
+      'thirty' => [30, 7],
+      'float' => [1.5, 7],
+      'boolean' => [TRUE, 7],
+      'other string' => ['abc', 7],
+      'trailing newline' => ["3\n", 7],
+      'leading space' => [' 3', 7],
+      'missing key' => [NULL, 7],
+    ];
+  }
+
+  /**
+   * Both verification mails receive the normalized number of days.
+   *
+   * @dataProvider verificationMailDaysProvider
+   * @covers ::createWorkspace
+   */
+  public function testVerificationMailCarriesNormalizedDays(mixed $setting, string $expectedDays): void {
+    $this->cleanupDays = $setting;
+    $this->setupSuccessfulPending();
+    $mailParams = NULL;
+    $this->mailManager->method('mail')
+      ->willReturnCallback(static function (...$args) use (&$mailParams): array {
+        $mailParams = $args[4];
+        return ['result' => TRUE];
+      });
+
+    $response = $this->controller->createWorkspace($this->createJsonRequest($this->validRequestData()));
+
+    $this->assertSame(202, $response->getStatusCode());
+    $this->assertSame($expectedDays, $mailParams['cleanup_days'] ?? NULL);
+  }
+
+  /**
+   * Settings and the number of days the mails advertise for them.
+   */
+  public static function verificationMailDaysProvider(): array {
+    return [
+      'default' => [7, '7'],
+      'lowered' => [3, '3'],
+      'above the bound' => [31, '7'],
+    ];
+  }
+
+  /**
+   * Expired signups are removed before the pending-slug check.
+   *
+   * @covers ::createWorkspace
+   */
+  public function testCreateWorkspaceCleansExpiredBeforePendingSlugCheck(): void {
+    $this->now = 1800000000;
+    $this->cleanupDays = 3;
+    $calls = [];
+
+    $statement = $this->createMock(StatementInterface::class);
+    $statement->method('fetchField')->willReturn('1');
+    $select = $this->createMock(SelectInterface::class);
+    $select->method('fields')->willReturnSelf();
+    $select->method('where')->willReturnSelf();
+    $select->method('range')->willReturnSelf();
+    $select->method('execute')->willReturn($statement);
+    $this->database->method('select')
+      ->willReturnCallback(function (string $table) use (&$calls, $select): SelectInterface {
+        $calls[] = 'select ' . $table;
+        return $select;
+      });
+
+    $delete = $this->createMock(Delete::class);
+    $delete->method('condition')
+      ->willReturnCallback(function (string $field, $value, string $operator) use (&$calls, $delete): Delete {
+        $calls[] = "delete where $field $operator $value";
+        return $delete;
+      });
+    $delete->method('execute')->willReturn(0);
+    $this->database->method('delete')
+      ->willReturnCallback(function (string $table) use (&$calls, $delete): Delete {
+        $calls[] = 'delete ' . $table;
+        return $delete;
+      });
+
+    $response = $this->controller->createWorkspace($this->createJsonRequest($this->validRequestData()));
+
+    // A still valid pending signup keeps its slug reserved.
+    $this->assertSame(409, $response->getStatusCode());
+    $this->assertSame([
+      'delete markaspot_fastmap_pending',
+      'delete where created < ' . (1800000000 - 3 * 86400),
+      'select markaspot_fastmap_pending',
+    ], $calls);
+  }
+
+  /**
+   * A binding store write failure keeps the signup but drops the binding.
+   *
+   * @covers ::createWorkspace
+   */
+  public function testCreateWorkspaceBindingWriteFailureFailsClosed(): void {
+    $this->setupSuccessfulPending();
+    $this->mailManager->method('mail')->willReturn(['result' => TRUE]);
+    $bindingStore = $this->createMock(KeyValueStoreExpirableInterface::class);
+    $bindingStore->method('setWithExpire')->willThrowException(new \RuntimeException('store unavailable'));
+    $factory = $this->createMock(KeyValueExpirableFactoryInterface::class);
+    $factory->method('get')->willReturn($bindingStore);
+    $container = \Drupal::getContainer();
+    $container->set('keyvalue.expirable', $factory);
+    $this->controller = FastMapWorkspaceController::create($container);
+    $this->logger->expects($this->once())->method('warning')
+      ->with($this->stringContains('Could not store the signup binding'), $this->anything());
+
+    $response = $this->controller->createWorkspace($this->createJsonRequest($this->validRequestData(), ['HTTP_X_FASTMAP_SIGNUP_BINDING' => self::SIGNUP_NONCE]));
+
+    $this->assertSame(202, $response->getStatusCode());
+  }
+
+  /**
+   * A binding store read failure verifies without a login token.
+   *
+   * @covers ::verifyWorkspace
+   */
+  public function testVerifyWorkspaceBindingReadFailureFailsClosed(): void {
+    $this->pushCurrentRequest(['HTTP_X_FASTMAP_RESPONSE_MODE' => 'json']);
+    $this->mockProvisionablePending('unreadable-ws');
+    // The verified row stays unclaimed: no mint was attempted.
+    $this->database->expects($this->never())->method('update');
+    $bindingStore = $this->createMock(KeyValueStoreExpirableInterface::class);
+    $bindingStore->method('get')->willThrowException(new \RuntimeException('store unavailable'));
+    $factory = $this->createMock(KeyValueExpirableFactoryInterface::class);
+    $factory->method('get')->willReturn($bindingStore);
+    $container = \Drupal::getContainer();
+    $container->set('keyvalue.expirable', $factory);
+    $this->controller = FastMapWorkspaceController::create($container);
+
+    $response = $this->controller->verifyWorkspace(str_repeat('ef', 32));
+
+    $this->assertSame(201, $response->getStatusCode());
+    $data = json_decode($response->getContent(), TRUE);
+    $this->assertSame('unreadable-ws', $data['slug']);
+    $this->assertArrayNotHasKey('login_token', $data);
+  }
+
+  /**
+   * The longest binding lifetime matches the UI signup binding cookie.
+   *
+   * @covers ::createWorkspace
+   */
+  public function testLongestBindingLifetimeMatchesSignupCookie(): void {
+    $days = (new \ReflectionClassConstant(FastMapWorkspaceController::class, 'MAX_VERIFICATION_DAYS'))->getValue();
+    $recovery = (new \ReflectionClassConstant(FastMapWorkspaceController::class, 'VERIFIED_TOKEN_RECOVERY_TTL'))->getValue();
+
+    $this->assertSame(691200, $days * 86400 + $recovery, 'The UI signup binding cookie max-age (691200 s) covers the longest link validity plus the recovery window; change it together with these constants.');
+  }
+
+  /**
+   * A shorter setting shortens the stored binding as well.
+   *
+   * @covers ::createWorkspace
+   */
+  public function testCreateWorkspaceBindingFollowsSetting(): void {
+    $this->cleanupDays = 3;
+    $this->signupBindings = [];
+    $this->setupSuccessfulPending();
+    $this->mailManager->method('mail')->willReturn(['result' => TRUE]);
+
+    $response = $this->controller->createWorkspace($this->createJsonRequest($this->validRequestData(), ['HTTP_X_FASTMAP_SIGNUP_BINDING' => self::SIGNUP_NONCE]));
+
+    $this->assertSame(202, $response->getStatusCode());
+    $this->assertSame([3 * 86400 + 86400], array_values($this->signupBindingTtls));
+  }
+
+  /**
+   * A failing cleanup neither blocks the slug check nor fails the signup.
+   *
+   * @dataProvider failingCleanupProvider
+   * @covers ::createWorkspace
+   */
+  public function testCreateWorkspaceSurvivesFailingCleanup(array $failingCalls, int $expectedWarnings): void {
+    $statement = $this->createMock(StatementInterface::class);
+    $statement->method('fetchField')->willReturn(FALSE);
+    $select = $this->createMock(SelectInterface::class);
+    $select->method('fields')->willReturnSelf();
+    $select->method('where')->willReturnSelf();
+    $select->method('range')->willReturnSelf();
+    $select->method('execute')->willReturn($statement);
+    $this->database->expects($this->once())->method('select')
+      ->with('markaspot_fastmap_pending')->willReturn($select);
+    $insert = $this->createMock(Insert::class);
+    $insert->method('fields')->willReturnSelf();
+    $insert->method('execute')->willReturn('1');
+    $this->database->expects($this->once())->method('insert')->willReturn($insert);
+
+    $call = 0;
+    $this->database->expects($this->exactly(2))->method('delete')
+      ->willReturnCallback(function () use (&$call, $failingCalls): Delete {
+        $call++;
+        $delete = $this->createMock(Delete::class);
+        $delete->method('condition')->willReturnSelf();
+        if (in_array($call, $failingCalls, TRUE)) {
+          $delete->method('execute')->willThrowException(new \RuntimeException('database unavailable'));
+        }
+        else {
+          $delete->method('execute')->willReturn(0);
+        }
+        return $delete;
+      });
+    $this->mailManager->method('mail')->willReturn(['result' => TRUE]);
+    $this->logger->expects($this->exactly($expectedWarnings))->method('warning')
+      ->with('Could not remove expired pending workspace requests.');
+
+    $response = $this->controller->createWorkspace($this->createJsonRequest($this->validRequestData()));
+
+    $this->assertSame(202, $response->getStatusCode());
+  }
+
+  /**
+   * Cleanup failures before the slug check, after the mail, or both.
+   */
+  public static function failingCleanupProvider(): array {
+    return [
+      'before the slug check' => [[1], 1],
+      'after the mail' => [[2], 1],
+      'both' => [[1, 2], 2],
+    ];
   }
 
 }

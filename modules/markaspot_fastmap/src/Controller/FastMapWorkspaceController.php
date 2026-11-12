@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\markaspot_fastmap\Controller;
 
 use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Component\Utility\Xss;
 use Drupal\Core\Config\Entity\ConfigEntityInterface;
 use Drupal\Core\Controller\ControllerBase;
@@ -42,9 +43,13 @@ class FastMapWorkspaceController extends ControllerBase {
   use JurisdictionIdResolverTrait;
 
   /**
-   * Verification token time-to-live in seconds (48 hours).
+   * Longest validity of a verification link in days.
+   *
+   * The signup page promises seven days, and the signup binding cookie lives
+   * seven days plus the recovery window, so a longer cleanup_days setting is
+   * not honoured.
    */
-  private const VERIFICATION_TTL = 172800;
+  private const MAX_VERIFICATION_DAYS = 7;
 
   /**
    * Allowed language codes matching the frontend allowlist.
@@ -169,6 +174,11 @@ class FastMapWorkspaceController extends ControllerBase {
   protected ?EntityRepositoryInterface $entityRepository = NULL;
 
   /**
+   * The time service.
+   */
+  protected TimeInterface $time;
+
+  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container): static {
@@ -181,6 +191,7 @@ class FastMapWorkspaceController extends ControllerBase {
     $instance->flood = $container->get('flood');
     $instance->lock = $container->get('lock');
     $instance->requestStack = $container->get('request_stack');
+    $instance->time = $container->get('datetime.time');
     if ($container->has('group.membership_loader')) {
       $instance->membershipLoader = $container->get('group.membership_loader');
     }
@@ -300,6 +311,10 @@ class FastMapWorkspaceController extends ControllerBase {
     }
 
     try {
+      // An expired pending signup must not keep its slug reserved, so drop
+      // expired rows before the pending-slug check below.
+      $this->cleanupExpired();
+
       // Check slug uniqueness early.
       $groupStorage = $this->entityTypeManager()->getStorage('group');
       $existing = $groupStorage->loadByProperties(['field_slug' => $slug]);
@@ -440,7 +455,7 @@ class FastMapWorkspaceController extends ControllerBase {
             'token' => $token,
             'email' => $email,
             'workspace_data' => json_encode($workspaceData, JSON_UNESCAPED_UNICODE),
-            'created' => time(),
+            'created' => $this->now(),
           ])
           ->execute();
       }
@@ -458,7 +473,7 @@ class FastMapWorkspaceController extends ControllerBase {
           $this->keyValueExpirable->get(self::SIGNUP_BINDING_COLLECTION)->setWithExpire(
             hash('sha256', $token),
             $bindingHash,
-            self::VERIFICATION_TTL + self::VERIFIED_TOKEN_RECOVERY_TTL
+            $this->verificationTtl() + self::VERIFIED_TOKEN_RECOVERY_TTL
           );
         }
         catch (\Exception $e) {
@@ -492,7 +507,8 @@ class FastMapWorkspaceController extends ControllerBase {
       $verifyUrl = $request->getSchemeAndHttpHost() . '/start/verify/' . $token;
     }
 
-    $cleanupDays = (int) ($config->get('cleanup_days') ?? 7);
+    // The mails state the same validity that verification enforces.
+    $cleanupDays = intdiv($this->verificationTtl(), 86400);
     $language = $workspaceData['language'] ?: 'en';
 
     // Send verification email. If it fails, roll back the pending row.
@@ -633,10 +649,12 @@ class FastMapWorkspaceController extends ControllerBase {
         return $this->sensitiveJsonResponse(['error' => 'Invalid or expired verification token'], 404);
       }
 
-      // Check expiration using a fixed 48-hour security window.
+      // A link is valid while its age does not exceed the verification TTL;
+      // an age equal to the TTL is still valid. cleanupExpired() deletes by
+      // the same rule, so a row is never removed while its link is valid.
       $config = $this->config('markaspot_fastmap.settings');
 
-      if ((time() - (int) $record['created']) > self::VERIFICATION_TTL) {
+      if (($this->now() - (int) $record['created']) > $this->verificationTtl()) {
         $this->database->delete('markaspot_fastmap_pending')
           ->condition('id', $record['id'])
           ->execute();
@@ -678,7 +696,7 @@ class FastMapWorkspaceController extends ControllerBase {
             'slug' => $result['slug'],
             'selected_tier' => (string) ($workspaceData['selected_tier'] ?? ''),
             'login_claimed' => 0,
-            'created' => time(),
+            'created' => $this->now(),
           ])
           ->execute();
 
@@ -900,7 +918,7 @@ class FastMapWorkspaceController extends ControllerBase {
         ->fields(['login_claimed' => 1])
         ->condition('token', $verifyToken)
         ->condition('login_claimed', 0)
-        ->condition('created', time() - self::VERIFIED_TOKEN_RECOVERY_TTL, '>=')
+        ->condition('created', $this->now() - self::VERIFIED_TOKEN_RECOVERY_TTL, '>=')
         ->execute();
       return (int) $affected > 0;
     }
@@ -937,7 +955,7 @@ class FastMapWorkspaceController extends ControllerBase {
   private function canReissueVerifiedLoginToken(array $verified): bool {
     $created = (int) ($verified['created'] ?? 0);
     return $created > 0
-      && (time() - $created) <= self::VERIFIED_TOKEN_RECOVERY_TTL - self::LOGIN_TOKEN_TTL;
+      && ($this->now() - $created) <= self::VERIFIED_TOKEN_RECOVERY_TTL - self::LOGIN_TOKEN_TTL;
   }
 
   /**
@@ -1309,16 +1327,51 @@ class FastMapWorkspaceController extends ControllerBase {
   }
 
   /**
-   * Removes expired pending workspace requests.
+   * Returns how long a verification link stays valid, in seconds.
+   *
+   * Reads the cleanup_days setting as a whole number of days from 1 to
+   * MAX_VERIFICATION_DAYS, given as an integer or a string of digits.
+   * Anything else (missing, zero, negative, too large, fractional, boolean or
+   * other strings) reads as MAX_VERIFICATION_DAYS. Verification, cleanup, the
+   * signup binding and the verification mail all use this value.
+   */
+  private function verificationTtl(): int {
+    $days = $this->config('markaspot_fastmap.settings')->get('cleanup_days');
+    if (is_string($days) && preg_match('/\A[0-9]+\z/', $days)) {
+      $days = (int) $days;
+    }
+    if (!is_int($days) || $days < 1 || $days > self::MAX_VERIFICATION_DAYS) {
+      $days = self::MAX_VERIFICATION_DAYS;
+    }
+    return $days * 86400;
+  }
+
+  /**
+   * Returns the current Unix timestamp.
+   */
+  private function now(): int {
+    return (int) $this->time->getCurrentTime();
+  }
+
+  /**
+   * Removes pending workspace requests whose verification link has expired.
+   *
+   * Deletes rows older than verificationTtl(); a row exactly at the TTL is
+   * kept because its link still verifies. A failure is logged and never fails
+   * the request: before the slug check it only leaves the reservation in
+   * place, after the mail the signup itself has already succeeded.
    */
   private function cleanupExpired(): void {
-    $config = $this->config('markaspot_fastmap.settings');
-    $cleanupDays = (int) ($config->get('cleanup_days') ?? 7);
-    $cutoff = time() - ($cleanupDays * 86400);
+    $cutoff = $this->now() - $this->verificationTtl();
 
-    $this->database->delete('markaspot_fastmap_pending')
-      ->condition('created', $cutoff, '<')
-      ->execute();
+    try {
+      $this->database->delete('markaspot_fastmap_pending')
+        ->condition('created', $cutoff, '<')
+        ->execute();
+    }
+    catch (\Exception) {
+      $this->fastmapLogger->warning('Could not remove expired pending workspace requests.');
+    }
   }
 
   /**
@@ -1328,7 +1381,7 @@ class FastMapWorkspaceController extends ControllerBase {
    * and have no long-term value.
    */
   private function cleanupVerified(): void {
-    $cutoff = time() - 86400;
+    $cutoff = $this->now() - 86400;
 
     $this->database->delete('markaspot_fastmap_verified')
       ->condition('created', $cutoff, '<')

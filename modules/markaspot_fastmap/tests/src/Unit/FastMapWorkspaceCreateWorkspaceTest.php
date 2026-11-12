@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_fastmap\Unit;
 
 use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\Component\Datetime\Time;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\Database\Connection;
@@ -300,6 +301,7 @@ class FastMapWorkspaceCreateWorkspaceTest extends UnitTestCase {
     $container->set('request_stack', new RequestStack());
     $container->set('flood', $flood);
     $container->set('lock', $lock);
+    $container->set('datetime.time', new Time());
     \Drupal::setContainer($container);
 
     return FastMapWorkspaceController::create($container);
