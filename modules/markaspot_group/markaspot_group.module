@@ -931,10 +931,13 @@ function markaspot_group_node_grants(AccountInterface $account, string $operatio
     }
 
     // Organisation records also activate core's grant filter for ordinary
-    // staff. Mirror their existing Group permission so unpublished requests
+    // staff. Mirror their effective Group permission so unpublished requests
     // do not disappear from queries despite allowed single-entity access.
-    // Membership alone, or permission to view only one's own drafts, is not
-    // sufficient. Leave contractor grants and all write grants unchanged.
+    // The grant follows that permission, not the membership as such: under
+    // the default org-member role (insider scope, synchronized from the
+    // authenticated role) membership alone is sufficient, while permission
+    // to view only one's own drafts is not. Leave contractor grants and all
+    // write grants unchanged.
     if (!isset($grants['markaspot_contractor_organisation'])) {
       $organisation_ids = _markaspot_group_account_organisation_ids($account);
       foreach (Group::loadMultiple($organisation_ids) as $organisation) {
