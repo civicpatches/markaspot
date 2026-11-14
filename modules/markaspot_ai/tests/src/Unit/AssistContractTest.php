@@ -21,6 +21,7 @@ use Drupal\markaspot_ai\Service\AttributeFillingService;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\node\NodeInterface;
+use Drupal\paragraphs\ParagraphInterface;
 use Drupal\taxonomy\TermInterface;
 use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -103,12 +104,20 @@ final class AssistContractTest extends UnitTestCase {
   private bool $childOfRoot = FALSE;
 
   /**
+   * Status notes already stored on the report.
+   *
+   * @var string[]
+   */
+  private array $storedNotes = [];
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     parent::setUp();
     $this->calls = [];
     $this->childOfRoot = FALSE;
+    $this->storedNotes = [];
     $this->groupConfigs = [
       self::JURISDICTION => ['features' => ['aiProcessing' => TRUE]],
       self::ROOT => NULL,
@@ -186,6 +195,25 @@ final class AssistContractTest extends UnitTestCase {
     $this->assertSame(200, $outcome['status']);
     $this->assertSame(self::withMode('note_receipt', 'receipt'), $outcome['body']);
     $this->assertSame([], $outcome['calls']);
+  }
+
+  /**
+   * A receipt equal to a stored note is suppressed, switch on or off.
+   */
+  public function testDuplicateReceiptIsSuppressed(): void {
+    $this->storedNotes = ['Thank you for your report. We have received your message.'];
+    [$body, , $reply] = self::cases()['note_receipt'];
+    $expected = '{"success":true,"suggestions":[],"model":"receipt-template"}';
+
+    $off = $this->assist(self::withOrigin($body, 'manual'), $reply);
+    $this->assertSame([200, $expected, []], [$off['status'], $off['body'], $off['calls']]);
+
+    $this->enableBrief();
+    $on = $this->assist(self::withOrigin($body, 'manual'), $reply);
+    $this->assertSame(
+      [200, substr($expected, 0, -1) . ',"mode":"receipt"}', []],
+      [$on['status'], $on['body'], $on['calls']],
+    );
   }
 
   /**
@@ -811,7 +839,7 @@ final class AssistContractTest extends UnitTestCase {
       'field_request_attributes' => $this->field(['value' => '{"lamp_type":"led"}']),
       'field_status' => $this->field(['entity' => $status]),
       'field_organisation' => $this->field(['entity' => $organisation]),
-      'field_status_notes' => $this->field(['references' => []]),
+      'field_status_notes' => $this->field(['references' => array_map(fn(string $text): ParagraphInterface => $this->note($text), $this->storedNotes)]),
       'field_priority' => $this->field(['value' => 0]),
       'field_internal_remark' => $this->field(['value' => 'Crew assigned internally.']),
       'field_jurisdiction' => $this->field(['target_id' => self::JURISDICTION]),
@@ -825,6 +853,16 @@ final class AssistContractTest extends UnitTestCase {
     $node->method('get')->willReturnCallback(static fn(string $name) => $fields[$name]);
     $node->expects($this->never())->method('save');
     return $node;
+  }
+
+  /**
+   * Builds a stored status note paragraph.
+   */
+  private function note(string $text): ParagraphInterface {
+    $paragraph = $this->createMock(ParagraphInterface::class);
+    $paragraph->method('hasField')->willReturn(TRUE);
+    $paragraph->method('get')->willReturn($this->field(['value' => $text]));
+    return $paragraph;
   }
 
   /**
