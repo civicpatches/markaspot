@@ -91,9 +91,9 @@ final class AssistContractTest extends UnitTestCase {
   private array $calls = [];
 
   /**
-   * Stored field_nuxt_config per group ID.
+   * Stored field_nuxt_config per group ID; a string is stored verbatim.
    *
-   * @var array<int, array|null>
+   * @var array<int, array|string|null>
    */
   private array $groupConfigs = [];
 
@@ -176,6 +176,205 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
+   * Switch on: an empty note gets the receipt without a model call.
+   */
+  #[DataProvider('anyOrigin')]
+  public function testSwitchOnEmptyNoteIsReceiptForAnyOrigin(mixed $origin): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_receipt'];
+    $outcome = $this->assist(self::withOrigin($body, $origin), $reply);
+    $this->assertSame(200, $outcome['status']);
+    $this->assertSame(self::withMode('note_receipt', 'receipt'), $outcome['body']);
+    $this->assertSame([], $outcome['calls']);
+  }
+
+  /**
+   * Switch on: a non-empty instruction keeps today's handling, origin ignored.
+   */
+  #[DataProvider('anyOrigin')]
+  public function testSwitchOnInstructionKeepsTodaysHandling(mixed $origin): void {
+    $this->enableBrief();
+    foreach (['note_instruction', 'note_combined'] as $case) {
+      [$body, , $reply] = self::cases()[$case];
+      $this->calls = [];
+      $this->assertMatchesBaseline($case, $this->assist(self::withOrigin($body, $origin), $reply));
+    }
+  }
+
+  /**
+   * Origins, valid or not, including none at all.
+   */
+  public static function anyOrigin(): array {
+    return self::ignoredOrigins() + [
+      'empty string' => [''],
+      'wrong case' => ['Manual'],
+      'list' => [['manual']],
+    ];
+  }
+
+  /**
+   * Switch on: note text from a text block or an AI draft is only reworded.
+   */
+  #[DataProvider('rewriteOrigins')]
+  public function testSwitchOnNonManualTextIsReworded(string $origin): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_text'];
+    $outcome = $this->assist(self::withOrigin($body, $origin), $reply);
+    $fixture = self::fixture('note_text');
+    $this->assertSame(200, $outcome['status']);
+    $this->assertSame(self::withMode('note_text', 'rewrite'), $outcome['body']);
+    $this->assertSame(self::encode($fixture['calls']), self::encode($outcome['calls']), 'Rewrite prompt and options equal today.');
+
+    [$body, , $reply] = self::cases()['note_unusable'];
+    $this->calls = [];
+    $this->assertSame(self::withMode('note_unusable', 'rewrite'), $this->assist(self::withOrigin($body, $origin), $reply)['body']);
+  }
+
+  /**
+   * Non-manual origins.
+   */
+  public static function rewriteOrigins(): array {
+    return ['text_block' => ['text_block'], 'ai' => ['ai']];
+  }
+
+  /**
+   * Switch on: typed note text is the operator's brief.
+   */
+  public function testSwitchOnManualTextIsBrief(): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_text'];
+    $outcome = $this->assist(self::withOrigin($body, 'manual'), $reply);
+    $this->assertSame(200, $outcome['status']);
+    $this->assertSame(self::withMode('note_text', 'brief'), $outcome['body']);
+    $this->assertCount(1, $outcome['calls']);
+    $this->assertSame(self::fixture('note_text')['calls'][0]['options'], $outcome['calls'][0]['options']);
+  }
+
+  /**
+   * Switch on: a provider failure keeps today's error contract, no mode.
+   */
+  public function testSwitchOnErrorsKeepTodaysContract(): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_refusal'];
+    $outcome = $this->assist(self::withOrigin($body, 'manual'), $reply);
+    $this->assertSame(self::fixture('note_refusal')['body'], $outcome['body']);
+    $this->assertSame(200, $outcome['status']);
+
+    // Draft validation keeps precedence over the origin check.
+    [$body, , $reply] = self::cases()['error_draft_key'];
+    $this->calls = [];
+    $this->assertMatchesBaseline('error_draft_key', $this->assist($body, $reply));
+  }
+
+  /**
+   * Switch on: note text without a valid origin is rejected before the model.
+   */
+  #[DataProvider('invalidOrigins')]
+  public function testSwitchOnTextWithoutValidOriginIsRejected(mixed $origin): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_text'];
+    $outcome = $this->assist(self::withOrigin($body, $origin), $reply);
+    $this->assertSame(400, $outcome['status']);
+    $this->assertSame('{"success":false,"code":"invalid_request"}', $outcome['body']);
+    $this->assertSame([], $outcome['calls']);
+  }
+
+  /**
+   * Missing and invalid origins.
+   */
+  public static function invalidOrigins(): array {
+    return [
+      'absent' => [self::ABSENT],
+      'null' => [NULL],
+      'empty string' => [''],
+      'unknown' => ['typed'],
+      'wrong case' => ['Manual'],
+      'padded' => [' manual'],
+      'number' => [5],
+      'boolean' => [TRUE],
+      'list' => [['manual']],
+      'object' => [['origin' => 'manual']],
+    ];
+  }
+
+  /**
+   * The switch is read from the stored report's tenant root.
+   */
+  public function testSwitchResolvesFromStoredReportTenantRoot(): void {
+    [$body, , $reply] = self::cases()['note_text'];
+    $manual = self::withOrigin($body, 'manual');
+    $this->childOfRoot = TRUE;
+
+    // The root opts in; the child's own value does not count.
+    $this->groupConfigs[self::ROOT] = ['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE]];
+    foreach ([[], ['aiNoteBrief' => FALSE], ['aiProcessing' => FALSE]] as $child) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => $child];
+      $this->calls = [];
+      $this->assertSame(self::withMode('note_text', 'brief'), $this->assist($manual, $reply)['body']);
+    }
+
+    // A child opt-in without the root stays off.
+    $this->groupConfigs[self::ROOT] = ['features' => ['aiProcessing' => TRUE]];
+    $this->groupConfigs[self::JURISDICTION] = ['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE]];
+    $this->calls = [];
+    $this->assertMatchesBaseline('note_text', $this->assist($manual, $reply));
+
+    // Missing, malformed or non-boolean root values stay off.
+    foreach (['yes', 1, NULL] as $value) {
+      $this->groupConfigs[self::ROOT] = ['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => $value]];
+      $this->calls = [];
+      $this->assertMatchesBaseline('note_text', $this->assist($manual, $reply));
+    }
+
+    // Without AI text processing at the root the endpoint refuses as today.
+    $this->groupConfigs[self::ROOT] = ['features' => ['aiProcessing' => FALSE, 'aiNoteBrief' => TRUE]];
+    $this->calls = [];
+    $this->assertMatchesBaseline('error_ai_disabled', $this->assist($manual, $reply));
+    $this->groupConfigs[self::ROOT] = '{invalid';
+    $this->calls = [];
+    $this->assertMatchesBaseline('error_ai_disabled', $this->assist($manual, $reply));
+  }
+
+  /**
+   * A jurisdiction named by the request never decides the switch.
+   */
+  public function testRequestSuppliedJurisdictionIsIgnored(): void {
+    [$body, , $reply] = self::cases()['note_text'];
+    $request = ['jurisdiction' => self::FOREIGN, 'jurisdiction_id' => self::FOREIGN] + self::withOrigin($body, 'manual');
+    $outcome = $this->assist($request, $reply, query: '?jurisdiction_id=' . self::FOREIGN . '&jurisdiction=' . self::FOREIGN);
+    $this->assertMatchesBaseline('note_text', $outcome);
+
+    // And the other way round: the report's tenant is on, the named one off.
+    $this->enableBrief();
+    $this->groupConfigs[self::FOREIGN] = ['features' => ['aiProcessing' => TRUE]];
+    $this->calls = [];
+    $outcome = $this->assist($request, $reply, query: '?jurisdiction_id=' . self::FOREIGN);
+    $this->assertSame(self::withMode('note_text', 'brief'), $outcome['body']);
+  }
+
+  /**
+   * Switches the report's tenant to the brief.
+   */
+  private function enableBrief(): void {
+    $this->groupConfigs[self::JURISDICTION] = ['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE]];
+  }
+
+  /**
+   * A recorded success body with "mode" appended as its last key.
+   */
+  private static function withMode(string $case, string $mode): string {
+    $body = self::fixture($case)['body'];
+    return substr($body, 0, -1) . ',"mode":"' . $mode . '"}';
+  }
+
+  /**
+   * Loads a recorded fixture.
+   */
+  private static function fixture(string $case): array {
+    return json_decode((string) file_get_contents(self::fixturePath($case)), TRUE, 512, JSON_THROW_ON_ERROR);
+  }
+
+  /**
    * Marker for "no note_origin key in the request".
    */
   private const ABSENT = "\0absent";
@@ -250,20 +449,17 @@ final class AssistContractTest extends UnitTestCase {
    * @return array{status: int, body: string, calls: array}
    *   Status code, raw response body and every provider call.
    */
-  private function assist(array $body, string $reply, ?callable $tweak = NULL): array {
+  private function assist(array $body, string $reply, string $query = ''): array {
     $node = $this->node();
     $service = $this->service($reply);
     $this->installContainer($node);
-    if ($tweak !== NULL) {
-      $tweak($node, $service);
-    }
     $controller = new AttributeController(
       $this->createMock(Connection::class),
       $this->createMock(QueueFactory::class),
       $service,
       new RequestStack(),
     );
-    $request = Request::create('/api/markaspot-ai/assist', 'POST', [], [], [], [], json_encode($body, JSON_THROW_ON_ERROR));
+    $request = Request::create('/api/markaspot-ai/assist' . $query, 'POST', [], [], [], [], json_encode($body, JSON_THROW_ON_ERROR));
     $response = $controller->assist($request);
     return [
       'status' => $response->getStatusCode(),
@@ -404,7 +600,7 @@ final class AssistContractTest extends UnitTestCase {
    */
   private function group(int $id): GroupInterface {
     $config = $this->groupConfigs[$id];
-    $json = $config === NULL ? NULL : json_encode($config, JSON_THROW_ON_ERROR);
+    $json = is_array($config) ? json_encode($config, JSON_THROW_ON_ERROR) : $config;
     $group = $this->createMock(GroupInterface::class);
     $group->method('id')->willReturn((string) $id);
     $group->method('isDefaultTranslation')->willReturn(TRUE);

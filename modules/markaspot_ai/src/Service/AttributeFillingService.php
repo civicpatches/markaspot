@@ -14,6 +14,7 @@ use Drupal\group\Entity\GroupRelationship;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\markaspot_vision\Service\ImageProcessingService;
+use Drupal\markaspot_ai\Exception\InvalidNoteOriginException;
 use Drupal\markaspot_ai\Privacy\RetainedPiiOriginal;
 use Drupal\markaspot_ai\Utility\BlurPolicy;
 use Drupal\markaspot_ai\Utility\ImagePixelGuard;
@@ -46,6 +47,18 @@ class AttributeFillingService {
    * Offline import compatibility: legacy remarks are excluded from prompts.
    */
   public const LEGACY_NOTES_POLICY_VERSION = 1;
+
+  /**
+   * Declared origins of the current note text (client editing provenance).
+   */
+  public const NOTE_ORIGINS = ['manual', 'text_block', 'ai'];
+
+  /**
+   * Note draft modes reported to the client while the brief switch is on.
+   */
+  public const NOTE_MODE_RECEIPT = 'receipt';
+  public const NOTE_MODE_BRIEF = 'brief';
+  public const NOTE_MODE_REWRITE = 'rewrite';
 
   use JurisdictionIdResolverTrait;
 
@@ -1206,6 +1219,51 @@ class AttributeFillingService {
   }
 
   /**
+   * Whether the requested fields form the targeted status-note draft.
+   *
+   * Duplicates do not matter; any other field makes it a field check.
+   */
+  public static function isTargetedNoteDraft(array $requestedFields): bool {
+    return array_values(array_unique($requestedFields)) === ['status_note'];
+  }
+
+  /**
+   * Classifies a targeted note draft request while the brief switch is on.
+   *
+   * The origin is the client's editing provenance of the current note text,
+   * not verified authorship. Trimmed values decide:
+   * - a non-empty instruction keeps today's handling (NULL, origin ignored);
+   * - an empty note gets the fixed receipt, whatever the origin;
+   * - typed text ('manual') is the operator's brief;
+   * - text from a text block or an AI draft is only reworded.
+   *
+   * @param string|null $draftNote
+   *   The unsaved note text.
+   * @param string|null $instruction
+   *   The optional operator instruction.
+   * @param mixed $origin
+   *   The declared note_origin of the request.
+   *
+   * @return string|null
+   *   One of the NOTE_MODE_* constants, or NULL for an instruction request.
+   *
+   * @throws \Drupal\markaspot_ai\Exception\InvalidNoteOriginException
+   *   When the note has text and the origin is missing or unknown.
+   */
+  public function resolveNoteDraftMode(?string $draftNote, ?string $instruction, mixed $origin): ?string {
+    if (trim($instruction ?? '') !== '') {
+      return NULL;
+    }
+    if (trim($draftNote ?? '') === '') {
+      return self::NOTE_MODE_RECEIPT;
+    }
+    if (!is_string($origin) || !in_array($origin, self::NOTE_ORIGINS, TRUE)) {
+      throw new InvalidNoteOriginException('The note draft needs a valid note_origin.');
+    }
+    return $origin === 'manual' ? self::NOTE_MODE_BRIEF : self::NOTE_MODE_REWRITE;
+  }
+
+  /**
    * A factual receipt message without inferred work, promises, or model calls.
    */
   private function receiptAcknowledgment(string $langcode): string {
@@ -1262,7 +1320,7 @@ class AttributeFillingService {
    */
   public function assistForm(NodeInterface $node, array $requestedFields, ?string $langcode = NULL, bool $draftMode = FALSE, ?string $instruction = NULL, ?string $draftStatusNote = NULL): ?array {
     $nid = (int) $node->id();
-    $isReplyDraft = $draftMode && array_values(array_unique($requestedFields)) === ['status_note'];
+    $isReplyDraft = $draftMode && self::isTargetedNoteDraft($requestedFields);
 
     // Resolve language.
     if (!$langcode) {

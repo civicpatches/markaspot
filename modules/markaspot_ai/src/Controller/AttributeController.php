@@ -8,6 +8,7 @@ use Drupal\Core\Cache\MemoryCache\MemoryCacheInterface;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Queue\QueueFactory;
+use Drupal\markaspot_ai\Exception\InvalidNoteOriginException;
 use Drupal\markaspot_ai\Service\AttributeFillingService;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
@@ -370,10 +371,23 @@ final class AttributeController extends ControllerBase {
           'message' => 'Instruction requires a targeted status-note draft request (maximum 1000 characters).',
         ], 400);
       }
+      // The per-tenant brief switch comes from the stored report, before the
+      // draft context replaces it, and never from the request.
+      $noteBrief = $hasDraft && $this->attributeFillingService->isNoteBriefEnabled($node);
       if ($hasDraft) {
         $node = $this->attributeFillingService->prepareAssistDraft($node, $content['draft'], $requestedFields, $this->currentUser());
       }
-      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $hasDraft ? ($content['draft']->status_note ?? NULL) : NULL);
+      $draftNote = $hasDraft ? ($content['draft']->status_note ?? NULL) : NULL;
+      $noteMode = NULL;
+      if ($noteBrief && AttributeFillingService::isTargetedNoteDraft($requestedFields)) {
+        try {
+          $noteMode = $this->attributeFillingService->resolveNoteDraftMode($draftNote, $instruction, $content['note_origin'] ?? NULL);
+        }
+        catch (InvalidNoteOriginException) {
+          return new JsonResponse(['success' => FALSE, 'code' => 'invalid_request'], 400);
+        }
+      }
+      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote);
 
       if ($result === NULL) {
         return new JsonResponse([
@@ -382,11 +396,15 @@ final class AttributeController extends ControllerBase {
         ]);
       }
 
-      return new JsonResponse([
+      $response = [
         'success' => TRUE,
         'suggestions' => $result['suggestions'],
         'model' => $result['model'],
-      ]);
+      ];
+      if ($noteMode !== NULL) {
+        $response['mode'] = $noteMode;
+      }
+      return new JsonResponse($response);
     }
     catch (HttpExceptionInterface $e) {
       return new JsonResponse(['success' => FALSE, 'message' => $e->getMessage()], $e->getStatusCode());
