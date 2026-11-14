@@ -26,6 +26,7 @@ use Drupal\taxonomy\TermInterface;
 use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\AssertionFailedError;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\HttpFoundation\Request;
@@ -43,8 +44,10 @@ require_once dirname(__DIR__, 4) . '/markaspot_nuxt/src/Service/FeatureScopeReso
  * body are compared with fixtures recorded from the code before the
  * per-tenant brief switch existed, so "switch off" provably equals that code.
  *
- * Re-record (only when a deliberate change of the off state is approved):
- * MARKASPOT_AI_RECORD_ASSIST_FIXTURES=1.
+ * Re-record (only when a deliberate change of the off state is approved, and
+ * only from the code before the switch): MARKASPOT_AI_RECORD_ASSIST_FIXTURES=1
+ * with --filter testSwitchOffMatchesPinnedBaseline. A recording run fails on
+ * purpose; rerun without the flag.
  */
 #[Group('markaspot_ai')]
 final class AssistContractTest extends UnitTestCase {
@@ -104,6 +107,11 @@ final class AssistContractTest extends UnitTestCase {
   private bool $childOfRoot = FALSE;
 
   /**
+   * Directory of the recorded fixtures; a meta-test points it elsewhere.
+   */
+  private string $fixtureDir = '';
+
+  /**
    * Status notes already stored on the report.
    *
    * @var string[]
@@ -118,6 +126,7 @@ final class AssistContractTest extends UnitTestCase {
     $this->calls = [];
     $this->childOfRoot = FALSE;
     $this->storedNotes = [];
+    $this->fixtureDir = dirname(__DIR__, 2) . '/fixtures/assist';
     $this->groupConfigs = [
       self::JURISDICTION => ['features' => ['aiProcessing' => TRUE]],
       self::ROOT => NULL,
@@ -132,7 +141,7 @@ final class AssistContractTest extends UnitTestCase {
   public function testSwitchOffMatchesPinnedBaseline(string $case): void {
     [$body, $features, $reply] = self::cases()[$case];
     $this->groupConfigs[self::JURISDICTION] = $features === NULL ? NULL : ['features' => $features];
-    $this->assertMatchesBaseline($case, $this->assist($body, $reply));
+    $this->recordOrAssertBaseline($case, $this->assist($body, $reply));
   }
 
   /**
@@ -140,6 +149,41 @@ final class AssistContractTest extends UnitTestCase {
    */
   public static function baselineCases(): array {
     return array_map(static fn(string $case): array => [$case], array_combine(array_keys(self::cases()), array_keys(self::cases())));
+  }
+
+  /**
+   * A recording run never passes, and only the baseline test may record.
+   */
+  public function testRecordingModeNeverPasses(): void {
+    $this->fixtureDir = sys_get_temp_dir() . '/assist-fixtures-' . bin2hex(random_bytes(4));
+    mkdir($this->fixtureDir);
+    $previous = getenv('MARKASPOT_AI_RECORD_ASSIST_FIXTURES');
+    putenv('MARKASPOT_AI_RECORD_ASSIST_FIXTURES=1');
+    try {
+      $outcome = ['status' => 200, 'body' => '{}', 'calls' => []];
+      try {
+        $this->assertMatchesBaseline('compare_only', $outcome);
+        $this->fail('A compare-only assertion passed without a fixture.');
+      }
+      catch (AssertionFailedError $e) {
+        $this->assertStringNotContainsString('A compare-only assertion passed', $e->getMessage());
+      }
+      $this->assertFileDoesNotExist($this->fixturePath('compare_only'), 'Only the baseline test records.');
+
+      try {
+        $this->recordOrAssertBaseline('recorded', $outcome);
+        $this->fail('A recording run passed.');
+      }
+      catch (AssertionFailedError $e) {
+        $this->assertStringContainsString('rerun without', $e->getMessage());
+      }
+      $this->assertFileExists($this->fixturePath('recorded'));
+    }
+    finally {
+      putenv($previous === FALSE ? 'MARKASPOT_AI_RECORD_ASSIST_FIXTURES' : 'MARKASPOT_AI_RECORD_ASSIST_FIXTURES=' . $previous);
+      array_map('unlink', glob($this->fixtureDir . '/*.json') ?: []);
+      rmdir($this->fixtureDir);
+    }
   }
 
   /**
@@ -193,7 +237,7 @@ final class AssistContractTest extends UnitTestCase {
     [$body, , $reply] = self::cases()['note_receipt'];
     $outcome = $this->assist(self::withOrigin($body, $origin), $reply);
     $this->assertSame(200, $outcome['status']);
-    $this->assertSame(self::withMode('note_receipt', 'receipt'), $outcome['body']);
+    $this->assertSame($this->withMode('note_receipt', 'receipt'), $outcome['body']);
     $this->assertSame([], $outcome['calls']);
   }
 
@@ -248,14 +292,14 @@ final class AssistContractTest extends UnitTestCase {
     $this->enableBrief();
     [$body, , $reply] = self::cases()['note_text'];
     $outcome = $this->assist(self::withOrigin($body, $origin), $reply);
-    $fixture = self::fixture('note_text');
+    $fixture = $this->fixture('note_text');
     $this->assertSame(200, $outcome['status']);
-    $this->assertSame(self::withMode('note_text', 'rewrite'), $outcome['body']);
+    $this->assertSame($this->withMode('note_text', 'rewrite'), $outcome['body']);
     $this->assertSame(self::encode($fixture['calls']), self::encode($outcome['calls']), 'Rewrite prompt and options equal today.');
 
     [$body, , $reply] = self::cases()['note_unusable'];
     $this->calls = [];
-    $this->assertSame(self::withMode('note_unusable', 'rewrite'), $this->assist(self::withOrigin($body, $origin), $reply)['body']);
+    $this->assertSame($this->withMode('note_unusable', 'rewrite'), $this->assist(self::withOrigin($body, $origin), $reply)['body']);
   }
 
   /**
@@ -273,9 +317,9 @@ final class AssistContractTest extends UnitTestCase {
     [$body, , $reply] = self::cases()['note_text'];
     $outcome = $this->assist(self::withOrigin($body, 'manual'), $reply);
     $this->assertSame(200, $outcome['status']);
-    $this->assertSame(self::withMode('note_text', 'brief'), $outcome['body']);
+    $this->assertSame($this->withMode('note_text', 'brief'), $outcome['body']);
     $this->assertCount(1, $outcome['calls']);
-    $fixture = self::fixture('note_text')['calls'][0];
+    $fixture = $this->fixture('note_text')['calls'][0];
     $this->assertSame($fixture['options'], $outcome['calls'][0]['options']);
 
     // Exactly the two task sentences and the note label change.
@@ -345,7 +389,7 @@ final class AssistContractTest extends UnitTestCase {
     $this->enableBrief();
     [$body, , $reply] = self::cases()['note_refusal'];
     $outcome = $this->assist(self::withOrigin($body, 'manual'), $reply);
-    $this->assertSame(self::fixture('note_refusal')['body'], $outcome['body']);
+    $this->assertSame($this->fixture('note_refusal')['body'], $outcome['body']);
     $this->assertSame(200, $outcome['status']);
 
     // Draft validation keeps precedence over the origin check.
@@ -398,7 +442,7 @@ final class AssistContractTest extends UnitTestCase {
     foreach ([[], ['aiNoteBrief' => FALSE], ['aiProcessing' => FALSE]] as $child) {
       $this->groupConfigs[self::JURISDICTION] = ['features' => $child];
       $this->calls = [];
-      $this->assertSame(self::withMode('note_text', 'brief'), $this->assist($manual, $reply)['body']);
+      $this->assertSame($this->withMode('note_text', 'brief'), $this->assist($manual, $reply)['body']);
     }
 
     // A child opt-in without the root stays off.
@@ -449,7 +493,7 @@ final class AssistContractTest extends UnitTestCase {
     $this->groupConfigs[self::FOREIGN] = ['features' => ['aiProcessing' => TRUE]];
     $this->calls = [];
     $outcome = $this->assist($request, $reply, query: '?jurisdiction_id=' . self::FOREIGN);
-    $this->assertSame(self::withMode('note_text', 'brief'), $outcome['body']);
+    $this->assertSame($this->withMode('note_text', 'brief'), $outcome['body']);
   }
 
   /**
@@ -459,7 +503,7 @@ final class AssistContractTest extends UnitTestCase {
     $this->enableBrief();
     [$body, , $reply] = self::cases()['field_check'];
     $outcome = $this->assist($body, $reply);
-    $fixture = self::fixture('field_check');
+    $fixture = $this->fixture('field_check');
 
     $this->assertSame(200, $outcome['status']);
     $data = json_decode($outcome['body'], TRUE);
@@ -559,7 +603,7 @@ final class AssistContractTest extends UnitTestCase {
     $this->enableBrief();
     [$body, , $reply] = self::cases()['field_check_invalid_json'];
     $outcome = $this->assist($body, $reply);
-    $this->assertSame(self::fixture('field_check_invalid_json')['body'], $outcome['body']);
+    $this->assertSame($this->fixture('field_check_invalid_json')['body'], $outcome['body']);
     $this->assertSame(200, $outcome['status']);
   }
 
@@ -573,16 +617,16 @@ final class AssistContractTest extends UnitTestCase {
   /**
    * A recorded success body with "mode" appended as its last key.
    */
-  private static function withMode(string $case, string $mode): string {
-    $body = self::fixture($case)['body'];
+  private function withMode(string $case, string $mode): string {
+    $body = $this->fixture($case)['body'];
     return substr($body, 0, -1) . ',"mode":"' . $mode . '"}';
   }
 
   /**
    * Loads a recorded fixture.
    */
-  private static function fixture(string $case): array {
-    return json_decode((string) file_get_contents(self::fixturePath($case)), TRUE, 512, JSON_THROW_ON_ERROR);
+  private function fixture(string $case): array {
+    return json_decode((string) file_get_contents($this->fixturePath($case)), TRUE, 512, JSON_THROW_ON_ERROR);
   }
 
   /**
@@ -683,20 +727,30 @@ final class AssistContractTest extends UnitTestCase {
    * Compares an outcome with its fixture, recording it on request.
    */
   private function assertMatchesBaseline(string $case, array $outcome): void {
-    $file = self::fixturePath($case);
-    $encoded = self::encode($outcome);
-    if (getenv('MARKASPOT_AI_RECORD_ASSIST_FIXTURES') === '1') {
-      file_put_contents($file, $encoded);
-    }
+    $file = $this->fixturePath($case);
     $this->assertFileExists($file, "Missing baseline fixture for $case.");
-    $this->assertSame(file_get_contents($file), $encoded, "Off-state contract changed for $case.");
+    $this->assertSame(file_get_contents($file), self::encode($outcome), "Off-state contract changed for $case.");
+  }
+
+  /**
+   * Records an off-state fixture on request, otherwise compares with it.
+   *
+   * Only the off-state baseline test calls this. A recording run writes the
+   * fixture and then fails, so it can never count as green.
+   */
+  private function recordOrAssertBaseline(string $case, array $outcome): void {
+    if (getenv('MARKASPOT_AI_RECORD_ASSIST_FIXTURES') === '1') {
+      file_put_contents($this->fixturePath($case), self::encode($outcome));
+      $this->fail("Fixture $case recorded; rerun without MARKASPOT_AI_RECORD_ASSIST_FIXTURES.");
+    }
+    $this->assertMatchesBaseline($case, $outcome);
   }
 
   /**
    * Path of a recorded fixture.
    */
-  private static function fixturePath(string $case): string {
-    return dirname(__DIR__, 2) . '/fixtures/assist/' . $case . '.json';
+  private function fixturePath(string $case): string {
+    return $this->fixtureDir . '/' . $case . '.json';
   }
 
   /**
