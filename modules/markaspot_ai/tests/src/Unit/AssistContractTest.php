@@ -114,6 +114,28 @@ final class AssistContractTest extends UnitTestCase {
   private array $report = [];
 
   /**
+   * Whether the stored report names its jurisdiction directly.
+   *
+   * Without it the jurisdiction falls back to the stored category's.
+   */
+  private bool $jurisdictionField = TRUE;
+
+  /**
+   * Whether the current user passes the controller's role check.
+   */
+  private bool $userAllowed = TRUE;
+
+  /**
+   * Whether the current user may update the report.
+   */
+  private bool $updateAllowed = TRUE;
+
+  /**
+   * The term a draft category or status reference resolves to.
+   */
+  private ?TermInterface $draftTerm = NULL;
+
+  /**
    * Boundary tokens the assistant draws, in order; random when exhausted.
    *
    * @var string[]
@@ -152,6 +174,10 @@ final class AssistContractTest extends UnitTestCase {
       'attributes' => '{"lamp_type":"led"}',
       'history' => '[2026-11-10] Received: Thank you, we have received your report.',
     ];
+    $this->jurisdictionField = TRUE;
+    $this->userAllowed = TRUE;
+    $this->updateAllowed = TRUE;
+    $this->draftTerm = NULL;
     $this->fixtureDir = dirname(__DIR__, 2) . '/fixtures/assist';
     $this->groupConfigs = [
       self::JURISDICTION => ['features' => ['aiProcessing' => TRUE]],
@@ -745,6 +771,133 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
+   * A draft category of another jurisdiction never decides the switch.
+   *
+   * The stored report names no jurisdiction directly, so it resolves through
+   * the stored category; the draft points at a category of a jurisdiction
+   * with the switch on.
+   */
+  public function testDraftCategoryOfAnotherJurisdictionIsIgnored(): void {
+    $this->jurisdictionField = FALSE;
+    $this->draftTerm = $this->category('Foreign category', self::FOREIGN, 900);
+    [$body, , $reply] = self::cases()['note_text'];
+    $body['draft']['category_id'] = '00000000-0000-4000-8000-000000000099';
+    $request = self::withOrigin($body, 'manual');
+
+    // Report tenant off, draft category's tenant on: off-state answer.
+    $outcome = $this->assist($request, $reply);
+    $this->assertSame($this->fixture('note_text')['body'], $outcome['body']);
+    $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']));
+    $this->assertStringContainsString('Category: Foreign category', $outcome['calls'][0]['messages'][1]['content'][0]['text'], 'The draft category reached the context.');
+
+    // Report tenant on, draft category's tenant off: brief.
+    $this->enableBrief();
+    $this->groupConfigs[self::FOREIGN] = ['features' => ['aiProcessing' => TRUE]];
+    $this->calls = [];
+    $this->assertSame($this->withMode('note_text', 'brief'), $this->assist($request, $reply)['body']);
+  }
+
+  /**
+   * Switch on: status_note plus another field is a field check.
+   */
+  #[DataProvider('anyOrigin')]
+  public function testSwitchOnMixedDraftIsFieldCheck(mixed $origin): void {
+    $this->enableBrief();
+    $request = self::withOrigin([
+      'nid' => self::NID,
+      'langcode' => 'en',
+      'fields' => ['status_note', 'body'],
+      'draft' => ['status_note' => 'tell them we forwarded it', 'body' => 'Dark lamp, cables hang down.'],
+    ], $origin);
+    $reply = '{"status_note":"We forwarded it.","body":"The lamp head hangs loose.","reasons":{"body":"Photo 1 shows it.","status_note":"Not a field reason."}}';
+    $outcome = $this->assist($request, $reply);
+
+    $this->assertSame(200, $outcome['status']);
+    $data = json_decode($outcome['body'], TRUE);
+    $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data));
+    $this->assertSame(['body' => 'Photo 1 shows it.'], $data['reasons']);
+    $this->assertStringContainsString('For every suggested value add a reason', $outcome['calls'][0]['messages'][0]['content']);
+    $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']));
+  }
+
+  /**
+   * Switch on: malformed or oversized input keeps today's 400, never a 500.
+   */
+  #[DataProvider('boundaryInputs')]
+  public function testSwitchOnInputBoundariesKeepTodaysErrors(array $override, string $message): void {
+    [$body, , $reply] = self::cases()['note_text'];
+    $request = array_replace_recursive(self::withOrigin($body, 'manual'), $override);
+    if (array_key_exists('instruction', $override)) {
+      $request['instruction'] = $override['instruction'];
+    }
+    if (array_key_exists('draft', $override) && array_key_exists('status_note', $override['draft'])) {
+      $request['draft']['status_note'] = $override['draft']['status_note'];
+    }
+    $off = $this->assist($request, $reply);
+    $this->enableBrief();
+    $this->calls = [];
+    $on = $this->assist($request, $reply);
+    $this->assertSame(400, $on['status']);
+    $this->assertSame(json_encode(['success' => FALSE, 'message' => $message]), $on['body']);
+    $this->assertSame([$off['status'], $off['body']], [$on['status'], $on['body']]);
+    $this->assertSame([], $on['calls']);
+  }
+
+  /**
+   * Inputs outside the accepted types and sizes.
+   */
+  public static function boundaryInputs(): array {
+    $draftText = 'Draft text must be a string of at most 10000 characters.';
+    $instruction = 'Instruction requires a targeted status-note draft request (maximum 1000 characters).';
+    return [
+      'note as list' => [['draft' => ['status_note' => ['tell them']]], $draftText],
+      'note as number' => [['draft' => ['status_note' => 5]], $draftText],
+      'note 10001 characters' => [['draft' => ['status_note' => str_repeat('ä', 10001)]], $draftText],
+      'instruction as number' => [['instruction' => 42], $instruction],
+      'instruction as list' => [['instruction' => ['ask']], $instruction],
+      'instruction 1001 characters' => [['instruction' => str_repeat('a', 1001)], $instruction],
+      'request over 64 KiB' => [['note_origin' => str_repeat('m', 70000)], 'Request is too large.'],
+    ];
+  }
+
+  /**
+   * Access is refused before the origin is looked at, as today.
+   */
+  public function testAccessRefusedBeforeOriginValidation(): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['note_text'];
+    foreach (['typed', NULL, self::ABSENT] as $origin) {
+      $this->userAllowed = FALSE;
+      $this->updateAllowed = TRUE;
+      $denied = $this->assist(self::withOrigin($body, $origin), $reply);
+      $this->assertSame(
+        [403, '{"success":false,"message":"Access denied."}', []],
+        [$denied['status'], $denied['body'], $denied['calls']],
+      );
+
+      $this->userAllowed = TRUE;
+      $this->updateAllowed = FALSE;
+      $denied = $this->assist(self::withOrigin($body, $origin), $reply);
+      $this->assertSame(
+        [403, '{"success":false,"message":"Access denied."}', []],
+        [$denied['status'], $denied['body'], $denied['calls']],
+      );
+    }
+  }
+
+  /**
+   * A provider error on the legacy path equals the recorded one, either way.
+   */
+  public function testLegacyProviderErrorIgnoresSwitch(): void {
+    foreach ([TRUE, FALSE] as $enabled) {
+      [$body, , $reply] = self::cases()['legacy_refusal'];
+      $this->groupConfigs[self::JURISDICTION] = ['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => $enabled]];
+      $this->calls = [];
+      $this->assertMatchesBaseline('legacy_refusal', $this->assist(self::withOrigin($body, 'manual'), $reply));
+    }
+  }
+
+  /**
    * Switches the report's tenant to the brief.
    */
   private function enableBrief(): void {
@@ -810,6 +963,11 @@ final class AssistContractTest extends UnitTestCase {
         'langcode' => 'en',
         'fields' => ['status_note', 'priority'],
       ], $on, self::LEGACY_REPLY],
+      'legacy_refusal' => [[
+        'nid' => self::NID,
+        'langcode' => 'en',
+        'fields' => ['status_note', 'priority'],
+      ], $on, ''],
       'error_draft_key' => [
         ['draft' => ['contact_email' => 'private@example.test']] + $note('x'),
         $on,
@@ -911,6 +1069,7 @@ final class AssistContractTest extends UnitTestCase {
         'getJurisdictionPrompt',
         'buildStatusOptions',
         'loadStatusOptions',
+        'loadAssistDraftTerm',
         'parseServiceDefinition',
       ])
       ->getMock();
@@ -925,6 +1084,7 @@ final class AssistContractTest extends UnitTestCase {
     $status = $this->createMock(TermInterface::class);
     $status->method('uuid')->willReturn('status-in-progress');
     $service->method('loadStatusOptions')->willReturn([$status]);
+    $service->method('loadAssistDraftTerm')->willReturnCallback(fn(): TermInterface => $this->draftTerm ?? throw new \LogicException('No draft term configured.'));
     $service->method('parseServiceDefinition')->willReturn([
       [
         'code' => 'lamp_type',
@@ -984,7 +1144,7 @@ final class AssistContractTest extends UnitTestCase {
     );
 
     $user = $this->createMock(AccountProxyInterface::class);
-    $user->method('hasPermission')->willReturn(TRUE);
+    $user->method('hasPermission')->willReturnCallback(fn(): bool => $this->userAllowed);
     $user->method('getRoles')->willReturn(['authenticated']);
     $user->method('id')->willReturn(7);
     $loggers = $this->createMock(LoggerChannelFactoryInterface::class);
@@ -1018,9 +1178,7 @@ final class AssistContractTest extends UnitTestCase {
    * Builds the persisted report; it must never be saved.
    */
   private function node(): NodeInterface {
-    $category = $this->createMock(TermInterface::class);
-    $category->method('hasTranslation')->willReturn(FALSE);
-    $category->method('label')->willReturn('Streetlight');
+    $category = $this->category('Streetlight', self::JURISDICTION);
     $status = $this->createMock(TermInterface::class);
     $status->method('label')->willReturn('In progress');
     $status->method('uuid')->willReturn('status-in-progress');
@@ -1037,15 +1195,38 @@ final class AssistContractTest extends UnitTestCase {
       'field_internal_remark' => $this->field(['value' => 'Crew assigned internally.']),
       'field_jurisdiction' => $this->field(['target_id' => self::JURISDICTION]),
     ];
+    if (!$this->jurisdictionField) {
+      unset($fields['field_jurisdiction']);
+    }
     // Values written by the draft overlay replace the field on the clone.
     $factory = fn(string $name, mixed $value): FieldItemListInterface => match (TRUE) {
       $value === NULL => $this->field([]),
       is_array($value) && array_key_exists('value', $value) => $this->field(['value' => $value['value']]),
-      is_array($value) && array_key_exists('target_id', $value) => $this->field(['target_id' => $value['target_id']]),
+      is_array($value) && array_key_exists('target_id', $value) => $this->field([
+        'target_id' => $value['target_id'],
+        'entity' => $this->draftTerm !== NULL && (string) $this->draftTerm->id() === (string) $value['target_id'] ? $this->draftTerm : NULL,
+      ]),
       is_array($value) => $this->field(['references' => []]),
       default => $this->field(['value' => $value]),
     };
-    return $this->storedNode = AssistNodeDouble::build(self::NID, $this->report['title'], $fields, $factory);
+    $node = AssistNodeDouble::build(self::NID, $this->report['title'], $fields, $factory);
+    if (!$this->updateAllowed) {
+      $node->denyUpdate();
+    }
+    return $this->storedNode = $node;
+  }
+
+  /**
+   * A category term of a jurisdiction.
+   */
+  private function category(string $label, int $jurisdiction, int $id = 500): TermInterface {
+    $term = $this->createMock(TermInterface::class);
+    $term->method('id')->willReturn($id);
+    $term->method('hasTranslation')->willReturn(FALSE);
+    $term->method('label')->willReturn($label);
+    $term->method('hasField')->willReturnCallback(static fn(string $name): bool => $name === 'field_jurisdiction');
+    $term->method('get')->willReturn($this->field(['target_id' => $jurisdiction]));
+    return $term;
   }
 
   /**

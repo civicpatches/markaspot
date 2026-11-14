@@ -42,6 +42,18 @@ final class AssistNodeDouble extends Node {
   private string $doubleLabel = '';
 
   /**
+   * Whether the current user may update the report.
+   */
+  private bool $doubleUpdateAccess = TRUE;
+
+  /**
+   * Denies update access, as for a user outside the report's scope.
+   */
+  public function denyUpdate(): void {
+    $this->doubleUpdateAccess = FALSE;
+  }
+
+  /**
    * Builds a stored report.
    *
    * @param int $id
@@ -87,7 +99,7 @@ final class AssistNodeDouble extends Node {
    * {@inheritdoc}
    */
   public function access($operation = 'view', ?AccountInterface $account = NULL, $return_as_object = FALSE) {
-    return TRUE;
+    return $operation !== 'update' || $this->doubleUpdateAccess;
   }
 
   /**
