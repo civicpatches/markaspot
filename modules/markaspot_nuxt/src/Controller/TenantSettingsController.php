@@ -89,6 +89,16 @@ final class TenantSettingsController extends ControllerBase {
   ];
 
   /**
+   * Simple flags written only as a JSON boolean, without a legacy object form.
+   *
+   * Newer flags never had the {enabled: bool} shape, so a write rejects it
+   * instead of normalising it. Reading a stored value stays lenient.
+   */
+  const STRICT_BOOLEAN_FEATURE_FLAGS = [
+    'aiNoteBrief',
+  ];
+
+  /**
    * Feature flags that hold a nested object with an 'enabled' boolean.
    *
    * Used to validate incoming PATCH data for the features endpoint.
@@ -2460,6 +2470,12 @@ final class TenantSettingsController extends ControllerBase {
         if (($data[$tier_key] ?? NULL) === TRUE || (is_array($data[$tier_key] ?? NULL) && ($data[$tier_key]['enabled'] ?? NULL) === TRUE)) {
           $data[$tier_key] = FALSE;
         }
+      }
+    }
+
+    foreach (self::STRICT_BOOLEAN_FEATURE_FLAGS as $flag) {
+      if (array_key_exists($flag, $data) && !is_bool($data[$flag])) {
+        return new JsonResponse(['error' => "$flag must be a boolean."], 422);
       }
     }
 

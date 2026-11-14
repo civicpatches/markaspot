@@ -3285,9 +3285,13 @@ class TenantSettingsControllerTest extends UnitTestCase {
       ['CONTENT_TYPE' => 'application/json'],
       json_encode(['aiNoteBrief' => $value]),
     );
-    $rejected = $this->controller->updateFeatureSettings($patch('yes'), '14');
-    $this->assertSame(422, $rejected->getStatusCode());
-    $this->assertFalse(array_key_exists('aiNoteBrief', json_decode($storedNuxtConfig, TRUE)['features']));
+    // Only a JSON boolean is accepted on write, no legacy object form.
+    foreach (['yes', 1, NULL, ['enabled' => TRUE], ['enabled' => FALSE], []] as $invalid) {
+      $rejected = $this->controller->updateFeatureSettings($patch($invalid), '14');
+      $this->assertSame(422, $rejected->getStatusCode(), json_encode($invalid));
+      $this->assertSame(['error' => 'aiNoteBrief must be a boolean.'], json_decode($rejected->getContent(), TRUE));
+      $this->assertFalse(array_key_exists('aiNoteBrief', json_decode($storedNuxtConfig, TRUE)['features']));
+    }
 
     $patchResponse = $this->controller->updateFeatureSettings($patch(TRUE), '14');
     $patchData = json_decode($patchResponse->getContent(), TRUE);
@@ -3303,7 +3307,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
    * The note brief switch is stored even while aiProcessing is off.
    *
    * The assist endpoint combines both; the settings page only disables the
-   * switch in that state. The object form is healed to a plain boolean.
+   * switch in that state.
    *
    * @covers ::updateFeatureSettings
    */
@@ -3319,7 +3323,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
       [],
       [],
       ['CONTENT_TYPE' => 'application/json'],
-      json_encode(['aiProcessing' => FALSE, 'aiNoteBrief' => ['enabled' => TRUE]]),
+      json_encode(['aiProcessing' => FALSE, 'aiNoteBrief' => TRUE]),
     );
 
     $response = $this->controller->updateFeatureSettings($request, '14');
