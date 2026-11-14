@@ -1,0 +1,5 @@
+{
+    "status": 200,
+    "body": "{\"success\":true,\"suggestions\":{\"status_note\":\"Thank you for your report. We have received your message.\",\"status_term_id\":\"status-in-progress\"},\"model\":\"receipt-template\"}",
+    "calls": []
+}

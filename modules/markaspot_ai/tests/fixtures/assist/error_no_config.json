@@ -1,0 +1,5 @@
+{
+    "status": 403,
+    "body": "{\"success\":false,\"message\":\"AI processing is disabled for this jurisdiction.\"}",
+    "calls": []
+}
