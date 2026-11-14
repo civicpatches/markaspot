@@ -389,7 +389,7 @@ final class AttributeController extends ControllerBase {
       }
       // Field check with the switch on: every success carries "reasons".
       $fieldReasons = $noteBrief && !AttributeFillingService::isTargetedNoteDraft($requestedFields);
-      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote, $fieldReasons);
+      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote, $fieldReasons, $noteMode === AttributeFillingService::NOTE_MODE_BRIEF);
 
       if ($result === NULL) {
         return new JsonResponse([
