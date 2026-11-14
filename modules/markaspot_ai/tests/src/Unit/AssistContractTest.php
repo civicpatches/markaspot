@@ -107,6 +107,11 @@ final class AssistContractTest extends UnitTestCase {
   private bool $childOfRoot = FALSE;
 
   /**
+   * The stored report of the last request.
+   */
+  private ?NodeInterface $storedNode = NULL;
+
+  /**
    * Directory of the recorded fixtures; a meta-test points it elsewhere.
    */
   private string $fixtureDir = '';
@@ -149,6 +154,23 @@ final class AssistContractTest extends UnitTestCase {
    */
   public static function baselineCases(): array {
     return array_map(static fn(string $case): array => [$case], array_combine(array_keys(self::cases()), array_keys(self::cases())));
+  }
+
+  /**
+   * The draft overlay reaches the provider; the stored report stays as is.
+   */
+  public function testDraftValuesReachProviderAndStoredReportIsUntouched(): void {
+    [$body, , $reply] = self::cases()['field_check'];
+    $outcome = $this->assist($body, $reply);
+    $user = $outcome['calls'][0]['messages'][1]['content'][0]['text'];
+    $this->assertStringContainsString('The lamp in front of number 12 is dark, cables hang down.', $user);
+    $this->assertStringNotContainsString('has been dark since Monday', $user);
+    $this->assertStringContainsString('Existing attribute values (citizen-submitted): {"lamp_type":"led"}', $user);
+    $this->assertSame('The lamp in front of number 12 has been dark since Monday.', $this->storedNode->get('body')->value);
+
+    // The suggested body equals the draft body: filtered as unchanged.
+    $outcome = $this->assist($body, '{"body":"The lamp in front of number 12 is dark, cables hang down.","priority":true}');
+    $this->assertSame(['priority' => TRUE], json_decode($outcome['body'], TRUE)['suggestions']);
   }
 
   /**
@@ -586,7 +608,7 @@ final class AssistContractTest extends UnitTestCase {
         $with(
           ['body' => 'Same text.', 'priority' => 'Not urgent.', 'attributes.lamp_type' => 'Still LED.'],
           [
-            'body' => 'The lamp in front of number 12 has been dark since Monday.',
+            'body' => 'The lamp in front of number 12 is dark, cables hang down.',
             'priority' => FALSE,
             'attributes' => ['lamp_type' => 'led'],
           ],
@@ -898,15 +920,15 @@ final class AssistContractTest extends UnitTestCase {
       'field_internal_remark' => $this->field(['value' => 'Crew assigned internally.']),
       'field_jurisdiction' => $this->field(['target_id' => self::JURISDICTION]),
     ];
-    $node = $this->createMock(NodeInterface::class);
-    $node->method('id')->willReturn(self::NID);
-    $node->method('bundle')->willReturn('service_request');
-    $node->method('label')->willReturn('Streetlight out at Elm Street');
-    $node->method('access')->willReturn(TRUE);
-    $node->method('hasField')->willReturnCallback(static fn(string $name): bool => isset($fields[$name]));
-    $node->method('get')->willReturnCallback(static fn(string $name) => $fields[$name]);
-    $node->expects($this->never())->method('save');
-    return $node;
+    // Values written by the draft overlay replace the field on the clone.
+    $factory = fn(string $name, mixed $value): FieldItemListInterface => match (TRUE) {
+      $value === NULL => $this->field([]),
+      is_array($value) && array_key_exists('value', $value) => $this->field(['value' => $value['value']]),
+      is_array($value) && array_key_exists('target_id', $value) => $this->field(['target_id' => $value['target_id']]),
+      is_array($value) => $this->field(['references' => []]),
+      default => $this->field(['value' => $value]),
+    };
+    return $this->storedNode = AssistNodeDouble::build(self::NID, 'Streetlight out at Elm Street', $fields, $factory);
   }
 
   /**
