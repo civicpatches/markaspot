@@ -353,6 +353,117 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
+   * Switch on: the field check asks for reasons and returns valid ones.
+   */
+  public function testSwitchOnFieldCheckReturnsReasons(): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['field_check'];
+    $outcome = $this->assist($body, $reply);
+    $fixture = self::fixture('field_check');
+
+    $this->assertSame(200, $outcome['status']);
+    $data = json_decode($outcome['body'], TRUE);
+    $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data));
+    $this->assertSame(json_decode($fixture['body'], TRUE)['suggestions'], $data['suggestions']);
+    // "pole" has no reason: the entry is omitted, never generated.
+    $this->assertSame([
+      'body' => 'Photo 1 shows the loose lamp head.',
+      'priority' => 'Citizen writes "cables hang down".',
+      'attributes.lamp_type' => 'The photo shows an orange sodium lamp.',
+    ], $data['reasons']);
+
+    // Only the reasons line is added; user message and options stay today's.
+    $line = '- For every suggested value add a reason in `reasons` (`body`, `priority`, `attributes.<code>`): '
+      . 'one sentence of at most 160 characters in English, naming what in the report, an attribute or a photo it rests on. '
+      . 'Put citizen words in quotation marks. Never describe persons, never state an inspection, repair, forwarding, date or completion.';
+    $system = $outcome['calls'][0]['messages'][0]['content'];
+    $this->assertSame(1, substr_count($system, $line));
+    $this->assertSame($fixture['calls'][0]['messages'][0]['content'], str_replace("\n" . $line, '', $system));
+    $this->assertSame($fixture['calls'][0]['messages'][1], $outcome['calls'][0]['messages'][1]);
+    $this->assertSame($fixture['calls'][0]['options'], $outcome['calls'][0]['options']);
+  }
+
+  /**
+   * Switch on: invalid or unretained reasons are omitted; empty is an object.
+   */
+  #[DataProvider('reasonCases')]
+  public function testSwitchOnReasonValidation(array $reply, array $expected): void {
+    $this->enableBrief();
+    [$body] = self::cases()['field_check'];
+    $outcome = $this->assist($body, json_encode($reply, JSON_THROW_ON_ERROR));
+    $this->assertSame(200, $outcome['status']);
+    $data = json_decode($outcome['body'], TRUE);
+    $this->assertSame($expected, $data['reasons']);
+    if ($expected === []) {
+      $this->assertStringEndsWith('"reasons":{}}', $outcome['body']);
+    }
+  }
+
+  /**
+   * Model replies and the reasons they must yield.
+   */
+  public static function reasonCases(): array {
+    $suggest = [
+      'body' => 'The lamp head hangs loose.',
+      'priority' => TRUE,
+      'attributes' => ['lamp_type' => 'sodium'],
+    ];
+    $with = static fn(array $reasons, array $suggestions = []): array => ($suggestions ?: $suggest) + ['reasons' => $reasons];
+    return [
+      'no reasons member' => [$suggest, []],
+      'reasons not an object' => [['reasons' => 'because'] + $suggest, []],
+      'reasons a list' => [['reasons' => ['first', 'second']] + $suggest, []],
+      'markup stripped' => [$with(['body' => '<b>Blocked access</b>']), ['body' => 'Blocked access']],
+      'trimmed' => [$with(['priority' => "  Citizen writes \"dark\".\n"]), ['priority' => 'Citizen writes "dark".']],
+      'empty' => [$with(['body' => '']), []],
+      'whitespace' => [$with(['body' => " \n\t "]), []],
+      'markup only' => [$with(['body' => '<b></b><br/>']), []],
+      '160 characters' => [$with(['body' => str_repeat('ä', 160)]), ['body' => str_repeat('ä', 160)]],
+      '161 characters' => [$with(['body' => str_repeat('ä', 161)]), []],
+      '161 after stripping' => [$with(['body' => '<i>' . str_repeat('a', 161) . '</i>']), []],
+      '160 after stripping' => [
+        $with(['body' => '<i>' . str_repeat('a', 160) . '</i>']),
+        ['body' => str_repeat('a', 160)],
+      ],
+      'number' => [$with(['priority' => 5]), []],
+      'list' => [$with(['priority' => ['urgent']]), []],
+      'null' => [$with(['body' => NULL]), []],
+      'nested attributes ignored' => [$with(['attributes' => ['lamp_type' => 'Orange light.']]), []],
+      'unknown keys dropped' => [
+        $with([
+          'organisation' => 'Roads.',
+          'status_note' => 'Note.',
+          'attributes.pole' => 'Wood.',
+          'attributes.lamp_type' => 'Orange light.',
+        ]),
+        ['attributes.lamp_type' => 'Orange light.'],
+      ],
+      'unchanged suggestions carry no reason' => [
+        $with(
+          ['body' => 'Same text.', 'priority' => 'Not urgent.', 'attributes.lamp_type' => 'Still LED.'],
+          [
+            'body' => 'The lamp in front of number 12 has been dark since Monday.',
+            'priority' => FALSE,
+            'attributes' => ['lamp_type' => 'led'],
+          ],
+        ),
+        [],
+      ],
+    ];
+  }
+
+  /**
+   * Switch on: failures keep today's error contract, without reasons.
+   */
+  public function testSwitchOnFieldCheckErrorsCarryNoReasons(): void {
+    $this->enableBrief();
+    [$body, , $reply] = self::cases()['field_check_invalid_json'];
+    $outcome = $this->assist($body, $reply);
+    $this->assertSame(self::fixture('field_check_invalid_json')['body'], $outcome['body']);
+    $this->assertSame(200, $outcome['status']);
+  }
+
+  /**
    * Switches the report's tenant to the brief.
    */
   private function enableBrief(): void {

@@ -387,7 +387,9 @@ final class AttributeController extends ControllerBase {
           return new JsonResponse(['success' => FALSE, 'code' => 'invalid_request'], 400);
         }
       }
-      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote);
+      // Field check with the switch on: every success carries "reasons".
+      $fieldReasons = $noteBrief && !AttributeFillingService::isTargetedNoteDraft($requestedFields);
+      $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote, $fieldReasons);
 
       if ($result === NULL) {
         return new JsonResponse([
@@ -403,6 +405,10 @@ final class AttributeController extends ControllerBase {
       ];
       if ($noteMode !== NULL) {
         $response['mode'] = $noteMode;
+      }
+      if ($fieldReasons) {
+        // An object even when empty: "reasons": {}, never [].
+        $response['reasons'] = (object) ($result['reasons'] ?? []);
       }
       return new JsonResponse($response);
     }

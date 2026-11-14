@@ -1312,13 +1312,18 @@ class AttributeFillingService {
    *   Optional operator instruction for a targeted status note.
    * @param string|null $draftStatusNote
    *   Existing unsaved status note text.
+   * @param bool $fieldReasons
+   *   Field check with the brief switch on: ask for and return a reason per
+   *   retained suggestion. Ignored for the targeted note draft and without
+   *   draft context.
    *
    * @return array|null
    *   Array with 'suggestions' and 'model' keys, or NULL on failure.
    *   suggestions: { body?, attributes?, organisation?,
-   *   status_note?, priority? }
+   *   status_note?, priority? }. With $fieldReasons also 'reasons' (flat
+   *   keys body, priority, attributes.<code>; possibly empty).
    */
-  public function assistForm(NodeInterface $node, array $requestedFields, ?string $langcode = NULL, bool $draftMode = FALSE, ?string $instruction = NULL, ?string $draftStatusNote = NULL): ?array {
+  public function assistForm(NodeInterface $node, array $requestedFields, ?string $langcode = NULL, bool $draftMode = FALSE, ?string $instruction = NULL, ?string $draftStatusNote = NULL, bool $fieldReasons = FALSE): ?array {
     $nid = (int) $node->id();
     $isReplyDraft = $draftMode && self::isTargetedNoteDraft($requestedFields);
 
@@ -1500,6 +1505,13 @@ class AttributeFillingService {
       return NULL;
     }
 
+    $withReasons = $fieldReasons && $draftMode && !$isReplyDraft;
+    if ($withReasons) {
+      $fieldInstructions[] = 'For every suggested value add a reason in `reasons` (`body`, `priority`, `attributes.<code>`): '
+        . "one sentence of at most 160 characters in {$languageName}, naming what in the report, an attribute or a photo it rests on. "
+        . 'Put citizen words in quotation marks. Never describe persons, never state an inspection, repair, forwarding, date or completion.';
+    }
+
     $systemPrompt .= "\nRespond with a JSON object containing these fields:\n"
       . implode("\n", array_map(fn($i) => "- {$i}", $fieldInstructions));
 
@@ -1645,10 +1657,14 @@ class AttributeFillingService {
         '@model' => $model,
       ]);
 
-      return [
+      $result = [
         'suggestions' => $suggestions,
         'model' => $model,
       ];
+      if ($withReasons) {
+        $result['reasons'] = $this->validateAssistReasons($parsed['reasons'] ?? NULL, $suggestions);
+      }
+      return $result;
     }
     catch (\Exception $e) {
       $this->logger->error('AI form assist failed for node @nid: @message', [
@@ -1740,6 +1756,52 @@ class AttributeFillingService {
       }
     }
     return $suggestions;
+  }
+
+  /**
+   * Keeps the model's reasons for retained field suggestions only.
+   *
+   * Flat keys body, priority and attributes.<code>, each only when that
+   * suggestion survived validation and the unchanged-value filter. Reasons
+   * are plain text: tags are stripped and whitespace trimmed before the
+   * length check (1 to 160 characters); anything else is omitted, never
+   * replaced.
+   *
+   * @param mixed $reasons
+   *   The "reasons" member of the parsed model response.
+   * @param array $suggestions
+   *   The validated suggestions that are returned to the client.
+   *
+   * @return array<string, string>
+   *   Valid reasons keyed by suggestion key.
+   */
+  protected function validateAssistReasons(mixed $reasons, array $suggestions): array {
+    if (!is_array($reasons)) {
+      return [];
+    }
+    $keys = [];
+    if (isset($suggestions['body'])) {
+      $keys[] = 'body';
+    }
+    if (array_key_exists('priority', $suggestions)) {
+      $keys[] = 'priority';
+    }
+    foreach (array_keys($suggestions['attributes'] ?? []) as $code) {
+      $keys[] = 'attributes.' . $code;
+    }
+    $valid = [];
+    foreach ($keys as $key) {
+      $reason = $reasons[$key] ?? NULL;
+      if (!is_string($reason)) {
+        continue;
+      }
+      $reason = trim(strip_tags($reason));
+      $length = mb_strlen($reason);
+      if ($length >= 1 && $length <= 160) {
+        $valid[$key] = $reason;
+      }
+    }
+    return $valid;
   }
 
   /**
