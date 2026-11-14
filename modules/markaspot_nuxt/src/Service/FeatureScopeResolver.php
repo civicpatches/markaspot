@@ -28,6 +28,10 @@ class FeatureScopeResolver {
     'privacyNotice' => 'platform',
     'aiAnalysis' => 'tenant',
     'aiProcessing' => 'tenant',
+    // Typed status-note text is the operator's brief for the AI draft. One
+    // value at the root decides for the whole tenant; effective only together
+    // with aiProcessing.
+    'aiNoteBrief' => 'tenant',
     'operationsDashboard' => 'tenant',
     'assignmentSyncsOrganisation' => 'tenant',
     'personalAssignment' => 'tenant',
@@ -95,6 +99,8 @@ class FeatureScopeResolver {
     // flag. Costs are capped by the markaspot_ai budgets, not by this flag.
     'aiAnalysis' => TRUE,
     'aiProcessing' => FALSE,
+    // Off: the note draft only rewords typed text, as before the switch.
+    'aiNoteBrief' => FALSE,
     'operationsDashboard' => FALSE,
     'assignmentSyncsOrganisation' => FALSE,
     // Opt-in per tenant: person assignment is off until a tenant switches it

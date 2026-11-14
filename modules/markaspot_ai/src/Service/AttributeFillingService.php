@@ -1193,6 +1193,19 @@ class AttributeFillingService {
   }
 
   /**
+   * Resolves the per-tenant note brief switch for a stored report.
+   *
+   * Reads the persisted report's jurisdiction (tenant root value), never the
+   * request or an unsaved draft, and is effective only while the tenant has
+   * AI text processing switched on. Callers resolve it before applying draft
+   * context, because a draft category may point at another jurisdiction.
+   */
+  public function isNoteBriefEnabled(NodeInterface $node): bool {
+    return _markaspot_ai_is_ai_enabled_for_node($node)
+      && _markaspot_ai_is_feature_enabled_for_node($node, 'aiNoteBrief');
+  }
+
+  /**
    * A factual receipt message without inferred work, promises, or model calls.
    */
   private function receiptAcknowledgment(string $langcode): string {

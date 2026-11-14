@@ -13,6 +13,7 @@ use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\markaspot_ai\Service\AttributeFillingService;
 use Drupal\markaspot_ai\Service\EmbeddingService;
 use Drupal\markaspot_ai\Service\TokenTrackingService;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
@@ -116,6 +117,36 @@ final class FeatureGateTest extends UnitTestCase {
       duplicateDetectionEnabled: FALSE,
     );
     $this->assertFalse(_markaspot_ai_is_duplicate_detection_enabled_for_node($node));
+  }
+
+  /**
+   * The note brief switch needs its own opt-in and AI text processing.
+   */
+  public function testNoteBriefRequiresExplicitFlagAndAiProcessing(): void {
+    $service = $this->getMockBuilder(AttributeFillingService::class)
+      ->disableOriginalConstructor()
+      ->onlyMethods([])
+      ->getMock();
+    $cases = [
+      'both on' => [['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE], TRUE],
+      'object form' => [['aiProcessing' => TRUE, 'aiNoteBrief' => ['enabled' => TRUE]], TRUE],
+      'brief off' => [['aiProcessing' => TRUE, 'aiNoteBrief' => FALSE], FALSE],
+      'brief absent' => [['aiProcessing' => TRUE], FALSE],
+      'brief not boolean' => [['aiProcessing' => TRUE, 'aiNoteBrief' => 'true'], FALSE],
+      'processing off' => [['aiProcessing' => FALSE, 'aiNoteBrief' => TRUE], FALSE],
+      'processing absent' => [['aiNoteBrief' => TRUE], FALSE],
+    ];
+    foreach ($cases as $label => [$features, $expected]) {
+      $this->setGroupStorage($this->buildGroup(json_encode(['features' => $features])));
+      $this->assertSame($expected, $service->isNoteBriefEnabled($this->buildNode(42)), $label);
+    }
+
+    $this->setGroupStorage($this->buildGroup('{invalid-json'));
+    $this->assertFalse($service->isNoteBriefEnabled($this->buildNode(42)));
+    $this->setGroupStorage($this->buildGroup(NULL));
+    $this->assertFalse($service->isNoteBriefEnabled($this->buildNode(42)));
+    $this->setGroupStorage($this->buildGroup(json_encode(['features' => ['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE]])));
+    $this->assertFalse($service->isNoteBriefEnabled($this->buildNode(NULL)));
   }
 
   /**

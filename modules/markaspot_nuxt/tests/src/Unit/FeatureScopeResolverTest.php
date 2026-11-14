@@ -73,6 +73,41 @@ final class FeatureScopeResolverTest extends UnitTestCase {
   }
 
   /**
+   * The note brief switch is tenant-scoped and off unless the root opts in.
+   *
+   * @covers ::resolveEffectiveFeatures
+   * @covers ::isEnabledEffective
+   * @covers ::isEditable
+   */
+  public function testNoteBriefIsTenantScopedAndOffByDefault(): void {
+    new Settings(['markaspot_operating_mode' => 'self_hosted']);
+    $root = $this->createGroup(1, [
+      'field_nuxt_config' => json_encode(['features' => [
+        'aiProcessing' => TRUE,
+        'aiNoteBrief' => TRUE,
+      ]]),
+    ]);
+    $child = $this->createGroup(2, [
+      'field_nuxt_config' => json_encode(['features' => ['aiNoteBrief' => FALSE]]),
+    ]);
+    $resolver = $this->createResolver($root);
+
+    $this->assertSame('tenant', FeatureScopeResolver::SCOPE_MAP['aiNoteBrief']);
+    $this->assertNotContains('aiNoteBrief', FeatureScopeResolver::TIER_GATED);
+    $this->assertTrue($resolver->resolveEffectiveFeatures($child)['aiNoteBrief']);
+    $this->assertTrue($resolver->isEnabledEffective('aiNoteBrief', $child, FALSE));
+    $this->assertTrue($resolver->isEditable('aiNoteBrief', $root));
+    $this->assertFalse($resolver->isEditable('aiNoteBrief', $child));
+
+    foreach (['{}', json_encode(['features' => ['aiNoteBrief' => 'yes']]), '{invalid'] as $json) {
+      $unset = $this->createGroup(1, ['field_nuxt_config' => $json]);
+      $resolver = $this->createResolver($unset);
+      $this->assertFalse($resolver->resolveEffectiveFeatures($unset)['aiNoteBrief']);
+      $this->assertFalse($resolver->isEnabledEffective('aiNoteBrief', $unset, FALSE));
+    }
+  }
+
+  /**
    * Tests that an explicit boundary false wins over attached boundary data.
    *
    * @covers ::resolveEffectiveFeatures

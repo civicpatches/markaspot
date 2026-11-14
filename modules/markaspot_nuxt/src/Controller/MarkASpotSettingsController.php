@@ -489,7 +489,7 @@ class MarkASpotSettingsController extends ControllerBase {
     // features to FALSE regardless of field_nuxt_config. aiDuplicates is
     // handled separately below (needs config check, not just module presence).
     $module_feature_map = [
-      'markaspot_ai' => ['aiProcessing', 'piiRedaction'],
+      'markaspot_ai' => ['aiProcessing', 'aiNoteBrief', 'piiRedaction'],
       'markaspot_stats' => ['statistics'],
       'markaspot_dashboard' => ['dashboard', 'dashboardRequestCreate', 'operationsDashboard', 'mailTextEditor'],
       'markaspot_vision' => ['photoReporting', 'aiAnalysis'],
@@ -511,6 +511,7 @@ class MarkASpotSettingsController extends ControllerBase {
     $onboarding_tour_default = Settings::get('markaspot_operating_mode', 'self_hosted') === 'saas';
     $settings['features'] += [
       'aiProcessing' => FALSE,
+      'aiNoteBrief' => FALSE,
       'piiRedaction' => FALSE,
       'dashboardRequestCreate' => TRUE,
       'operationsDashboard' => FALSE,
@@ -519,6 +520,7 @@ class MarkASpotSettingsController extends ControllerBase {
     ];
     foreach ([
       'aiProcessing',
+      'aiNoteBrief',
       'piiRedaction',
       'dashboardRequestCreate',
       'operationsDashboard',

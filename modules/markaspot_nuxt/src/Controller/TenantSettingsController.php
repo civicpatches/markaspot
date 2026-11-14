@@ -67,6 +67,7 @@ final class TenantSettingsController extends ControllerBase {
     'passwordless',
     'aiAnalysis',
     'aiProcessing',
+    'aiNoteBrief',
     'piiRedaction',
     'feedback',
     'pwaInstallPrompt',
@@ -2327,6 +2328,9 @@ final class TenantSettingsController extends ControllerBase {
         'loginLink' => $this->getBooleanFeatureValue($features, 'loginLink', TRUE),
         'aiAnalysis' => $this->getBooleanFeatureValue($features, 'aiAnalysis', FALSE),
         'aiProcessing' => $this->getBooleanFeatureValue($features, 'aiProcessing', FALSE),
+        // Root-only: typed note text is the operator's brief for the AI
+        // draft. Only effective while aiProcessing is on.
+        'aiNoteBrief' => $this->getBooleanFeatureValue($features, 'aiNoteBrief', FALSE),
         'piiRedaction' => $this->getBooleanFeatureValue($features, 'piiRedaction', FALSE),
         'feedback' => $this->getBooleanFeatureValue($features, 'feedback', FALSE),
         'pwaInstallPrompt' => $this->getBooleanFeatureValue($features, 'pwaInstallPrompt', FALSE),

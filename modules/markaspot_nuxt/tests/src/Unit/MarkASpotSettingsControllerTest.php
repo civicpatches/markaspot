@@ -1949,6 +1949,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
       'features' => [
         'aiAnalysis' => TRUE,
         'aiProcessing' => TRUE,
+        'aiNoteBrief' => TRUE,
         'piiRedaction' => TRUE,
         'statistics' => TRUE,
         'dashboard' => TRUE,
@@ -1970,6 +1971,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     // These should be forced FALSE because the modules are not installed.
     $this->assertFalse($data['features']['aiAnalysis']);
     $this->assertFalse($data['features']['aiProcessing']);
+    $this->assertFalse($data['features']['aiNoteBrief']);
     $this->assertFalse($data['features']['piiRedaction']);
     $this->assertFalse($data['features']['statistics']);
     $this->assertFalse($data['features']['dashboard']);
@@ -1993,6 +1995,7 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
     $nuxtJson = json_encode([
       'features' => [
         'aiProcessing' => ['enabled' => TRUE],
+        'aiNoteBrief' => ['enabled' => TRUE],
         'piiRedaction' => ['enabled' => FALSE],
         'dashboardRequestCreate' => ['enabled' => TRUE],
         'operationsDashboard' => ['enabled' => TRUE],
@@ -2009,9 +2012,44 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
 
     $data = json_decode($response->getContent(), TRUE);
     $this->assertSame(TRUE, $data['features']['aiProcessing']);
+    $this->assertSame(TRUE, $data['features']['aiNoteBrief']);
     $this->assertSame(FALSE, $data['features']['piiRedaction']);
     $this->assertSame(TRUE, $data['features']['dashboardRequestCreate']);
     $this->assertSame(TRUE, $data['features']['operationsDashboard']);
+  }
+
+  /**
+   * The note brief switch defaults off and only a boolean enables it.
+   *
+   * @dataProvider noteBriefDefaultProvider
+   * @covers ::getMarkASpotSettings
+   */
+  public function testAiNoteBriefDefaultsOffWithModule(array $features): void {
+    $moduleHandler = $this->createMock(ModuleHandlerInterface::class);
+    $moduleHandler->method('moduleExists')
+      ->willReturnCallback(static fn(string $module): bool => $module === 'markaspot_ai');
+    $moduleHandler->method('alter');
+    \Drupal::getContainer()->set('module_handler', $moduleHandler);
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode(['features' => $features]),
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET'));
+
+    $this->assertSame(FALSE, json_decode($response->getContent(), TRUE)['features']['aiNoteBrief']);
+  }
+
+  /**
+   * Stored values that must not enable the note brief switch.
+   */
+  public static function noteBriefDefaultProvider(): array {
+    return [
+      'absent' => [['aiProcessing' => TRUE]],
+      'string' => [['aiProcessing' => TRUE, 'aiNoteBrief' => 'true']],
+      'number' => [['aiProcessing' => TRUE, 'aiNoteBrief' => 1]],
+      'explicit off' => [['aiProcessing' => TRUE, 'aiNoteBrief' => FALSE]],
+    ];
   }
 
   /**

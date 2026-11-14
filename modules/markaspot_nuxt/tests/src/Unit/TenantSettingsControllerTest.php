@@ -3257,6 +3257,49 @@ class TenantSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * The note brief switch defaults off, is root-only and round-trips.
+   *
+   * @covers ::getFeatureSettings
+   * @covers ::updateFeatureSettings
+   */
+  public function testAiNoteBriefFeatureRoundTrip(): void {
+    $storedNuxtConfig = json_encode(['features' => ['aiProcessing' => TRUE]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(14);
+
+    $getResponse = $this->controller->getFeatureSettings(Request::create('/api/tenant/14/features', 'GET'), '14');
+    $getData = json_decode($getResponse->getContent(), TRUE);
+
+    $this->assertSame(200, $getResponse->getStatusCode());
+    $this->assertFalse($getData['features']['aiNoteBrief']);
+    $this->assertSame('tenant', $getData['scopes']['flags']['aiNoteBrief']);
+    $this->assertContains('aiNoteBrief', $getData['scopes']['editable']);
+
+    $patch = static fn(mixed $value): Request => Request::create(
+      '/api/tenant/14/features',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['aiNoteBrief' => $value]),
+    );
+    $rejected = $this->controller->updateFeatureSettings($patch('yes'), '14');
+    $this->assertSame(422, $rejected->getStatusCode());
+    $this->assertFalse(array_key_exists('aiNoteBrief', json_decode($storedNuxtConfig, TRUE)['features']));
+
+    $patchResponse = $this->controller->updateFeatureSettings($patch(TRUE), '14');
+    $patchData = json_decode($patchResponse->getContent(), TRUE);
+    $updatedConfig = json_decode($storedNuxtConfig, TRUE);
+
+    $this->assertSame(200, $patchResponse->getStatusCode());
+    $this->assertTrue($patchData['features']['aiNoteBrief']);
+    $this->assertTrue($updatedConfig['features']['aiNoteBrief']);
+    $this->assertTrue($updatedConfig['features']['aiProcessing']);
+  }
+
+  /**
    * The features GET counts the held, unpublished reports of the whole tenant.
    *
    * A child jurisdiction reports the count of its root's tenant, read from
@@ -4479,6 +4522,8 @@ class TenantSettingsControllerTest extends UnitTestCase {
       'tenant root stored' => ['delegationNoteRequired', 14, TRUE, TRUE],
       'review child ignored' => ['reviewBeforePublish', 1, TRUE, FALSE],
       'review root stored' => ['reviewBeforePublish', 14, TRUE, TRUE],
+      'note brief child ignored' => ['aiNoteBrief', 1, TRUE, FALSE],
+      'note brief root stored' => ['aiNoteBrief', 14, TRUE, TRUE],
       'jurisdiction stored' => ['moderation', 1, TRUE, TRUE],
     ];
   }
