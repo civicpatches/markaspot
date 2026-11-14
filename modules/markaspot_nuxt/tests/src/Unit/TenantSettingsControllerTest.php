@@ -3300,6 +3300,38 @@ class TenantSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * The note brief switch is stored even while aiProcessing is off.
+   *
+   * The assist endpoint combines both; the settings page only disables the
+   * switch in that state. The object form is healed to a plain boolean.
+   *
+   * @covers ::updateFeatureSettings
+   */
+  public function testAiNoteBriefStoredWhileAiProcessingOff(): void {
+    $storedNuxtConfig = json_encode(['features' => ['aiProcessing' => FALSE]]);
+    $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig, TRUE);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->hierarchyResolver->method('getRootJurisdictionId')->willReturn(14);
+    $request = Request::create(
+      '/api/tenant/14/features',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['aiProcessing' => FALSE, 'aiNoteBrief' => ['enabled' => TRUE]]),
+    );
+
+    $response = $this->controller->updateFeatureSettings($request, '14');
+    $stored = json_decode($storedNuxtConfig, TRUE)['features'];
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertFalse($stored['aiProcessing']);
+    $this->assertTrue($stored['aiNoteBrief']);
+    $this->assertTrue(json_decode($response->getContent(), TRUE)['features']['aiNoteBrief']);
+  }
+
+  /**
    * The features GET counts the held, unpublished reports of the whole tenant.
    *
    * A child jurisdiction reports the count of its root's tenant, read from

@@ -2041,6 +2041,32 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * The note brief flag is reported as stored, not coupled to aiProcessing.
+   *
+   * The assist endpoint enforces aiProcessing itself (see markaspot_ai's
+   * AssistContractTest::testBriefOnWithoutAiProcessingStillRefuses).
+   *
+   * @covers ::getMarkASpotSettings
+   */
+  public function testAiNoteBriefIsNotCoupledToAiProcessing(): void {
+    $moduleHandler = $this->createMock(ModuleHandlerInterface::class);
+    $moduleHandler->method('moduleExists')
+      ->willReturnCallback(static fn(string $module): bool => $module === 'markaspot_ai');
+    $moduleHandler->method('alter');
+    \Drupal::getContainer()->set('module_handler', $moduleHandler);
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode(['features' => ['aiProcessing' => FALSE, 'aiNoteBrief' => TRUE]]),
+    ]);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $response = $this->controller->getMarkASpotSettings(Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET'));
+    $features = json_decode($response->getContent(), TRUE)['features'];
+
+    $this->assertFalse($features['aiProcessing']);
+    $this->assertTrue($features['aiNoteBrief']);
+  }
+
+  /**
    * Stored values that must not enable the note brief switch.
    */
   public static function noteBriefDefaultProvider(): array {
