@@ -32,6 +32,7 @@ use Drupal\markaspot_group\JurisdictionTeardownContext;
 use Drupal\markaspot_group\MembershipRoleNormalizer;
 use Drupal\markaspot_nuxt\Plugin\Validation\Constraint\ProjectPromptConstraint;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
+use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
 use Drupal\node\NodeInterface;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\user\UserInterface;
@@ -1431,8 +1432,9 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         }
         $group->save();
 
-        // Tier is never set eagerly at provisioning time. Demo workspaces have
-        // no tier until the Stripe checkout webhook activates the workspace.
+        // Without a lifecycle record, tier is never set eagerly at
+        // provisioning time. Demo workspaces have no tier until the Stripe
+        // checkout webhook activates the workspace.
         // Field-level default_value is intentionally empty; clearing it again
         // here is a belt-and-suspenders guard against pre-update_11922 tenants
         // where the field default may still be 'free'.
@@ -1440,18 +1442,28 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
           $group->set('field_tier', NULL);
         }
 
-        // All new workspaces start with an expiry date. The expiry is cleared
-        // later when the Stripe webhook confirms successful payment.
-        $config = $this->configFactory->get('markaspot_fastmap.settings');
-        if (!empty($data['selected_tier'])) {
-          // User selected a tier from pricing, so allow more checkout time.
-          $graceDays = (int) ($config->get('checkout_grace_days') ?? 14);
+        if ($acceptance !== NULL) {
+          // Lifecycle model: Free from the start, never an expiry, also when
+          // the signup chose a paid tier (the checkout is offered as before).
+          // Without the tier the UI would read the workspace as Enterprise.
+          if ($group->hasField('field_tier')) {
+            $group->set('field_tier', 'free');
+          }
         }
         else {
-          // Demo/test ride: shorter expiry.
-          $graceDays = (int) ($config->get('demo_expiry_days') ?? 5);
+          // All new workspaces start with an expiry date. The expiry is
+          // cleared later when the Stripe webhook confirms successful payment.
+          $config = $this->configFactory->get('markaspot_fastmap.settings');
+          if (!empty($data['selected_tier'])) {
+            // User selected a tier from pricing, so allow more checkout time.
+            $graceDays = (int) ($config->get('checkout_grace_days') ?? 14);
+          }
+          else {
+            // Demo/test ride: shorter expiry.
+            $graceDays = (int) ($config->get('demo_expiry_days') ?? 5);
+          }
+          $group->set('field_expiry_date', $this->time->getRequestTime() + ($graceDays * 86400));
         }
-        $group->set('field_expiry_date', $this->time->getRequestTime() + ($graceDays * 86400));
         $group->save();
 
         $groupId = (int) $group->id();
@@ -1504,6 +1516,21 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         // 8. Create demo service requests.
         $this->createDemoRequests($data, $group, $categoryTermIds, $groupId, $defaultLang, $demoSkippedStatusIds);
 
+        // 8a. Lifecycle model: every later report waits for the operator's
+        // approval by default; the operator can switch it off. Set after the
+        // examples, which the review hold would otherwise keep unpublished.
+        // Read from the group, not from the config built above, so a hook
+        // that wrote the config in between keeps its change.
+        if ($acceptance !== NULL) {
+          $storedConfig = $group->hasField('field_nuxt_config')
+            ? json_decode((string) $group->get('field_nuxt_config')->value, TRUE)
+            : NULL;
+          $storedConfig = is_array($storedConfig) ? $storedConfig : $nuxtConfig;
+          $storedConfig['features'][ReviewBeforePublish::FLAG] = TRUE;
+          $group->set('field_nuxt_config', json_encode($storedConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+          $group->save();
+        }
+
         // 9. Create welcome start page.
         try {
           $this->createStartPage($group, $name, $defaultLang, $startPageContent, $startPageTranslations, $availableLanguages);
@@ -1532,7 +1559,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         unset($transaction);
         return $result;
       }
-      catch (\Exception $e) {
+      catch (\Throwable $e) {
         $transaction->rollBack();
         $this->logger->error('Workspace provisioning failed: @msg', ['@msg' => $e->getMessage()]);
         throw new \RuntimeException('Workspace provisioning failed: ' . $e->getMessage(), 0, $e);

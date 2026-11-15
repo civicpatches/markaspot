@@ -351,11 +351,13 @@ final class ReviewBeforePublish {
    * category names one (single-root municipality, category created without
    * field_jurisdiction, report without category). With several roots the
    * insert-time check decides once markaspot_group has derived the field.
+   * Public so other rules that follow a report into every jurisdiction it
+   * belongs to use the same set.
    *
    * @return int[]
    *   Group IDs, without duplicates.
    */
-  private function jurisdictionIds(NodeInterface $node): array {
+  public function jurisdictionIds(NodeInterface $node): array {
     $ids = $this->referencedIds($node, 'field_jurisdiction');
     if ($node->hasField('field_category') && !$node->get('field_category')->isEmpty()) {
       $category = $node->get('field_category')->entity;

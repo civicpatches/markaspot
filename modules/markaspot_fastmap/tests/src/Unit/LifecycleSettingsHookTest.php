@@ -10,7 +10,12 @@ use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Site\Settings;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
+use Symfony\Component\HttpFoundation\RequestStack;
 use Drupal\Tests\UnitTestCase;
 
 /**
@@ -34,8 +39,18 @@ class LifecycleSettingsHookTest extends UnitTestCase {
     $config = $this->createMock(ImmutableConfig::class);
     $factory = $this->createMock(ConfigFactoryInterface::class);
     $factory->method('get')->willReturn($config);
+    $lifecycle = new WorkspaceLifecycle($factory, $this->createMock(TimeInterface::class));
     $container = new ContainerBuilder();
-    $container->set('markaspot_fastmap.workspace_lifecycle', new WorkspaceLifecycle($factory, $this->createMock(TimeInterface::class)));
+    $container->set('markaspot_fastmap.workspace_lifecycle', $lifecycle);
+    // The public alter asks the gate for the open state (self-hosted here:
+    // no open key; WorkspaceLifecycleGateTest covers the state itself).
+    new Settings(['markaspot_operating_mode' => 'self_hosted']);
+    $container->set('markaspot_fastmap.workspace_lifecycle_gate', new WorkspaceLifecycleGate(
+      $lifecycle,
+      $this->createMock(EntityTypeManagerInterface::class),
+      $this->createMock(ModuleHandlerInterface::class),
+      new RequestStack(),
+    ));
     \Drupal::setContainer($container);
   }
 

@@ -522,6 +522,21 @@ function markaspot_fastmap_group_update(GroupInterface $group): void {
  * saving when the published limit is reached.
  */
 function markaspot_fastmap_node_presave(NodeInterface $node): void {
+  // Workspaces under the lifecycle model that are not open: closed intake
+  // (also for reports that arrive unpublished) and the publication gate.
+  // WorkspaceLifecycleGate decides; workspaces without a record are left to
+  // the rules below. A refusal is an HTTP 403 thrown from the save; JSON:API
+  // (through the markaspot_group storage exception subscriber) and GeoReport
+  // POST both unwrap it, so every entrance answers the same status and code.
+  if ($node->bundle() === 'service_request') {
+    \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate')->enforceOnSave(
+      $node,
+      \Drupal::currentUser(),
+      static fn(): ?GroupInterface => _markaspot_fastmap_resolve_gate_group($node),
+      (bool) drupal_static(WorkspaceProvisioningService::DEMO_REQUEST_SEEDING, FALSE),
+    );
+  }
+
   if ($node->bundle() !== 'service_request' || !$node->isPublished()) {
     return;
   }
@@ -546,24 +561,7 @@ function markaspot_fastmap_node_presave(NodeInterface $node): void {
   // This gate runs BEFORE the admin-bypass below because demo compliance is a
   // workspace property, not a submitter property: even an admin save must be
   // queued for moderation until the workspace is Stripe-activated.
-  $demoGroup = _markaspot_fastmap_resolve_jurisdiction_group_for_node($node);
-
-  // Fallback: when the structured resolver returns NULL (no category, no
-  // boundary hit, no validated field), trust the raw Open311 jurisdiction_id
-  // from the request. Without this, a citizen submitting an Open311 POST with
-  // a demo workspace's jurisdiction_id but a missing/invalid service_code
-  // bypasses the gate and produces a published report.
-  if (!$demoGroup) {
-    $rawJurisdictionId = _markaspot_fastmap_get_request_jurisdiction_id();
-    if ($rawJurisdictionId) {
-      $rawGroup = \Drupal::entityTypeManager()
-        ->getStorage('group')
-        ->load($rawJurisdictionId);
-      if (_markaspot_fastmap_is_jurisdiction_group($rawGroup)) {
-        $demoGroup = $rawGroup;
-      }
-    }
-  }
+  $demoGroup = _markaspot_fastmap_resolve_gate_group($node);
 
   // Exempt: the demo requests workspace provisioning saves right now. They
   // are synthetic platform content, not a citizen submission, and carry no
@@ -952,7 +950,8 @@ function _markaspot_fastmap_jurisdiction_matches_category_root(int $jurisdiction
  * 'bypass mas validation' (e.g. moderators synced from any organisation) only
  * counts inside workspaces the account belongs to: otherwise a staff user of
  * one workspace could keep a report published in a foreign workspace where
- * the same citizen report would be unpublished at the limit.
+ * the same citizen report would be unpublished at the limit. In a workspace
+ * with a lifecycle record it does not count at all.
  *
  * @param \Drupal\Core\Session\AccountInterface $account
  *   The acting account.
@@ -961,16 +960,39 @@ function _markaspot_fastmap_jurisdiction_matches_category_root(int $jurisdiction
  *
  * @return bool
  *   TRUE if the tier limit does not apply to this save.
+ *
+ * @see \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate::accountBypassesTierLimit()
  */
 function _markaspot_fastmap_account_bypasses_tier_limit(AccountInterface $account, ?GroupInterface $group): bool {
-  if ($account->hasPermission('administer nodes')) {
-    return TRUE;
+  /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate $gate */
+  $gate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
+  return $gate->accountBypassesTierLimit($account, $group);
+}
+
+/**
+ * Resolves the jurisdiction group the save gates of a report apply to.
+ *
+ * The structured resolver first. When it returns NULL (no category, no
+ * boundary hit, no validated field), the raw Open311 jurisdiction_id of the
+ * request is trusted. Without this, a citizen submitting an Open311 POST with
+ * a gated workspace's jurisdiction_id but a missing or invalid service_code
+ * would bypass the gate. Used by the demo gate and the lifecycle gate.
+ */
+function _markaspot_fastmap_resolve_gate_group(NodeInterface $node): ?GroupInterface {
+  $group = _markaspot_fastmap_resolve_jurisdiction_group_for_node($node);
+  if ($group) {
+    return $group;
   }
-  if (!$account->hasPermission('bypass mas validation')) {
-    return FALSE;
+  $rawJurisdictionId = _markaspot_fastmap_get_request_jurisdiction_id();
+  if ($rawJurisdictionId) {
+    $rawGroup = \Drupal::entityTypeManager()
+      ->getStorage('group')
+      ->load($rawJurisdictionId);
+    if (_markaspot_fastmap_is_jurisdiction_group($rawGroup)) {
+      return $rawGroup;
+    }
   }
-  return !$group instanceof GroupInterface
-    || _markaspot_group_user_is_member_in_jurisdiction_scope($account, (int) $group->id());
+  return NULL;
 }
 
 /**
@@ -1080,6 +1102,20 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
     // truthiness to disambiguate enterprise workspaces from demo workspaces
     // in the tier=NULL state.
     $settings['jurisdiction']['has_stripe_customer'] = $has_stripe_customer;
+
+    // Lifecycle model: whether the map takes reports from the public. Only
+    // for workspaces with a valid record; absent for every other one, so
+    // "not open" is strictly open === FALSE.
+    if ($group instanceof GroupInterface) {
+      /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate $gate */
+      $gate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
+      $workspace = $gate->recordWorkspace($group);
+      if ($workspace !== NULL) {
+        $settings['jurisdiction']['open'] = $gate->openState($workspace) === TRUE;
+        // The record may sit on the root of a child jurisdiction.
+        $cache_metadata?->addCacheableDependency($workspace);
+      }
+    }
   }
 
   // Workspace expiry timestamp (demo or checkout grace period).
@@ -1278,10 +1314,13 @@ function markaspot_fastmap_cron(): void {
       ->condition('field_expiry_date', $reminderThreshold, '<=')
       ->execute();
 
+    /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate $lifecycleGate */
+    $lifecycleGate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
     foreach ($groupStorage->loadMultiple($reminderIds) as $group) {
       // A successful subscription may briefly coexist with the checkout grace
       // expiry. It is activated, so it must not receive a demo-expiry notice.
-      if (!_markaspot_fastmap_workspace_in_demo_state($group)) {
+      // A workspace with a lifecycle record never expires.
+      if (!_markaspot_fastmap_workspace_in_demo_state($group) || $lifecycleGate->isRecordWorkspace($group)) {
         continue;
       }
       $stateKey = 'markaspot_fastmap.demo_reminder_sent.' . $group->id();
@@ -1337,8 +1376,9 @@ function markaspot_fastmap_cron(): void {
       foreach ($groupStorage->loadMultiple($expiredIds) as $expiredGroupId => $group) {
         // EntityQuery can only select by expiry. Recheck the canonical demo
         // predicate before teardown so a persisted grace expiry never deletes
-        // an activated workspace with a valid Stripe subscription.
-        if (!_markaspot_fastmap_workspace_in_demo_state($group)) {
+        // an activated workspace with a valid Stripe subscription. A
+        // workspace with a lifecycle record is never torn down here.
+        if (!_markaspot_fastmap_workspace_in_demo_state($group) || $lifecycleGate->isRecordWorkspace($group)) {
           continue;
         }
         $logger->notice('Auto-deleting expired demo workspace @id.', ['@id' => $expiredGroupId]);

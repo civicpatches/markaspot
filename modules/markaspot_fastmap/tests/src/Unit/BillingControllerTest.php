@@ -20,6 +20,7 @@ use Drupal\group\Entity\GroupRoleInterface;
 use Drupal\group\GroupMembership;
 use Drupal\markaspot_fastmap\Controller\BillingController;
 use Drupal\markaspot_fastmap\Service\BillingStateResolver;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\Tests\UnitTestCase;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -1025,6 +1026,113 @@ class BillingControllerTest extends UnitTestCase {
     $data = json_decode($response->getContent(), TRUE);
     $this->assertEquals('free_permanent', $data['effective_state']);
     $this->assertEquals('free', $data['tier']);
+  }
+
+  /**
+   * The record scope comes from the gate, server-side; old ones read as before.
+   *
+   * @covers ::get
+   */
+  public function testEffectiveStateUsesRecordScope(): void {
+    $record = $this->createMockGroup(['field_tier' => 'free', 'field_stripe_customer_id' => 'cus_aborted']);
+    $old = $this->createMockGroup(['field_tier' => 'free', 'field_stripe_customer_id' => 'cus_aborted']);
+    $gate = $this->createMock(WorkspaceLifecycleGate::class);
+    $gate->method('recordWorkspace')->willReturnCallback(fn($group) => $group === $record ? $record : NULL);
+    \Drupal::getContainer()->set('markaspot_fastmap.workspace_lifecycle_gate', $gate);
+    $controller = BillingController::create(\Drupal::getContainer());
+
+    $current = $record;
+    $this->groupStorage->method('load')->with(14)->willReturnCallback(function () use (&$current) {
+      return $current;
+    });
+    $first = json_decode($controller->get('14', Request::create('/api/billing/14', 'GET'))->getContent(), TRUE);
+    $current = $old;
+    $second = json_decode($controller->get('14', Request::create('/api/billing/14', 'GET'))->getContent(), TRUE);
+
+    $this->assertSame('free_permanent', $first['effective_state'], 'Record workspace: Free, active.');
+    $this->assertSame('canceled', $second['effective_state'], 'Old workspace with the same billing fields: as today.');
+  }
+
+  /**
+   * A workspace with a record takes no expiry and keeps its tier.
+   *
+   * The same payloads on a workspace without a record are written as today.
+   *
+   * @covers ::update
+   */
+  public function testRecordWorkspaceRefusesExpiryAndEmptyTier(): void {
+    $payloads = [
+      'expiry' => ['tier' => 'free', 'stripe_customer_id' => 'cus_existing', 'expiry_date' => 1800000000],
+      'empty tier' => ['tier' => NULL, 'stripe_customer_id' => 'cus_existing'],
+    ];
+    foreach ([TRUE, FALSE] as $hasRecord) {
+      $gate = $this->createMock(WorkspaceLifecycleGate::class);
+      $gate->method('isRecordWorkspace')->willReturn($hasRecord);
+      \Drupal::getContainer()->set('markaspot_fastmap.workspace_lifecycle_gate', $gate);
+      $controller = BillingController::create(\Drupal::getContainer());
+      foreach ($payloads as $label => $payload) {
+        $written = [];
+        $group = $this->createWritableGroup();
+        $group->method('set')->willReturnCallback(function (string $name) use (&$written, $group) {
+          $written[] = $name;
+          return $group;
+        });
+        $this->groupStorage = $this->createMock(EntityStorageInterface::class);
+        $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+        $response = $controller->update('14', $this->createJsonRequest($payload, 'test-service-key-456'));
+        $data = json_decode((string) $response->getContent(), TRUE);
+        if ($hasRecord) {
+          $this->assertSame(422, $response->getStatusCode(), "record, $label");
+          $this->assertSame('lifecycle_workspace_billing_conflict', $data['code'], "record, $label");
+          $this->assertSame([], $written, "record, $label: nothing written");
+        }
+        else {
+          $this->assertSame(200, $response->getStatusCode(), "no record, $label: " . $response->getContent());
+        }
+      }
+    }
+    // A record workspace may still clear its expiry and set a tier.
+    $gate = $this->createMock(WorkspaceLifecycleGate::class);
+    $gate->method('isRecordWorkspace')->willReturn(TRUE);
+    \Drupal::getContainer()->set('markaspot_fastmap.workspace_lifecycle_gate', $gate);
+    $group = $this->createWritableGroup();
+    $this->groupStorage = $this->createMock(EntityStorageInterface::class);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $payload = ['tier' => 'pro', 'stripe_customer_id' => 'cus_existing', 'expiry_date' => NULL];
+    $response = BillingController::create(\Drupal::getContainer())->update('14', $this->createJsonRequest($payload, 'test-service-key-456'));
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+  }
+
+  /**
+   * A billing update never writes the lifecycle record.
+   *
+   * Tier changes, cancellations and upgrades arrive here; none touches the
+   * record or its opening.
+   *
+   * @covers ::update
+   */
+  public function testUpdateNeverWritesTheRecord(): void {
+    $request = $this->createJsonRequest([
+      'tier' => 'free',
+      'stripe_customer_id' => 'cus_existing',
+      'stripe_subscription_id' => NULL,
+      'field_lifecycle_record' => '{"v":1}',
+      'lifecycle_record' => '{"v":1}',
+    ], 'test-service-key-456');
+    $written = [];
+    $group = $this->createWritableGroup();
+    $group->method('set')->willReturnCallback(function (string $name) use (&$written, $group) {
+      $written[] = $name;
+      return $group;
+    });
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $response = $this->controller->update('14', $request);
+
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $this->assertNotContains('field_lifecycle_record', $written);
+    $this->assertContains('field_tier', $written);
   }
 
   /**

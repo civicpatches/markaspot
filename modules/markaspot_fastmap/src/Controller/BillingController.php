@@ -13,6 +13,7 @@ use Drupal\Core\Session\AccountInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Service\BillingStateResolver;
 use Drupal\markaspot_fastmap\Service\WorkspaceDeletionService;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -65,6 +66,11 @@ class BillingController extends ControllerBase {
   protected BillingStateResolver $billingStateResolver;
 
   /**
+   * The lifecycle gate, for the record scope of the billing state.
+   */
+  protected ?WorkspaceLifecycleGate $lifecycleGate = NULL;
+
+  /**
    * The workspace deletion service, when registered.
    *
    * @var \Drupal\markaspot_fastmap\Service\WorkspaceDeletionService|null
@@ -80,6 +86,9 @@ class BillingController extends ControllerBase {
     $instance->database = $container->get('database');
     $instance->requestStack = $container->get('request_stack');
     $instance->billingStateResolver = $container->get('markaspot_fastmap.billing_state_resolver');
+    $instance->lifecycleGate = $container->has('markaspot_fastmap.workspace_lifecycle_gate')
+      ? $container->get('markaspot_fastmap.workspace_lifecycle_gate')
+      : NULL;
     $instance->workspaceDeletion = $container->has('markaspot_fastmap.workspace_deletion')
       ? $container->get('markaspot_fastmap.workspace_deletion')
       : NULL;
@@ -288,7 +297,8 @@ class BillingController extends ControllerBase {
       $data['tier'],
       $data['stripe_customer_id'],
       $data['stripe_subscription_id'],
-      $data['expiry_date']
+      $data['expiry_date'],
+      $this->lifecycleGate?->recordWorkspace($entity) !== NULL,
     );
 
     // Lets the billing page tell up front whether the admin may delete the
@@ -355,6 +365,19 @@ class BillingController extends ControllerBase {
     if ($customerReconcile instanceof JsonResponse) {
       $transaction->rollBack();
       return $customerReconcile;
+    }
+
+    // A workspace under the lifecycle model never expires and always has a
+    // tier: an expiry would make it read as a demo, which the hourly
+    // teardown deletes, and an empty tier as Enterprise.
+    if ($this->lifecycleGate?->isRecordWorkspace($entity)
+      && ((array_key_exists('expiry_date', $data) && (int) $data['expiry_date'] > 0)
+        || (array_key_exists('tier', $data) && $data['tier'] === NULL))) {
+      $transaction->rollBack();
+      return new JsonResponse([
+        'error' => 'A workspace under the lifecycle model takes no expiry date and keeps its tier.',
+        'code' => 'lifecycle_workspace_billing_conflict',
+      ], 422);
     }
 
     $allowedFields = [

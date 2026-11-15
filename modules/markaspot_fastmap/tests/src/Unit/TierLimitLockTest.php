@@ -17,6 +17,7 @@ use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Service\TierConfigService;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\node\NodeInterface;
 use Drupal\Tests\UnitTestCase;
@@ -211,6 +212,9 @@ class TierLimitLockTest extends UnitTestCase {
     $featureScopeResolver = $this->createMock(FeatureScopeResolver::class);
     $featureScopeResolver->method('isSelfServicePlatform')->willReturn(TRUE);
     $container->set('markaspot_nuxt.feature_scope_resolver', $featureScopeResolver);
+    // A workspace without a lifecycle record: the gate leaves the save alone
+    // and nobody bypasses the limit (the account holds no permission).
+    $container->set('markaspot_fastmap.workspace_lifecycle_gate', $this->createMock(WorkspaceLifecycleGate::class));
     \Drupal::setContainer($container);
   }
 

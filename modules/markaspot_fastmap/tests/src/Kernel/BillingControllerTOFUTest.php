@@ -16,6 +16,7 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_fastmap\Controller\BillingController;
 use Drupal\markaspot_fastmap\Service\BillingStateResolver;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Psr\Log\LoggerInterface;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Symfony\Component\HttpFoundation\Request;
@@ -224,9 +225,30 @@ class BillingControllerTOFUTest extends KernelTestBase {
   }
 
   /**
+   * A workspace under the lifecycle model never bound to a customer.
+   *
+   * The record changes the billing state only; a billing sync for a
+   * customer the workspace was never bound to stays refused.
+   */
+  public function testSyncTokenRefusedForUnboundRecordWorkspace(): void {
+    $this->createFixtureTables();
+    $this->insertGroupRow();
+
+    $group = $this->mockGroup(NULL, 'free');
+    $gate = $this->createMock(WorkspaceLifecycleGate::class);
+    $gate->method('recordWorkspace')->willReturn($group);
+    $controller = $this->createController($group, $this->createMock(LoggerInterface::class), gate: $gate);
+    $response = $controller->reserveSyncToken('14', $this->createTokenRequest('cus_claimed'));
+
+    $this->assertSame(403, $response->getStatusCode());
+    $this->assertNull($this->loadSyncToken());
+    $this->assertNull($this->loadStoredCustomer());
+  }
+
+  /**
    * Creates a BillingController wired to the kernel database.
    */
-  private function createController(GroupInterface $group, LoggerInterface $logger, ?GroupInterface $lockedGroup = NULL): BillingController {
+  private function createController(GroupInterface $group, LoggerInterface $logger, ?GroupInterface $lockedGroup = NULL, ?WorkspaceLifecycleGate $gate = NULL): BillingController {
     $fastmapConfig = $this->createMock(ImmutableConfig::class);
     $fastmapConfig->method('get')
       ->willReturnCallback(fn(string $key) => $key === 'service_key' ? 'test-service-key-456' : NULL);
@@ -267,6 +289,9 @@ class BillingControllerTOFUTest extends KernelTestBase {
     $container->set('request_stack', new RequestStack());
     $container->set('cache_contexts_manager', $cacheContextsManager);
     $container->set('markaspot_fastmap.billing_state_resolver', new BillingStateResolver());
+    if ($gate !== NULL) {
+      $container->set('markaspot_fastmap.workspace_lifecycle_gate', $gate);
+    }
     \Drupal::setContainer($container);
 
     return BillingController::create($container);

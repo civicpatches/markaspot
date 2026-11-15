@@ -48,6 +48,11 @@ class BillingStateResolver {
    *   The current field_stripe_subscription_id value.
    * @param int|null $expiryDate
    *   The current field_expiry_date timestamp (or NULL when not in demo).
+   * @param bool $recordScope
+   *   TRUE for a workspace under the lifecycle model (valid lifecycle record
+   *   on the self-service platform), decided server-side by the caller.
+   *   Free without a running subscription is a finished state there: never
+   *   a checkout in progress, never "unknown".
    *
    * @return string
    *   One of: 'demo', 'pending_checkout', 'canceled', 'free_permanent',
@@ -58,6 +63,7 @@ class BillingStateResolver {
     ?string $stripeCustomerId,
     ?string $stripeSubscriptionId,
     ?int $expiryDate,
+    bool $recordScope = FALSE,
   ): string {
     $hasExpiry = $expiryDate !== NULL && $expiryDate > 0;
     $hasCustomer = $stripeCustomerId !== NULL && trim($stripeCustomerId) !== '';
@@ -65,6 +71,12 @@ class BillingStateResolver {
 
     if ($hasExpiry && !$hasSubscription) {
       return 'demo';
+    }
+
+    // Lifecycle model: with or without a Stripe customer (an aborted checkout,
+    // a cancellation), no running subscription means Free, active.
+    if ($recordScope && !$hasSubscription && ($tier === NULL || $tier === 'free')) {
+      return 'free_permanent';
     }
 
     if ($hasCustomer && !$hasSubscription) {

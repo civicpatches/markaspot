@@ -12,6 +12,7 @@ use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Service\TierConfigService;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -41,6 +42,7 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
     protected readonly ?CitizenWordingResolver $citizenWordingResolver = NULL,
     protected readonly ?LanguageManagerInterface $languageManager = NULL,
     protected readonly ?FeatureScopeResolver $featureScopeResolver = NULL,
+    protected readonly ?WorkspaceLifecycleGate $lifecycleGate = NULL,
   ) {}
 
   /**
@@ -61,6 +63,9 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
         : NULL,
       $container->get('language_manager'),
       $container->get('markaspot_nuxt.feature_scope_resolver'),
+      $container->has('markaspot_fastmap.workspace_lifecycle_gate')
+        ? $container->get('markaspot_fastmap.workspace_lifecycle_gate')
+        : NULL,
     );
   }
 
@@ -179,6 +184,11 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
    * Whether the current user may exceed the workspace's tier limit.
    */
   protected function accountBypassesTierLimit(GroupInterface $group): bool {
+    // The same decision as the presave path of the module, including the
+    // rule that workspace staff are bound in workspaces with a record.
+    if ($this->lifecycleGate !== NULL) {
+      return $this->lifecycleGate->accountBypassesTierLimit($this->currentUser, $group);
+    }
     // Both module files are always loaded on a site; without them (unit
     // tests) only operators bypass, never staff.
     if (function_exists('_markaspot_fastmap_account_bypasses_tier_limit')

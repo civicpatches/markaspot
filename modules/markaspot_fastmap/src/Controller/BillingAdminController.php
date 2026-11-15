@@ -11,6 +11,7 @@ use Drupal\Core\Link;
 use Drupal\Core\Pager\PagerManagerInterface;
 use Drupal\Core\Url;
 use Drupal\markaspot_fastmap\Service\BillingStateResolver;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\Request;
@@ -92,6 +93,11 @@ class BillingAdminController extends ControllerBase {
   protected BillingStateResolver $billingStateResolver;
 
   /**
+   * The lifecycle gate, for the record scope of the billing state.
+   */
+  protected ?WorkspaceLifecycleGate $lifecycleGate = NULL;
+
+  /**
    * The pager manager.
    *
    * @var \Drupal\Core\Pager\PagerManagerInterface
@@ -113,6 +119,9 @@ class BillingAdminController extends ControllerBase {
     $instance->database = $container->get('database');
     $instance->fastmapLogger = $container->get('logger.channel.markaspot_fastmap');
     $instance->billingStateResolver = $container->get('markaspot_fastmap.billing_state_resolver');
+    $instance->lifecycleGate = $container->has('markaspot_fastmap.workspace_lifecycle_gate')
+      ? $container->get('markaspot_fastmap.workspace_lifecycle_gate')
+      : NULL;
     $instance->pagerManager = $container->get('pager.manager');
     $instance->dateFormatter = $container->get('date.formatter');
     return $instance;
@@ -292,7 +301,7 @@ class BillingAdminController extends ControllerBase {
       $billingEmail = $this->fieldValue($group, 'field_billing_email');
       $slug = $this->fieldValue($group, 'field_slug');
 
-      $state = $this->billingStateResolver->resolve($tier, $customer, $subscription, $expiry);
+      $state = $this->billingStateResolver->resolve($tier, $customer, $subscription, $expiry, $this->lifecycleGate?->recordWorkspace($group) !== NULL);
 
       // Apply post-resolve state filter — state is computed, not stored, so
       // it cannot be a SQL WHERE clause.

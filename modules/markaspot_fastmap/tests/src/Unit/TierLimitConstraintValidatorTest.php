@@ -16,6 +16,7 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Plugin\Validation\Constraint\TierLimitConstraint;
 use Drupal\markaspot_fastmap\Plugin\Validation\Constraint\TierLimitConstraintValidator;
 use Drupal\markaspot_fastmap\Service\TierConfigService;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -608,6 +609,43 @@ class TierLimitConstraintValidatorTest extends UnitTestCase {
 
     $this->membershipValidator(FALSE)->validate($this->createPublishTransitionNode(1), $this->constraint);
     $this->membershipValidator(TRUE)->validate($this->createPublishTransitionNode(1), $this->constraint);
+  }
+
+  /**
+   * With the lifecycle gate in place, the gate decides the staff bypass.
+   *
+   * The gate binds workspace staff in workspaces with a lifecycle record; the
+   * validator asks it with the current user and the resolved group, so the
+   * presave path of the module and this constraint decide the same way.
+   *
+   * @covers ::validate
+   */
+  public function testLifecycleGateDecidesStaffBypass(): void {
+    $this->currentUser = $this->createMock(AccountInterface::class);
+    $this->currentUser->method('hasPermission')
+      ->willReturnCallback(fn(string $perm) => $perm === 'bypass mas validation');
+    $this->mockRequestCount(50);
+
+    $this->executionContext->expects($this->once())
+      ->method('addViolation');
+
+    foreach ([FALSE, TRUE] as $bypass) {
+      $gate = $this->createMock(WorkspaceLifecycleGate::class);
+      $gate->expects($this->once())->method('accountBypassesTierLimit')
+        ->with($this->currentUser, $this->isInstanceOf(GroupInterface::class))
+        ->willReturn($bypass);
+      $validator = new TierLimitConstraintValidator(
+        $this->currentUser,
+        $this->tierConfig,
+        NULL,
+        NULL,
+        NULL,
+        $this->createConfigFactory('jur'),
+        lifecycleGate: $gate,
+      );
+      $validator->initialize($this->executionContext);
+      $validator->validate($this->createPublishTransitionNode(1), $this->constraint);
+    }
   }
 
   /**

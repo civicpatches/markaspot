@@ -283,6 +283,35 @@ class WorkspaceLifecycleTest extends UnitTestCase {
   }
 
   /**
+   * Open, not open, or neither (no valid record).
+   *
+   * @covers ::hasValidRecord
+   * @covers ::isOpen
+   * @covers ::isNotOpen
+   */
+  public function testOpenPredicates(): void {
+    $lifecycle = $this->lifecycle();
+    $record = WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
+    $notOpen = $this->group(json_encode($record));
+    $open = $this->group(json_encode(['opening' => ['at' => 1800001000]] + $record));
+    $cases = [
+      'not open' => [$notOpen, TRUE, FALSE, TRUE],
+      'open' => [$open, TRUE, TRUE, FALSE],
+      'no record' => [$this->group(NULL), FALSE, FALSE, FALSE],
+      'no field' => [$this->group(NULL, FALSE), FALSE, FALSE, FALSE],
+      'invalid record' => [$this->group('{"v":1,"acceptance":{},"opening":null}'), FALSE, FALSE, FALSE],
+      'opening not an array' => [$this->group(json_encode(['opening' => 'yes'] + $record)), TRUE, FALSE, TRUE],
+    ];
+    foreach ($cases as $label => [$group, $valid, $isOpen, $isNotOpen]) {
+      $this->assertSame($valid, $lifecycle->hasValidRecord($group), $label);
+      $this->assertSame($isOpen, $lifecycle->isOpen($group), $label);
+      $this->assertSame($isNotOpen, $lifecycle->isNotOpen($group), $label);
+    }
+    // Records are data: the switch plays no part.
+    $this->assertTrue($this->lifecycle(FALSE)->isNotOpen($notOpen));
+  }
+
+  /**
    * Scrubbing rebuilds the known shape with the account zeroed.
    *
    * @covers ::scrub

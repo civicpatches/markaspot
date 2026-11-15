@@ -37,6 +37,18 @@ services:
       - '@datetime.time'
       - '@module_handler'
 
+  markaspot_fastmap.workspace_lifecycle_gate:
+    class: Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate
+    arguments:
+      - '@markaspot_fastmap.workspace_lifecycle'
+      - '@entity_type.manager'
+      - '@module_handler'
+      - '@request_stack'
+      - '@?markaspot_group.hierarchy_resolver'
+      - '@?markaspot_nuxt.review_before_publish'
+  # Autowiring alias for the hook class.
+  Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate: '@markaspot_fastmap.workspace_lifecycle_gate'
+
   markaspot_fastmap.vision_purpose_rules:
     class: Drupal\markaspot_fastmap\Service\VisionPurposeRules
     arguments:

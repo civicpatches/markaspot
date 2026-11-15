@@ -6,6 +6,8 @@ namespace Drupal\Tests\markaspot_fastmap\Kernel;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
 use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
 use Drupal\Tests\node\Traits\NodeCreationTrait;
@@ -18,6 +20,7 @@ use Drupal\node\Entity\Node;
 use Drupal\user\Entity\Role;
 use Drupal\user\Entity\User;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -78,6 +81,20 @@ class MarkaspotFastmapDemoGateTest extends KernelTestBase {
     parent::register($container);
     $container->register('markaspot_nuxt.feature_scope_resolver', FeatureScopeResolver::class)
       ->setSynthetic(TRUE)
+      ->setPublic(TRUE);
+    // The save hook hands the lifecycle rules to this service. The module is
+    // not enabled here, so the platform is not self-service and the service
+    // leaves every save to the demo gate.
+    $container->register('markaspot_fastmap.workspace_lifecycle', WorkspaceLifecycle::class)
+      ->setArguments([new Reference('config.factory'), new Reference('datetime.time')])
+      ->setPublic(TRUE);
+    $container->register('markaspot_fastmap.workspace_lifecycle_gate', WorkspaceLifecycleGate::class)
+      ->setArguments([
+        new Reference('markaspot_fastmap.workspace_lifecycle'),
+        new Reference('entity_type.manager'),
+        new Reference('module_handler'),
+        new Reference('request_stack'),
+      ])
       ->setPublic(TRUE);
   }
 

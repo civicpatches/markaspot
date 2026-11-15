@@ -4162,6 +4162,58 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
   }
 
   /**
+   * Switch on: tier free, no expiry, review on, also for a chosen paid tier.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOnSetsFreeTierNoExpiryAndReview(): void {
+    foreach (['' => 'no tier chosen', 'pro' => 'paid tier chosen'] as $selectedTier => $label) {
+      $this->setUp();
+      $created = NULL;
+      $setGroupFields = NULL;
+      $userFields = NULL;
+      $user = $this->lifecycleTenantAdmin(10, $userFields);
+      $fields = ['field_lifecycle_record', 'field_tier', 'field_expiry_date'];
+      $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, $fields, tenantAdmin: $user);
+
+      $this->lifecycleService(TRUE)->provisionWorkspace($this->validData([
+        'acceptance' => $this->lifecycleAcceptance(),
+        'selected_tier' => $selectedTier,
+      ]));
+
+      $this->assertSame('free', $setGroupFields['field_tier'], $label);
+      $this->assertArrayNotHasKey('field_expiry_date', $setGroupFields, $label);
+      $this->assertArrayNotHasKey('field_expiry_date', $created, $label);
+      $config = json_decode($setGroupFields['field_nuxt_config'], TRUE);
+      $this->assertTrue($config['features']['reviewBeforePublish'], $label);
+      // Set after the examples: the create payload does not carry it.
+      $this->assertArrayNotHasKey('reviewBeforePublish', json_decode($created['field_nuxt_config'], TRUE)['features'] ?? [], $label);
+    }
+  }
+
+  /**
+   * Switch off: tier empty, an expiry, review untouched (as today).
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOffKeepsDemoExpiry(): void {
+    foreach (['' => 5, 'pro' => 14] as $selectedTier => $days) {
+      $this->setUp();
+      $created = NULL;
+      $setGroupFields = NULL;
+      $fields = ['field_lifecycle_record', 'field_tier', 'field_expiry_date'];
+      $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, $fields);
+      $this->lifecycleService(FALSE)->provisionWorkspace($this->validData([
+        'acceptance' => $this->lifecycleAcceptance(),
+        'selected_tier' => $selectedTier,
+      ]));
+      $this->assertNull($setGroupFields['field_tier']);
+      $this->assertSame(1700000000 + $days * 86400, $setGroupFields['field_expiry_date']);
+      $this->assertArrayNotHasKey('field_nuxt_config', $setGroupFields, 'The config is not saved again.');
+    }
+  }
+
+  /**
    * An existing account creating another workspace gets a record there.
    *
    * @covers ::provisionWorkspace

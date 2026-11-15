@@ -13,6 +13,8 @@ use Drupal\group\Entity\Group;
 use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\node\NodeInterface;
@@ -219,6 +221,16 @@ final class ModeratorNewRequestPublishScopeKernelTest extends KernelTestBase {
    */
   public function testFastmapTierLimitBypassFollowsMembership(): void {
     require_once dirname(__DIR__, 4) . '/markaspot_fastmap/markaspot_fastmap.module';
+    // The helper hands the decision to the fastmap lifecycle gate. Outside
+    // the self-service platform no lifecycle record applies, so the gate
+    // decides by membership alone.
+    $this->container->set('markaspot_fastmap.workspace_lifecycle_gate', new WorkspaceLifecycleGate(
+      new WorkspaceLifecycle($this->container->get('config.factory'), $this->container->get('datetime.time')),
+      $this->container->get('entity_type.manager'),
+      $this->container->get('module_handler'),
+      $this->container->get('request_stack'),
+      $this->container->get('markaspot_group.hierarchy_resolver'),
+    ));
 
     $staff = $this->permissionAccount($this->orgModerator, ['bypass mas validation']);
     $this->assertTrue(_markaspot_fastmap_account_bypasses_tier_limit($staff, $this->tenantA));

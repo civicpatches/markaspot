@@ -4,25 +4,35 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_fastmap\Kernel;
 
+use Drupal\Core\DependencyInjection\ContainerBuilder;
+use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Hook\Attribute\Hook;
+use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\filter\Entity\FilterFormat;
 use Drupal\group\Entity\Group;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
+use Drupal\markaspot_fastmap\Service\WorkspaceNotOpenException;
+use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
+use Drupal\node\NodeInterface;
 use Drupal\node\Entity\NodeType;
 use Drupal\paragraphs\Entity\Paragraph;
 use Drupal\paragraphs\Entity\ParagraphsType;
 use Drupal\taxonomy\Entity\Vocabulary;
+use Drupal\Tests\user\Traits\UserCreationTrait;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\Group as TestGroup;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use Symfony\Component\DependencyInjection\Reference;
 
 /**
  * Tests the lifecycle record that provisioning writes, with real storage.
@@ -34,6 +44,8 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 #[TestGroup('markaspot_fastmap')]
 #[RunTestsInSeparateProcesses]
 final class LifecycleProvisioningKernelTest extends KernelTestBase {
+
+  use UserCreationTrait;
 
   /**
    * {@inheritdoc}
@@ -84,6 +96,49 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
    * When set, saving an account with an acceptance time fails.
    */
   private bool $failAcceptanceSave = FALSE;
+
+  /**
+   * {@inheritdoc}
+   */
+  public function register(ContainerBuilder $container): void {
+    parent::register($container);
+    // A worktree run discovers the module's services from another checkout.
+    if (!$container->hasDefinition('markaspot_fastmap.workspace_lifecycle')) {
+      $container->register('markaspot_fastmap.workspace_lifecycle', WorkspaceLifecycle::class)
+        ->setArguments([new Reference('config.factory'), new Reference('datetime.time')])
+        ->setPublic(TRUE);
+    }
+    if (!$container->hasDefinition('markaspot_fastmap.workspace_lifecycle_gate')) {
+      $container->register('markaspot_fastmap.workspace_lifecycle_gate', WorkspaceLifecycleGate::class)
+        ->setArguments([
+          new Reference('markaspot_fastmap.workspace_lifecycle'),
+          new Reference('entity_type.manager'),
+          new Reference('module_handler'),
+          new Reference('request_stack'),
+          new Reference('markaspot_group.hierarchy_resolver'),
+        ])
+        ->setPublic(TRUE);
+    }
+  }
+
+  /**
+   * Stands in for the module's save hook where it comes from elsewhere.
+   *
+   * Makes the seeding exemption run against the gate of this checkout.
+   */
+  #[Hook('node_presave')]
+  public function nodePresave(NodeInterface $node): void {
+    $path = $this->container->get('extension.list.module')->getPath('markaspot_fastmap');
+    if (realpath(DRUPAL_ROOT . '/' . $path) === realpath(dirname(__DIR__, 3))) {
+      return;
+    }
+    $this->container->get('markaspot_fastmap.workspace_lifecycle_gate')->enforceOnSave(
+      $node,
+      $this->container->get('current_user'),
+      static fn(): ?GroupInterface => _markaspot_fastmap_resolve_jurisdiction_group_for_node($node),
+      (bool) drupal_static(WorkspaceProvisioningService::DEMO_REQUEST_SEEDING, FALSE),
+    );
+  }
 
   /**
    * Makes the account save after the record write fail, on request.
@@ -167,6 +222,47 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     foreach ([User::load(1), $this->reloadUser($result['user_id'])] as $account) {
       $this->assertFalse($group->get(WorkspaceLifecycle::FIELD)->access('view', $account));
       $this->assertFalse($group->get(WorkspaceLifecycle::FIELD)->access('edit', $account));
+    }
+  }
+
+  /**
+   * Switch on: Free, no expiry, review on, the examples public, intake closed.
+   */
+  public function testSwitchOnProvisionsAnUnopenedFreeWorkspace(): void {
+    $this->setSwitch(TRUE);
+    $this->setSetting('markaspot_operating_mode', 'saas');
+    foreach (['lindenhof' => '', 'riverside' => 'pro'] as $slug => $selectedTier) {
+      $result = $this->provision($slug, ['acceptance' => self::ACCEPTANCE, 'selected_tier' => $selectedTier]);
+      $group = $this->reloadGroup($result['group_id']);
+      $this->assertSame('free', $group->get('field_tier')->value, "$slug: tier free");
+      $this->assertTrue($group->get('field_expiry_date')->isEmpty(), "$slug: no expiry, also with a chosen tier");
+      $config = json_decode((string) $group->get('field_nuxt_config')->value, TRUE);
+      $this->assertTrue($config['features']['reviewBeforePublish'], "$slug: review on");
+      $this->assertTrue($this->container->get('markaspot_fastmap.workspace_lifecycle')->isNotOpen($group), "$slug: not open");
+
+      $examples = $this->container->get('entity_type.manager')->getStorage('node')->loadByProperties([
+        'type' => 'service_request',
+        'field_jurisdiction' => $result['group_id'],
+      ]);
+      $this->assertNotEmpty($examples, "$slug: examples seeded");
+      foreach ($examples as $example) {
+        $this->assertTrue($example->isPublished(), "$slug: the seeded examples are public");
+      }
+    }
+
+    // A citizen report in the new workspace is refused at the save.
+    $this->setCurrentUser(new AnonymousUserSession());
+    try {
+      $this->container->get('entity_type.manager')->getStorage('node')->create([
+        'type' => 'service_request',
+        'title' => 'Citizen report',
+        'field_jurisdiction' => $result['group_id'],
+        'body' => ['value' => 'Cars park on the sidewalk.', 'format' => 'plain_text'],
+      ])->save();
+      $this->fail('A public report was stored in a workspace that is not open.');
+    }
+    catch (EntityStorageException $e) {
+      $this->assertInstanceOf(WorkspaceNotOpenException::class, $e->getPrevious());
     }
   }
 
@@ -413,6 +509,9 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->createField('group', 'jur', 'field_boundary', 'text_long');
     $this->createField('group', 'jur', 'field_parent_jurisdiction', 'entity_reference', ['target_type' => 'group']);
     $this->createField('group', 'jur', 'field_expiry_date', 'timestamp');
+    $this->createField('group', 'jur', 'field_tier', 'list_string', [
+      'allowed_values' => ['free' => 'Free', 'starter' => 'Starter', 'pro' => 'Pro', 'heart' => 'Heart'],
+    ]);
     $this->createField('group', 'jur', 'field_service_categories', 'entity_reference', ['target_type' => 'taxonomy_term'], -1);
   }
 

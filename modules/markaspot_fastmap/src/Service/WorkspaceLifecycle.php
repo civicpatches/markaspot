@@ -229,6 +229,32 @@ final class WorkspaceLifecycle {
   }
 
   /**
+   * Whether the workspace carries a valid record (the new model).
+   */
+  public function hasValidRecord(FieldableEntityInterface $group): bool {
+    return $this->read($group) !== NULL;
+  }
+
+  /**
+   * Whether the workspace has a valid record and has been opened.
+   */
+  public function isOpen(FieldableEntityInterface $group): bool {
+    $record = $this->read($group);
+    return $record !== NULL && is_array($record['opening'] ?? NULL);
+  }
+
+  /**
+   * Whether the workspace has a valid record and is not opened yet.
+   *
+   * Every valid record is either open or not open: an opening that is not a
+   * well-formed section counts as not open. A workspace without a valid
+   * record is neither.
+   */
+  public function isNotOpen(FieldableEntityInterface $group): bool {
+    return $this->hasValidRecord($group) && !$this->isOpen($group);
+  }
+
+  /**
    * Sets the acceptance record on a workspace. The caller saves the entity.
    *
    * @throws \InvalidArgumentException
