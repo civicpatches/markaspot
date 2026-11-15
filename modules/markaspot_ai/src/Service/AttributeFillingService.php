@@ -1335,9 +1335,9 @@ class AttributeFillingService {
    * @param string|null $draftStatusNote
    *   Existing unsaved status note text.
    * @param bool $fieldReasons
-   *   Field check with the brief switch on: ask for and return a reason per
-   *   retained suggestion. Ignored for the targeted note draft and without
-   *   draft context.
+   *   Field check: ask for and return a reason per retained suggestion,
+   *   independent of the brief switch. Ignored for the targeted note draft
+   *   and without draft context.
    * @param bool $noteBrief
    *   Brief switch on and the note text typed by the operator: the note is
    *   the operator's brief. Applies only to a targeted note draft with note

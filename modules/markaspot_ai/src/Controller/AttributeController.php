@@ -371,15 +371,18 @@ final class AttributeController extends ControllerBase {
           'message' => 'Instruction requires a targeted status-note draft request (maximum 1000 characters).',
         ], 400);
       }
-      // The per-tenant brief switch comes from the stored report, before the
-      // draft context replaces it, and never from the request.
-      $noteBrief = $hasDraft && $this->attributeFillingService->isNoteBriefEnabled($node);
+      // The per-tenant brief switch governs only the targeted note draft. It
+      // comes from the stored report, before the draft context replaces it,
+      // and never from the request.
+      $noteBrief = $hasDraft
+        && AttributeFillingService::isTargetedNoteDraft($requestedFields)
+        && $this->attributeFillingService->isNoteBriefEnabled($node);
       if ($hasDraft) {
         $node = $this->attributeFillingService->prepareAssistDraft($node, $content['draft'], $requestedFields, $this->currentUser());
       }
       $draftNote = $hasDraft ? ($content['draft']->status_note ?? NULL) : NULL;
       $noteMode = NULL;
-      if ($noteBrief && AttributeFillingService::isTargetedNoteDraft($requestedFields)) {
+      if ($noteBrief) {
         try {
           $noteMode = $this->attributeFillingService->resolveNoteDraftMode($draftNote, $instruction, $content['note_origin'] ?? NULL);
         }
@@ -387,8 +390,9 @@ final class AttributeController extends ControllerBase {
           return new JsonResponse(['success' => FALSE, 'code' => 'invalid_request'], 400);
         }
       }
-      // Field check with the switch on: every success carries "reasons".
-      $fieldReasons = $noteBrief && !AttributeFillingService::isTargetedNoteDraft($requestedFields);
+      // Field check (draft context, not the targeted note draft): every
+      // success carries "reasons", independent of the brief switch.
+      $fieldReasons = $hasDraft && !AttributeFillingService::isTargetedNoteDraft($requestedFields);
       $result = $this->attributeFillingService->assistForm($node, $requestedFields, $langcode, $hasDraft, $instruction, $draftNote, $fieldReasons, $noteMode === AttributeFillingService::NOTE_MODE_BRIEF);
 
       if ($result === NULL) {

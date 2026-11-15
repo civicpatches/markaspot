@@ -41,13 +41,18 @@ require_once dirname(__DIR__, 4) . '/markaspot_nuxt/src/Service/FeatureScopeReso
  * Runs the real controller, the real form assistant and the real feature
  * scope resolver; only the report context loaders and the provider client are
  * stubbed. Every provider call (messages and options) and the raw response
- * body are compared with fixtures recorded from the code before the
- * per-tenant brief switch existed, so "switch off" provably equals that code.
+ * body are compared with recorded fixtures. The note-draft, legacy and error
+ * fixtures come from the code before the per-tenant brief switch existed, so
+ * "switch off" provably equals that code for them. The two field-check
+ * fixtures (field_check, field_check_invalid_json) pin the approved change
+ * that the field check always asks for and returns reasons, independent of
+ * the switch; they were recorded from the code with that change.
  *
  * Re-record (only when a deliberate change of the off state is approved, and
- * only from the code before the switch): MARKASPOT_AI_RECORD_ASSIST_FIXTURES=1
+ * only for the cases that change): MARKASPOT_AI_RECORD_ASSIST_FIXTURES=1
  * with --filter testSwitchOffMatchesPinnedBaseline. A recording run fails on
- * purpose; rerun without the flag.
+ * purpose; rerun without the flag, and check that only the intended fixture
+ * files differ.
  */
 #[Group('markaspot_ai')]
 final class AssistContractTest extends UnitTestCase {
@@ -660,50 +665,91 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
-   * Switch on: the field check asks for reasons and returns valid ones.
+   * The field check asks for reasons and returns valid ones, switch or not.
+   *
+   * The brief switch governs only the note draft: absent, off and on give
+   * byte-identical provider calls and responses for the field check.
    */
-  public function testSwitchOnFieldCheckReturnsReasons(): void {
-    $this->enableBrief();
+  public function testFieldCheckReturnsReasonsInEverySwitchState(): void {
     [$body, , $reply] = self::cases()['field_check'];
-    $outcome = $this->assist($body, $reply);
-    $fixture = $this->fixture('field_check');
-
-    $this->assertSame(200, $outcome['status']);
-    $data = json_decode($outcome['body'], TRUE);
-    $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data));
-    $this->assertSame(json_decode($fixture['body'], TRUE)['suggestions'], $data['suggestions']);
-    // "pole" has no reason: the entry is omitted, never generated.
-    $this->assertSame([
-      'body' => 'Photo 1 shows the loose lamp head.',
-      'priority' => 'Citizen writes "cables hang down".',
-      'attributes.lamp_type' => 'The photo shows an orange sodium lamp.',
-    ], $data['reasons']);
-
-    // Only the reasons line is added; user message and options stay today's.
     $line = '- For every suggested value add a reason in `reasons` (`body`, `priority`, `attributes.<code>`): '
       . 'one sentence of at most 160 characters in English, naming what in the report, an attribute or a photo it rests on. '
       . 'Put citizen words in quotation marks. Never describe persons, never state an inspection, repair, forwarding, date or completion.';
-    $system = $outcome['calls'][0]['messages'][0]['content'];
-    $this->assertSame(1, substr_count($system, $line));
-    $this->assertSame($fixture['calls'][0]['messages'][0]['content'], str_replace("\n" . $line, '', $system));
-    $this->assertSame($fixture['calls'][0]['messages'][1], $outcome['calls'][0]['messages'][1]);
-    $this->assertSame($fixture['calls'][0]['options'], $outcome['calls'][0]['options']);
+    $outcomes = [];
+    foreach (self::switchStates() as $label => $features) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => $features];
+      $this->calls = [];
+      $outcome = $this->assist($body, $reply);
+      $outcomes[$label] = $outcome;
+
+      $this->assertSame(200, $outcome['status'], $label);
+      $data = json_decode($outcome['body'], TRUE);
+      $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data), $label);
+      $this->assertSame([
+        'body' => 'The lamp head hangs loose.',
+        'attributes' => ['lamp_type' => 'sodium', 'pole' => 'wood'],
+        'priority' => TRUE,
+      ], $data['suggestions'], $label);
+      // "pole" has no reason: the entry is omitted, never generated.
+      $this->assertSame([
+        'body' => 'Photo 1 shows the loose lamp head.',
+        'priority' => 'Citizen writes "cables hang down".',
+        'attributes.lamp_type' => 'The photo shows an orange sodium lamp.',
+      ], $data['reasons'], $label);
+      $this->assertSame(1, substr_count($outcome['calls'][0]['messages'][0]['content'], $line), $label);
+      $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']), $label);
+    }
+    $this->assertSame(self::encode($outcomes['absent']), self::encode($outcomes['on']));
+    $this->assertSame(self::encode($outcomes['absent']), self::encode($outcomes['off']));
   }
 
   /**
-   * Switch on: invalid or unretained reasons are omitted; empty is an object.
+   * Without AI processing the field check is refused, with or without brief.
+   */
+  public function testFieldCheckWithoutAiProcessingCarriesNoReasons(): void {
+    [$body, , $reply] = self::cases()['field_check'];
+    foreach ([[], ['aiNoteBrief' => TRUE]] as $brief) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => ['aiProcessing' => FALSE] + $brief];
+      $this->calls = [];
+      $outcome = $this->assist($body, $reply);
+      $this->assertSame(
+        [403, $this->fixture('error_ai_disabled')['body'], []],
+        [$outcome['status'], $outcome['body'], $outcome['calls']],
+      );
+    }
+  }
+
+  /**
+   * Invalid or unretained reasons are omitted; empty is an object.
    */
   #[DataProvider('reasonCases')]
-  public function testSwitchOnReasonValidation(array $reply, array $expected): void {
-    $this->enableBrief();
+  public function testReasonValidationInEverySwitchState(array $reply, array $expected): void {
     [$body] = self::cases()['field_check'];
-    $outcome = $this->assist($body, json_encode($reply, JSON_THROW_ON_ERROR));
-    $this->assertSame(200, $outcome['status']);
-    $data = json_decode($outcome['body'], TRUE);
-    $this->assertSame($expected, $data['reasons']);
-    if ($expected === []) {
-      $this->assertStringEndsWith('"reasons":{}}', $outcome['body']);
+    foreach (self::switchStates() as $label => $features) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => $features];
+      $this->calls = [];
+      $outcome = $this->assist($body, json_encode($reply, JSON_THROW_ON_ERROR));
+      $this->assertSame(200, $outcome['status'], $label);
+      $data = json_decode($outcome['body'], TRUE);
+      $this->assertSame($expected, $data['reasons'], $label);
+      if ($expected === []) {
+        $this->assertStringEndsWith('"reasons":{}}', $outcome['body'], $label);
+      }
     }
+  }
+
+  /**
+   * Tenant feature sets for the brief switch: absent, off and on.
+   *
+   * @return array<string, array<string, bool>>
+   *   Features per label, all with AI processing on.
+   */
+  private static function switchStates(): array {
+    return [
+      'absent' => ['aiProcessing' => TRUE],
+      'off' => ['aiProcessing' => TRUE, 'aiNoteBrief' => FALSE],
+      'on' => ['aiProcessing' => TRUE, 'aiNoteBrief' => TRUE],
+    ];
   }
 
   /**
@@ -760,14 +806,18 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
-   * Switch on: failures keep today's error contract, without reasons.
+   * Field-check failures keep today's error contract, without reasons.
    */
-  public function testSwitchOnFieldCheckErrorsCarryNoReasons(): void {
-    $this->enableBrief();
+  public function testFieldCheckErrorsCarryNoReasonsInEverySwitchState(): void {
     [$body, , $reply] = self::cases()['field_check_invalid_json'];
-    $outcome = $this->assist($body, $reply);
-    $this->assertSame($this->fixture('field_check_invalid_json')['body'], $outcome['body']);
-    $this->assertSame(200, $outcome['status']);
+    foreach (self::switchStates() as $label => $features) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => $features];
+      $this->calls = [];
+      $outcome = $this->assist($body, $reply);
+      $this->assertSame('{"success":false,"message":"AI could not generate suggestions for this request."}', $outcome['body'], $label);
+      $this->assertSame(200, $outcome['status'], $label);
+      $this->assertMatchesBaseline('field_check_invalid_json', $outcome);
+    }
   }
 
   /**
@@ -798,11 +848,10 @@ final class AssistContractTest extends UnitTestCase {
   }
 
   /**
-   * Switch on: status_note plus another field is a field check.
+   * Status_note plus another field is a field check, switch or not.
    */
   #[DataProvider('anyOrigin')]
-  public function testSwitchOnMixedDraftIsFieldCheck(mixed $origin): void {
-    $this->enableBrief();
+  public function testMixedDraftIsFieldCheckInEverySwitchState(mixed $origin): void {
     $request = self::withOrigin([
       'nid' => self::NID,
       'langcode' => 'en',
@@ -810,14 +859,18 @@ final class AssistContractTest extends UnitTestCase {
       'draft' => ['status_note' => 'tell them we forwarded it', 'body' => 'Dark lamp, cables hang down.'],
     ], $origin);
     $reply = '{"status_note":"We forwarded it.","body":"The lamp head hangs loose.","reasons":{"body":"Photo 1 shows it.","status_note":"Not a field reason."}}';
-    $outcome = $this->assist($request, $reply);
+    foreach (self::switchStates() as $label => $features) {
+      $this->groupConfigs[self::JURISDICTION] = ['features' => $features];
+      $this->calls = [];
+      $outcome = $this->assist($request, $reply);
 
-    $this->assertSame(200, $outcome['status']);
-    $data = json_decode($outcome['body'], TRUE);
-    $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data));
-    $this->assertSame(['body' => 'Photo 1 shows it.'], $data['reasons']);
-    $this->assertStringContainsString('For every suggested value add a reason', $outcome['calls'][0]['messages'][0]['content']);
-    $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']));
+      $this->assertSame(200, $outcome['status'], $label);
+      $data = json_decode($outcome['body'], TRUE);
+      $this->assertSame(['success', 'suggestions', 'model', 'reasons'], array_keys($data), $label);
+      $this->assertSame(['body' => 'Photo 1 shows it.'], $data['reasons'], $label);
+      $this->assertStringContainsString('For every suggested value add a reason', $outcome['calls'][0]['messages'][0]['content'], $label);
+      $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']), $label);
+    }
   }
 
   /**
