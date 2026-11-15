@@ -698,6 +698,8 @@ final class AssistContractTest extends UnitTestCase {
       ], $data['reasons'], $label);
       $this->assertSame(1, substr_count($outcome['calls'][0]['messages'][0]['content'], $line), $label);
       $this->assertStringNotContainsString('is your brief', self::encode($outcome['calls']), $label);
+      // Room for the reasons; the note draft keeps its 1200 (note fixtures).
+      $this->assertSame(2000, $outcome['calls'][0]['options']['max_tokens'], $label);
     }
     $this->assertSame(self::encode($outcomes['absent']), self::encode($outcomes['on']));
     $this->assertSame(self::encode($outcomes['absent']), self::encode($outcomes['off']));

@@ -1657,7 +1657,10 @@ class AttributeFillingService {
       $response = $this->aiClient->chat($messages, [
         'model' => $model,
         'temperature' => 0.3,
-        'max_tokens' => 1200,
+        // One reason of up to 160 characters per suggested value roughly
+        // doubles the field-check answer; a truncated answer is invalid JSON
+        // and loses every suggestion, so only the field check gets more room.
+        'max_tokens' => $withReasons ? 2000 : 1200,
         'response_format' => ['type' => 'json_object'],
         // AiClientService books the usage under this operation.
         'operation' => 'form_assist',
