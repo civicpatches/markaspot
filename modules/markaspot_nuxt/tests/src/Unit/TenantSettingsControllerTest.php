@@ -11,6 +11,7 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
@@ -36,6 +37,7 @@ use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
 use Drupal\Tests\UnitTestCase;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 require_once dirname(__DIR__, 4) . '/markaspot_group/src/Trait/JurisdictionIdResolverTrait.php';
 require_once dirname(__DIR__, 3) . '/src/Controller/TenantSettingsController.php';
@@ -2153,6 +2155,100 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertSame(200, $response->getStatusCode());
     $this->assertSame('authenticated', $persistedFields['field_visibility']);
     $this->assertSame(['refresh', 'refresh', 'save'], $saveEvents);
+  }
+
+  /**
+   * Tests a settings save from a stale entity keeps the lifecycle record.
+   *
+   * The map was opened after the entity was loaded: the save refreshes the
+   * record from storage instead of writing the stale one back.
+   *
+   * @covers ::updateGeneralSettings
+   * @covers ::saveGroupWithProtectedFields
+   */
+  public function testUpdateGeneralSettingsKeepsConcurrentLifecycleRecord(): void {
+    $this->currentUser->method('id')->willReturn('7');
+    $this->currentUser->method('getRoles')->willReturn(['authenticated', 'tenant_admin']);
+
+    $this->createConcurrentBlockGroup([
+      'field_platform_name' => 'Tree map',
+      'field_lifecycle_record' => '{"opening":null}',
+    ], $persistedFields, $saveEvents);
+    $persistedFields['field_lifecycle_record'] = '{"opening":{"opened_at":1800001000}}';
+
+    $request = Request::create(
+      '/api/tenant/14/general',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['field_platform_name' => 'Trees']),
+    );
+
+    $response = $this->controller->updateGeneralSettings($request, '14');
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame('Trees', $persistedFields['field_platform_name']);
+    $this->assertSame('{"opening":{"opened_at":1800001000}}', $persistedFields['field_lifecycle_record']);
+  }
+
+  /**
+   * Tests a refusal raised while saving keeps its client status and message.
+   *
+   * Entity storage wraps an exception of a presave hook; the endpoint answers
+   * with a wrapped client error instead of a generic 500.
+   *
+   * @covers ::updateGeneralSettings
+   * @dataProvider saveRefusalProvider
+   */
+  public function testUpdateGeneralSettingsPassesOnSaveRefusal(\Exception $previous, int $status, string $error): void {
+    $this->currentUser->method('id')->willReturn('7');
+    $this->currentUser->method('getRoles')->willReturn(['authenticated', 'tenant_admin']);
+
+    $group = $this->createMock(GroupInterface::class);
+    $group->method('id')->willReturn('14');
+    $group->method('bundle')->willReturn('jur');
+    $group->method('isPublished')->willReturn(TRUE);
+    $group->method('hasField')->willReturnCallback(
+      static fn(string $name): bool => in_array($name, ['field_platform_name', 'field_visibility'], TRUE),
+    );
+    $group->method('get')->willReturnCallback(
+      fn(string $name): object => $this->createStatefulFieldItem($name === 'field_visibility' ? 'public' : 'Tree map'),
+    );
+    $group->method('set')->willReturnSelf();
+    $group->method('save')->willThrowException(new EntityStorageException($previous->getMessage(), 0, $previous));
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->groupStorage->method('loadUnchanged')->willReturn($group);
+
+    $request = Request::create(
+      '/api/tenant/14/general',
+      'PATCH',
+      [],
+      [],
+      [],
+      ['CONTENT_TYPE' => 'application/json'],
+      json_encode(['field_platform_name' => 'Trees']),
+    );
+    $response = $this->controller->updateGeneralSettings($request, '14');
+
+    $this->assertSame($status, $response->getStatusCode());
+    $this->assertSame($error, json_decode((string) $response->getContent(), TRUE)['error']);
+  }
+
+  /**
+   * Exceptions wrapped by the storage and the answer they get.
+   */
+  public static function saveRefusalProvider(): array {
+    return [
+      'client refusal' => [
+        new HttpException(422, 'operator_incomplete: Missing: address_line1.'),
+        422,
+        'operator_incomplete: Missing: address_line1.',
+      ],
+      'plain error' => [new \RuntimeException('Database gone'), 500, 'Failed to save general settings.'],
+      'wrapped server status' => [new HttpException(503, 'Busy'), 500, 'Failed to save general settings.'],
+    ];
   }
 
   /**

@@ -113,7 +113,7 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
   /**
    * A record of an open workspace, as the test helper writes it.
    */
-  private const OPEN_RECORD = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":0},"opening":{"at":1800001000}}';
+  private const OPEN_RECORD = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":0},"opening":{"opened_at":1800001000,"uid":7,"revision_id":1,"operator":{"organization":"Example Org","address_line1":"Main street 1","postal_code":"12345","locality":"Town","country_code":"DE","email":"operator@example.org"}}}';
 
   /**
    * The open Free workspace with a lifecycle record.
@@ -403,7 +403,11 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
    * Writes the record of an opened workspace (test helper, no product code).
    */
   private function writeOpenRecord(GroupInterface $workspace): void {
+    // Marked as syncing: the record rule lets only the lifecycle service and
+    // syncing saves change the record of an existing workspace.
+    $workspace->setSyncing(TRUE);
     $workspace->set(WorkspaceLifecycle::FIELD, self::OPEN_RECORD)->save();
+    $workspace->setSyncing(FALSE);
     $this->assertTrue($this->container->get('markaspot_fastmap.workspace_lifecycle')->isOpen($workspace));
   }
 

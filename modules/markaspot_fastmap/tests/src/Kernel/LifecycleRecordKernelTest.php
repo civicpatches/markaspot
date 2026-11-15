@@ -359,7 +359,11 @@ final class LifecycleRecordKernelTest extends KernelTestBase {
     $record = json_encode(WorkspaceLifecycle::buildRecord($acceptance, 5));
 
     $workspace = Group::load($this->workspace->id());
+    // Fixture write outside the lifecycle service: marked as syncing, the
+    // only save the record rule lets through besides the service's own.
+    $workspace->setSyncing(TRUE);
     $workspace->set(WorkspaceLifecycle::FIELD, $record)->save();
+    $workspace->setSyncing(FALSE);
     $workspace->setNewRevision(TRUE);
     $workspace->set('label', 'Existing map, renamed')->save();
     $garbage = Group::create([
@@ -434,7 +438,10 @@ final class LifecycleRecordKernelTest extends KernelTestBase {
     $groups = $this->container->get('entity_type.manager')->getStorage('group');
     $groups->resetCache();
     $workspace = $groups->load($this->workspace->id());
+    // Fixture write outside the lifecycle service, marked as syncing.
+    $workspace->setSyncing(TRUE);
     $workspace->set(WorkspaceLifecycle::FIELD, $this->recordValue())->save();
+    $workspace->setSyncing(FALSE);
     $this->container->get('router.builder')->rebuild();
     return $workspace;
   }

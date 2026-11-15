@@ -38,7 +38,7 @@ class WorkspaceLifecycleGateTest extends UnitTestCase {
 
   private const NOT_OPEN = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":7},"opening":null}';
 
-  private const OPEN = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":7},"opening":{"at":1800001000}}';
+  private const OPEN = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":7},"opening":{"opened_at":1800001000,"uid":7,"revision_id":1,"operator":{"organization":"Example Org","address_line1":"Main street 1","postal_code":"12345","locality":"Town","country_code":"DE","email":"operator@example.org"}}}';
 
   /**
    * The request stack the gate reads the session from.

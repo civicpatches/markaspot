@@ -202,6 +202,24 @@ markaspot_fastmap.workspace_deletion_request:
     _auth: ['cookie']
     no_cache: 'TRUE'
 
+markaspot_fastmap.workspace_open:
+  path: '/api/fastmap/workspace/{jurisdiction_id}/open'
+  defaults:
+    _controller: '\Drupal\markaspot_fastmap\Controller\WorkspaceOpeningController::open'
+    _title: 'Open the map for public reports'
+  methods: [POST]
+  requirements:
+    # The same access as the tenant settings routes: platform administrators
+    # and the tenant admins of this jurisdiction.
+    _user_is_logged_in: 'TRUE'
+    _custom_access: '\Drupal\markaspot_nuxt\Controller\TenantSettingsController::accessCheck'
+    _csrf_request_header_token: 'TRUE'
+    _format: 'json'
+    jurisdiction_id: '[a-z0-9_-]+'
+  options:
+    _auth: ['cookie']
+    no_cache: 'TRUE'
+
 markaspot_fastmap.workspace_deletion_peek:
   path: '/api/fastmap/workspace-deletion/peek'
   defaults:

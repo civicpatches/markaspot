@@ -56,3 +56,20 @@ workspace_deletion_operator:
 
     The workspace is offline. Restore before the teardown with:
     drush markaspot:workspace-restore @workspace_id
+workspace_opened_support:
+  subject: 'Map opened: @workspace_name (@workspace_slug)'
+  body: |
+    A map was opened for public reports.
+
+    Map: @workspace_name
+    Link: @workspace_url
+    Group ID: @workspace_id
+    Opened: @opened_at
+    Opened by (account e-mail): @opened_by
+
+    Operator, as entered:
+    Name: @operator_name
+    Address: @operator_address
+    Contact e-mail: @operator_email
+
+    If these details are obviously false, block the workspace and write to the account e-mail above.

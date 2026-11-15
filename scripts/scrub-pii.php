@@ -28,6 +28,7 @@
  */
 
 use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\markaspot_fastmap\Service\OperatorScrub;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\node\NodeInterface;
 use Drupal\user\UserInterface;
@@ -81,10 +82,22 @@ const SCRUB_DERIVED_TEXT_COLUMNS = [
 ];
 
 // Workspace lifecycle record on the jurisdiction group (markaspot_fastmap):
-// JSON with the accepting account and, later, the operator snapshot. The
-// account reference is zeroed and the record keeps its shape, so a scrubbed
-// copy keeps each workspace under the same rules.
+// JSON with the accepting account and, once the map is open, the opening
+// account and the operator snapshot. The account references are zeroed, the
+// snapshot gets fixed placeholders and the record keeps its shape, so a
+// scrubbed copy keeps each workspace under the same rules, open or not.
 const SCRUB_LIFECYCLE_FIELD = 'field_lifecycle_record';
+
+// The operator of a workspace with a lifecycle record may be a natural person:
+// its address and contact e-mail get the record's fixed placeholders and its
+// legal notice, which repeats them, a fixed text, in every revision and
+// translation (OperatorScrub decides the values). Workspaces without a record
+// keep them.
+const SCRUB_OPERATOR_FIELDS = [
+  'field_jurisdiction_address' => 'address',
+  'field_jurisdiction_e_mail' => 'email',
+  'field_legal_notice' => 'legal_notice',
+];
 
 // Carriers this tool knowingly does not rewrite. Verify refuses to pass while
 // any of them holds rows, unless the operator acknowledges them explicitly.
@@ -205,6 +218,21 @@ if ($verify) {
     if ($rows > 0) {
       $residual += $rows;
       printf("FAIL %s: %d rows still hold derived text in %s\n", $table, $rows, implode(', ', $columns));
+    }
+    else {
+      printf("ok   %s\n", $table);
+    }
+  }
+
+  foreach (scrub_operator_tables() as $table => [$field, $kind]) {
+    $rows = scrub_operator_unscrubbed_rows($table, $field, $kind);
+    if ($rows === NULL) {
+      printf("FAIL %s: operator data cannot be verified without markaspot_fastmap\n", $table);
+      $residual++;
+    }
+    elseif ($rows !== []) {
+      $residual += count($rows);
+      printf("FAIL %s: %d rows of lifecycle workspaces still hold operator data\n", $table, count($rows));
     }
     else {
       printf("ok   %s\n", $table);
@@ -389,6 +417,24 @@ foreach (SCRUB_DERIVED_TEXT_COLUMNS as $table => $columns) {
     $rows,
     $apply ? ' cleared' : ' would be cleared'
   );
+}
+
+// --- Operator data of lifecycle workspaces ----------------------------------
+// Required order: before the record sweep, which removes undecodable records,
+// and the record is what marks a workspace whose operator data are scrubbed.
+foreach (scrub_operator_tables() as $table => [$field, $kind]) {
+  $rows = scrub_operator_unscrubbed_rows($table, $field, $kind);
+  if ($rows === NULL) {
+    printf("  Operator %s: markaspot_fastmap is not available, rows left as they are\n", $table);
+    continue;
+  }
+  if ($rows === []) {
+    continue;
+  }
+  if ($apply) {
+    scrub_operator_sweep($table, $field, $kind, $rows);
+  }
+  printf("  Operator %s: %d rows%s\n", $table, count($rows), $apply ? ' rewritten' : ' would be rewritten');
 }
 
 // --- Workspace lifecycle records -------------------------------------------
@@ -988,9 +1034,10 @@ function scrub_lifecycle_count_unscrubbed(string $table): ?int {
  * Rewrites the lifecycle records of one table.
  *
  * A record that does not decode is removed: its content is unknown. A
- * record outside the known shape (an opening section, an extra key, an
+ * record outside the known shape (an extra key, a malformed opening, an
  * invalid value) stays as it is, because this version cannot rebuild it;
- * verify then fails.
+ * verify then fails. An opening keeps its time and revision and gets fixed
+ * placeholders for the operator's name, address and e-mail.
  *
  * @return int
  *   Records left unscrubbed.
@@ -1029,4 +1076,124 @@ function scrub_lifecycle_sweep(string $table): int {
     });
   }
   return $left;
+}
+
+/**
+ * Returns the data and revision tables of the operator fields.
+ *
+ * @return array<string, array{0: string, 1: string}>
+ *   Table name => [field name, "address", "email" or "legal_notice"]; empty
+ *   without fields.
+ */
+function scrub_operator_tables(): array {
+  $etm = \Drupal::entityTypeManager();
+  if (!$etm->hasDefinition('group')) {
+    return [];
+  }
+  $definitions = \Drupal::service('entity_field.manager')->getFieldStorageDefinitions('group');
+  $mapping = $etm->getStorage('group')->getTableMapping();
+  $schema = \Drupal::database()->schema();
+  $tables = [];
+  foreach (SCRUB_OPERATOR_FIELDS as $field => $kind) {
+    $definition = $definitions[$field] ?? NULL;
+    if ($definition === NULL || !$mapping->requiresDedicatedTableStorage($definition)) {
+      continue;
+    }
+    foreach ([$mapping->getDedicatedDataTableName($definition), $mapping->getDedicatedRevisionTableName($definition)] as $table) {
+      if ($schema->tableExists($table)) {
+        $tables[$table] = [$field, $kind];
+      }
+    }
+  }
+  return $tables;
+}
+
+/**
+ * Returns the IDs of workspaces that carry a lifecycle record.
+ *
+ * Any revision with a record counts, so a workspace stays covered after the
+ * record sweep removed an undecodable value.
+ *
+ * @return int[]
+ *   Group IDs.
+ */
+function scrub_operator_record_ids(): array {
+  $ids = [];
+  foreach (scrub_lifecycle_tables() as $table) {
+    $column = SCRUB_LIFECYCLE_FIELD . '_value';
+    $query = \Drupal::database()->select($table, 't')->distinct();
+    $query->addField('t', 'entity_id');
+    $query->isNotNull($column);
+    foreach ($query->execute()->fetchCol() as $id) {
+      $ids[(int) $id] = (int) $id;
+    }
+  }
+  return array_values($ids);
+}
+
+/**
+ * Loads the rows of lifecycle workspaces whose operator data are not scrubbed.
+ *
+ * @return array|null
+ *   Rows with their key columns and the field's columns keyed by property
+ *   (under "values"); NULL when markaspot_fastmap is not loaded.
+ */
+function scrub_operator_unscrubbed_rows(string $table, string $field, string $kind): ?array {
+  $ids = scrub_operator_record_ids();
+  if (!class_exists(OperatorScrub::class)) {
+    return $ids === [] ? [] : NULL;
+  }
+  if ($ids === []) {
+    return [];
+  }
+  $database = \Drupal::database();
+  $columns = \Drupal::entityTypeManager()->getStorage('group')->getTableMapping()->getColumnNames($field);
+  $columns = array_filter($columns, static fn(string $column): bool => $database->schema()->fieldExists($table, $column));
+  $keys = array_values(array_filter(
+    ['entity_id', 'revision_id', 'langcode', 'delta', 'deleted'],
+    static fn(string $key): bool => $database->schema()->fieldExists($table, $key),
+  ));
+  $query = $database->select($table, 't')->fields('t', array_merge($keys, array_values($columns)));
+  $query->condition('t.entity_id', $ids, 'IN');
+  $rows = [];
+  foreach ($query->execute()->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+    $values = [];
+    foreach ($columns as $property => $column) {
+      $values[$property] = $row[$column];
+    }
+    $clean = match ($kind) {
+      'email' => OperatorScrub::isScrubbedEmail($values['value'] ?? NULL),
+      'legal_notice' => OperatorScrub::isScrubbedLegalNotice($values),
+      default => OperatorScrub::isScrubbedAddress($values),
+    };
+    if (!$clean) {
+      $rows[] = ['keys' => array_intersect_key($row, array_flip($keys)), 'values' => $values, 'columns' => $columns];
+    }
+  }
+  return $rows;
+}
+
+/**
+ * Writes the scrubbed operator values into the given rows.
+ */
+function scrub_operator_sweep(string $table, string $field, string $kind, array $rows): void {
+  $database = \Drupal::database();
+  foreach ($rows as $row) {
+    $values = match ($kind) {
+      'email' => ['value' => OperatorScrub::email()],
+      'legal_notice' => OperatorScrub::legalNotice($row['values']),
+      default => OperatorScrub::address($row['values']),
+    };
+    $fields = [];
+    foreach ($values as $property => $value) {
+      $fields[$row['columns'][$property]] = $value;
+    }
+    $update = $database->update($table)->fields($fields);
+    foreach ($row['keys'] as $key => $value) {
+      $update->condition($key, $value);
+    }
+    scrub_with_retriable_conflict(function () use ($update): void {
+      $update->execute();
+    });
+  }
 }

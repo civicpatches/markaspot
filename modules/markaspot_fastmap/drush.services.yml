@@ -4,6 +4,7 @@ services:
     arguments:
       - '@entity_type.manager'
       - '@markaspot_fastmap.workspace_deletion'
+      - '@markaspot_fastmap.workspace_opening'
     tags:
       - { name: drush.command }
   markaspot_fastmap.demo_workspace_commands:

@@ -49,6 +49,19 @@ services:
   # Autowiring alias for the hook class.
   Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate: '@markaspot_fastmap.workspace_lifecycle_gate'
 
+  markaspot_fastmap.workspace_opening:
+    class: Drupal\markaspot_fastmap\Service\WorkspaceOpening
+    arguments:
+      - '@entity_type.manager'
+      - '@markaspot_fastmap.workspace_lifecycle'
+      - '@module_handler'
+      - '@lock'
+      - '@plugin.manager.mail'
+      - '@config.factory'
+      - '@logger.channel.markaspot_fastmap'
+  # Autowiring alias for the hook class.
+  Drupal\markaspot_fastmap\Service\WorkspaceOpening: '@markaspot_fastmap.workspace_opening'
+
   markaspot_fastmap.vision_purpose_rules:
     class: Drupal\markaspot_fastmap\Service\VisionPurposeRules
     arguments:

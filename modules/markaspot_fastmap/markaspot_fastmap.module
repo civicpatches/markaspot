@@ -21,7 +21,9 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Service\DemoStaffAccount;
+use Drupal\markaspot_fastmap\Service\OperatorDetails;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
 use Drupal\markaspot_validation\Plugin\Validation\Geo\GeoJsonBoundary;
 use Drupal\node\NodeInterface;
@@ -124,6 +126,7 @@ function markaspot_fastmap_mail(string $key, array &$message, array $params): vo
     'workspace_deletion_confirm',
     'workspace_deletion_scheduled',
     'workspace_deletion_operator',
+    'workspace_opened_support',
   ];
   if (in_array($key, $templated, TRUE)) {
     $langcode = $message['langcode'] ?? 'en';
@@ -179,6 +182,20 @@ function markaspot_fastmap_mail(string $key, array &$message, array $params): vo
         '@requested_by' => $params['requested_by'] ?? '',
         '@deletion_date' => $params['deletion_date'] ?? '',
       ],
+      // Operator values are user input: one line each, also in the subject.
+      'workspace_opened_support' => array_map(
+        static fn(mixed $value): string => str_replace(["\r", "\n", "\0"], ' ', (string) $value),
+        [
+          '@workspace_slug' => $params['workspace_slug'] ?? '',
+          '@workspace_id' => $params['workspace_id'] ?? '',
+          '@workspace_url' => $params['workspace_url'] ?? '',
+          '@operator_name' => $params['operator_name'] ?? '',
+          '@operator_address' => $params['operator_address'] ?? '',
+          '@operator_email' => $params['operator_email'] ?? '',
+          '@opened_by' => $params['opened_by'] ?? '',
+          '@opened_at' => $params['opened_at'] ?? '',
+        ],
+      ),
     };
 
     $message['subject'] = strtr($template['subject'], $replacements);
@@ -450,7 +467,7 @@ function markaspot_fastmap_group_update(GroupInterface $group): void {
 
   // Recursion guard: the generator calls $group->save() which fires this
   // hook again. We only want to enter the generator once per outer save.
-  $regenerating = &drupal_static(__FUNCTION__ . ':regenerating', []);
+  $regenerating = &drupal_static(WorkspaceLifecycle::LEGAL_NOTICE_REGENERATING, []);
   $gid = (int) $group->id();
   if (!empty($regenerating[$gid])) {
     return;
@@ -1111,9 +1128,36 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
       $gate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
       $workspace = $gate->recordWorkspace($group);
       if ($workspace !== NULL) {
-        $settings['jurisdiction']['open'] = $gate->openState($workspace) === TRUE;
+        $open = $gate->openState($workspace) === TRUE;
+        $settings['jurisdiction']['open'] = $open;
         // The record may sit on the root of a child jurisdiction.
         $cache_metadata?->addCacheableDependency($workspace);
+        // The opening saves the workspace, which invalidates this response
+        // through its cache tag. The shorter max-age covers Drupal caches that
+        // expire by age only; HTTP and UI caches are not governed by it.
+        if (!$open) {
+          $cache_metadata?->mergeCacheMaxAge(WorkspaceLifecycleGate::NOT_OPEN_SETTINGS_MAX_AGE);
+        }
+        // Before opening, the operator details are a draft only the
+        // workspace's admins see (dashboard settings): no operator block,
+        // which also carries the address, the e-mail and the generated legal
+        // notice. Once open, the imprint names the operator: the organisation
+        // or the person from the address, never the map name the response
+        // puts there. A child jurisdiction without operator data of its own
+        // names the operator of the workspace that carries the record.
+        $operatorName = OperatorDetails::name($group) ?? OperatorDetails::name($workspace);
+        if (!$open) {
+          unset($settings['operator']);
+        }
+        elseif ($operatorName !== NULL) {
+          $settings['operator']['name'] = $operatorName;
+        }
+        elseif (isset($settings['operator']) && is_array($settings['operator'])) {
+          unset($settings['operator']['name']);
+          if ($settings['operator'] === []) {
+            unset($settings['operator']);
+          }
+        }
       }
     }
   }
@@ -1162,9 +1206,11 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
  * Implements hook_markaspot_nuxt_tenant_general_settings_alter().
  *
  * Adds the lifecycle object to the dashboard's general settings, only for a
- * workspace with a valid lifecycle record. The route has already checked
- * that the caller administers this workspace. The public settings response
- * never carries it.
+ * workspace with a valid lifecycle record: the acceptance, the open state
+ * and the operator parts still missing for opening. For such a workspace the
+ * address also carries the person name halves. The route has already
+ * checked that the caller administers this workspace. The public settings
+ * response never carries the lifecycle object.
  */
 function markaspot_fastmap_markaspot_nuxt_tenant_general_settings_alter(array &$data, $group): void {
   if (!$group instanceof GroupInterface) {
@@ -1172,9 +1218,13 @@ function markaspot_fastmap_markaspot_nuxt_tenant_general_settings_alter(array &$
   }
   /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycle $lifecycle */
   $lifecycle = \Drupal::service('markaspot_fastmap.workspace_lifecycle');
-  $summary = $lifecycle->settingsSummary($group);
+  $summary = $lifecycle->dashboardSummary($group);
   if ($summary !== NULL) {
     $data['lifecycle'] = $summary;
+    // The operator may be a person: the form needs both name halves.
+    if (is_array($data['field_jurisdiction_address'] ?? NULL)) {
+      $data['field_jurisdiction_address'] += OperatorDetails::personName($group);
+    }
   }
 }
 

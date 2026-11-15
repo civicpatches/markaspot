@@ -7,6 +7,7 @@ namespace Drupal\markaspot_fastmap\Commands;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Service\WorkspaceDeletionService;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drush\Attributes as CLI;
 use Drush\Commands\DrushCommands;
 
@@ -18,6 +19,7 @@ class WorkspaceCommands extends DrushCommands {
   public function __construct(
     protected readonly EntityTypeManagerInterface $entityTypeManager,
     protected readonly WorkspaceDeletionService $deletion,
+    protected readonly WorkspaceOpening $opening,
   ) {
     parent::__construct();
   }
@@ -116,6 +118,38 @@ class WorkspaceCommands extends DrushCommands {
       $group->id(),
       $group->label(),
     ));
+  }
+
+  /**
+   * Removes false operator data from an opened map and closes it again.
+   *
+   * For a workspace with a lifecycle record: clears organisation, person
+   * name, street, postal code, city, contact e-mail (the country stays) and
+   * the legal notice in every language, takes the opening back and saves one
+   * new revision. The operator can
+   * enter correct data and open the map again. Older revisions keep their
+   * values. Dry run unless --apply is given.
+   */
+  #[CLI\Command(name: 'markaspot:workspace-reset-operator', aliases: ['mas:workspace-reset-operator'])]
+  #[CLI\Argument(name: 'workspace', description: 'Workspace group ID or field_slug.')]
+  #[CLI\Option(name: 'apply', description: 'Write the change. Without it the command only reports what it would change.')]
+  #[CLI\Usage(name: 'markaspot:workspace-reset-operator tree-map', description: 'Show what would be removed.')]
+  #[CLI\Usage(name: 'markaspot:workspace-reset-operator tree-map --apply', description: 'Remove the operator data and close the map.')]
+  public function resetOperator(string $workspace, array $options = ['apply' => FALSE]): void {
+    $group = $this->loadWorkspace($workspace);
+    $apply = (bool) ($options['apply'] ?? FALSE);
+    $result = $this->opening->resetOperator($group, $apply);
+    $label = sprintf('Workspace %s (%s)', $group->id(), $group->label());
+    $parts = implode(', ', $result['parts'] ?? []) ?: 'none';
+    $closing = !empty($result['was_open']) ? 'the map is open and will be closed' : 'the map is not open';
+
+    match ($result['status']) {
+      WorkspaceOpening::NOT_APPLICABLE => throw new \RuntimeException("$label has no lifecycle record on the self-service platform; nothing to reset."),
+      WorkspaceOpening::BUSY => throw new \RuntimeException("$label is being opened right now. Try again."),
+      WorkspaceOpening::NOTHING_TO_RESET => $this->output()->writeln("$label: no operator data and not open; nothing to reset."),
+      WorkspaceOpening::WOULD_RESET => $this->output()->writeln("Dry run. $label: would clear $parts; $closing. Older revisions keep their values. Run again with --apply to write."),
+      default => $this->output()->writeln("$label: cleared $parts; " . (!empty($result['was_open']) ? 'the map is closed again' : 'the map was not open') . '. A new revision was saved; older revisions keep their values.'),
+    };
   }
 
   /**

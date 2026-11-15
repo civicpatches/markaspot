@@ -113,7 +113,7 @@ final class LifecycleClosedWorkspaceKernelTest extends KernelTestBase {
   /**
    * A record in an open workspace.
    */
-  private const OPEN = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":0},"opening":{"at":1800001000}}';
+  private const OPEN = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":0},"opening":{"opened_at":1800001000,"uid":7,"revision_id":1,"operator":{"organization":"Example Org","address_line1":"Main street 1","postal_code":"12345","locality":"Town","country_code":"DE","email":"operator@example.org"}}}';
 
   /**
    * Workspaces by key, each with a category and an initial status.

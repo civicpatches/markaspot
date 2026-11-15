@@ -35,6 +35,7 @@ use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 /**
  * Controller for tenant settings API endpoints.
@@ -316,6 +317,7 @@ final class TenantSettingsController extends ControllerBase {
    */
   private const PROTECTED_GROUP_FIELDS = [
     'field_visibility',
+    'field_lifecycle_record',
   ];
 
   /**
@@ -1676,6 +1678,12 @@ final class TenantSettingsController extends ControllerBase {
       return new JsonResponse(['error' => $e->getMessage()], 403);
     }
     catch (\Exception $e) {
+      // A rule of another module that refuses the save in a presave hook
+      // keeps its client status and message (the storage wraps it).
+      $refusal = $e->getPrevious();
+      if ($refusal instanceof HttpExceptionInterface && $refusal->getStatusCode() < 500) {
+        return new JsonResponse(['error' => $refusal->getMessage()], $refusal->getStatusCode());
+      }
       $this->getLogger('markaspot_nuxt')->error(
         'Failed to save general settings for jurisdiction @id: @message',
         ['@id' => $group->id(), '@message' => $e->getMessage()]
@@ -3309,6 +3317,8 @@ final class TenantSettingsController extends ControllerBase {
           }
           $stringSubfields = [
             'organization' => 255,
+            'given_name' => 255,
+            'family_name' => 255,
             'address_line1' => 255,
             'address_line2' => 255,
             'address_line3' => 255,

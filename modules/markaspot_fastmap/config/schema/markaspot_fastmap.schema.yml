@@ -43,7 +43,7 @@ markaspot_fastmap.settings:
       label: 'Days between a confirmed workspace deletion and the teardown'
     support_email:
       type: string
-      label: 'Support address named in workspace deletion mails'
+      label: 'Support address: named in workspace deletion mails, receives the mail when a map opens'
     tier_limits:
       type: sequence
       label: 'Request limits per tier'
@@ -137,6 +137,16 @@ markaspot_fastmap.mail:
     workspace_deletion_operator:
       type: mapping
       label: 'Workspace deletion operator notification'
+      mapping:
+        subject:
+          type: text
+          label: 'Email subject'
+        body:
+          type: text
+          label: 'Email body'
+    workspace_opened_support:
+      type: mapping
+      label: 'Support notification when a map opens for public reports'
       mapping:
         subject:
           type: text

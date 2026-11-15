@@ -301,12 +301,9 @@ final class LegalNoticeGenerator {
       $address = $group->get('field_jurisdiction_address')->first();
     }
 
-    $organization = $this->readAddressProperty($address, 'organization');
-    $givenName = $this->readAddressProperty($address, 'given_name');
-    $familyName = $this->readAddressProperty($address, 'family_name');
-    $operatorName = $organization !== ''
-      ? $organization
-      : \trim($givenName . ' ' . $familyName);
+    // The organisation, else the person's name: the same rule as the public
+    // settings response of a map under the lifecycle model.
+    $operatorName = OperatorDetails::name($group) ?? '';
     $addressLine1 = $this->readAddressProperty($address, 'address_line1');
     $addressLine2 = $this->readAddressProperty($address, 'address_line2');
     $postalCode = $this->readAddressProperty($address, 'postal_code');

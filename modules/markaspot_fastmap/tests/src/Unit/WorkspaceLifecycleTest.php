@@ -273,7 +273,21 @@ class WorkspaceLifecycleTest extends UnitTestCase {
       'versions' => ['terms' => 'terms-2026.11', 'dpa' => 'dpa_1.2', 'declaration' => '1.0'],
       'langcode' => 'de',
       'open' => FALSE,
+      'opened_at' => NULL,
     ], $lifecycle->settingsSummary($this->group(json_encode($record))));
+    $open = ['opening' => $this->opening()] + $record;
+    $this->assertSame(
+      ['open' => TRUE, 'opened_at' => 1_800_001_000],
+      array_intersect_key(
+        (array) $lifecycle->settingsSummary($this->group(json_encode($open))),
+        ['open' => 1, 'opened_at' => 1],
+      ),
+    );
+    // Nothing of the snapshot or the accounts reaches the summary.
+    $encoded = (string) json_encode($lifecycle->settingsSummary($this->group(json_encode($open))));
+    foreach (['Example Org', 'Main street', 'operator@example.org', '"uid"', 'revision'] as $needle) {
+      $this->assertStringNotContainsString($needle, $encoded);
+    }
 
     $this->assertNull($lifecycle->settingsSummary($this->group(NULL)));
     $this->assertNull($lifecycle->settingsSummary($this->group(NULL, FALSE)));
@@ -293,10 +307,23 @@ class WorkspaceLifecycleTest extends UnitTestCase {
     $lifecycle = $this->lifecycle();
     $record = WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
     $notOpen = $this->group(json_encode($record));
-    $open = $this->group(json_encode(['opening' => ['at' => 1800001000]] + $record));
+    $open = $this->group(json_encode(['opening' => $this->opening()] + $record));
     $cases = [
       'not open' => [$notOpen, TRUE, FALSE, TRUE],
       'open' => [$open, TRUE, TRUE, FALSE],
+      // A malformed opening keeps the map closed.
+      'malformed opening' => [
+        $this->group(json_encode(['opening' => ['at' => 1800001000]] + $record)),
+        TRUE,
+        FALSE,
+        TRUE,
+      ],
+      'opening without operator' => [
+        $this->group(json_encode(['opening' => array_diff_key($this->opening(), ['operator' => 1])] + $record)),
+        TRUE,
+        FALSE,
+        TRUE,
+      ],
       'no record' => [$this->group(NULL), FALSE, FALSE, FALSE],
       'no field' => [$this->group(NULL, FALSE), FALSE, FALSE, FALSE],
       'invalid record' => [$this->group('{"v":1,"acceptance":{},"opening":null}'), FALSE, FALSE, FALSE],
@@ -309,6 +336,241 @@ class WorkspaceLifecycleTest extends UnitTestCase {
     }
     // Records are data: the switch plays no part.
     $this->assertTrue($this->lifecycle(FALSE)->isNotOpen($notOpen));
+  }
+
+  /**
+   * A valid opening section, as the opening service writes it.
+   */
+  private function opening(array $override = [], ?array $operator = NULL): array {
+    return $override + [
+      'opened_at' => 1_800_001_000,
+      'uid' => 7,
+      'revision_id' => 12,
+      'operator' => $operator ?? [
+        'organization' => 'Example Org',
+        'address_line1' => 'Main street 1',
+        'postal_code' => '12345',
+        'locality' => 'Town',
+        'country_code' => 'DE',
+        'email' => 'operator@example.org',
+      ],
+    ];
+  }
+
+  /**
+   * A person as operator.
+   */
+  private function personOperator(): array {
+    return [
+      'given_name' => 'Jane',
+      'family_name' => 'Doe',
+      'address_line1' => 'Main street 1',
+      'postal_code' => '12345',
+      'locality' => 'Town',
+      'country_code' => 'NL',
+      'email' => 'jane@example.org',
+    ];
+  }
+
+  /**
+   * The opening validator: exact keys, valid values, organisation or person.
+   *
+   * @covers ::isValidOpening
+   * @covers ::isValidOperatorSnapshot
+   */
+  public function testOpeningValidator(): void {
+    $this->assertTrue(WorkspaceLifecycle::isValidOpening($this->opening()));
+    $this->assertTrue(WorkspaceLifecycle::isValidOpening($this->opening([], $this->personOperator())));
+    $this->assertTrue(WorkspaceLifecycle::isValidOpening($this->opening(['uid' => 0])), 'A scrubbed account stays valid.');
+
+    $operator = $this->opening()['operator'];
+    $invalid = [
+      'null' => NULL,
+      'string' => 'open',
+      'old placeholder' => ['at' => 1800001000],
+      'extra key' => $this->opening() + ['note' => 'x'],
+      'missing revision' => array_diff_key($this->opening(), ['revision_id' => 1]),
+      'zero time' => $this->opening(['opened_at' => 0]),
+      'time as string' => $this->opening(['opened_at' => '1800001000']),
+      'negative account' => $this->opening(['uid' => -1]),
+      'zero revision' => $this->opening(['revision_id' => 0]),
+      'organisation and person' => $this->opening([], $operator + ['given_name' => 'Jane', 'family_name' => 'Doe']),
+      'half a person' => $this->opening([], array_diff_key($this->personOperator(), ['family_name' => 1])),
+      'no name' => $this->opening([], array_diff_key($operator, ['organization' => 1])),
+      'extra operator key' => $this->opening([], $operator + ['phone' => '123']),
+      'empty street' => $this->opening([], ['address_line1' => ' '] + $operator),
+      'line break' => $this->opening([], ['locality' => "Town\nBcc: x@example.org"] + $operator),
+      'lower-case country' => $this->opening([], ['country_code' => 'de'] + $operator),
+      'country name' => $this->opening([], ['country_code' => 'Germany'] + $operator),
+      'invalid e-mail' => $this->opening([], ['email' => 'not an address'] + $operator),
+      'number as value' => $this->opening([], ['postal_code' => 12345] + $operator),
+      'too long' => $this->opening([], ['organization' => str_repeat('x', 256)] + $operator),
+      'no-break spaces only' => $this->opening([], ['organization' => "\u{00A0}\u{00A0}"] + $operator),
+      'zero-width street' => $this->opening([], ['address_line1' => "\u{200B}"] + $operator),
+      'line separator inside' => $this->opening([], ['locality' => "Town\u{2028}x"] + $operator),
+      'bidi override inside' => $this->opening([], ['organization' => "Example \u{202E}groO"] + $operator),
+      'leading space' => $this->opening([], ['organization' => ' Example Org'] + $operator),
+      'name without letters' => $this->opening([], ['organization' => '-'] + $operator),
+    ];
+    foreach ($invalid as $label => $opening) {
+      $this->assertFalse(WorkspaceLifecycle::isValidOpening($opening), $label);
+    }
+  }
+
+  /**
+   * Writing the opening: once, on a valid record, with complete data.
+   *
+   * @covers ::writeOpening
+   * @covers ::opening
+   */
+  public function testWriteOpening(): void {
+    $lifecycle = $this->lifecycle();
+    $record = WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
+    $operator = $this->opening()['operator'];
+
+    $written = NULL;
+    $group = $this->createMock(FieldableEntityInterface::class);
+    $group->method('hasField')->willReturn(TRUE);
+    $items = $this->createMock(FieldItemListInterface::class);
+    $items->method('isEmpty')->willReturn(FALSE);
+    $items->method('__get')->with('value')->willReturn(json_encode($record));
+    $group->method('get')->willReturn($items);
+    $group->expects($this->once())->method('set')
+      ->willReturnCallback(function (string $field, string $value) use (&$written, $group) {
+        $written = $value;
+        return $group;
+      });
+
+    $opening = $lifecycle->writeOpening($group, 9, $operator, 41);
+    $this->assertSame([
+      'opened_at' => self::REQUEST_TIME,
+      'uid' => 9,
+      'revision_id' => 41,
+      'operator' => $operator,
+    ], $opening);
+    $stored = WorkspaceLifecycle::parse($written);
+    $this->assertSame($opening, $stored['opening']);
+    $this->assertSame($record['acceptance'], $stored['acceptance'], 'The acceptance is kept.');
+    $this->assertTrue($lifecycle->isOpen($this->group($written)));
+    $this->assertSame($opening, $lifecycle->opening($this->group($written)));
+    $this->assertNull($lifecycle->opening($this->group(json_encode($record))));
+
+    // Refused: already open, no record, invalid input.
+    $refusals = [
+      'already open' => [$written, 9, $operator, 41, \LogicException::class],
+      'no record' => [NULL, 9, $operator, 41, \LogicException::class],
+      'no account' => [json_encode($record), 0, $operator, 41, \InvalidArgumentException::class],
+      'no revision' => [json_encode($record), 9, $operator, 0, \InvalidArgumentException::class],
+      'incomplete operator' => [
+        json_encode($record),
+        9,
+        array_diff_key($operator, ['email' => 1]),
+        41,
+        \InvalidArgumentException::class,
+      ],
+    ];
+    foreach ($refusals as $label => [$value, $uid, $snapshot, $revision, $exception]) {
+      $target = $this->createMock(FieldableEntityInterface::class);
+      $target->method('hasField')->willReturn(TRUE);
+      $targetItems = $this->createMock(FieldItemListInterface::class);
+      $targetItems->method('isEmpty')->willReturn($value === NULL);
+      $targetItems->method('__get')->with('value')->willReturn($value);
+      $target->method('get')->willReturn($targetItems);
+      $target->expects($this->never())->method('set');
+      try {
+        $lifecycle->writeOpening($target, $uid, $snapshot, $revision);
+        $this->fail("$label: no refusal");
+      }
+      catch (\LogicException | \InvalidArgumentException $e) {
+        $this->assertInstanceOf($exception, $e, $label);
+      }
+    }
+  }
+
+  /**
+   * Taking the opening back closes the map and keeps the acceptance.
+   *
+   * @covers ::removeOpening
+   */
+  public function testRemoveOpening(): void {
+    $lifecycle = $this->lifecycle();
+    $record = WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
+    foreach (['valid opening' => $this->opening(), 'malformed opening' => ['at' => 1]] as $label => $opening) {
+      $written = NULL;
+      $group = $this->createMock(FieldableEntityInterface::class);
+      $group->method('hasField')->willReturn(TRUE);
+      $items = $this->createMock(FieldItemListInterface::class);
+      $items->method('isEmpty')->willReturn(FALSE);
+      $items->method('__get')->with('value')->willReturn(json_encode(array_merge($record, ['opening' => $opening])));
+      $group->method('get')->willReturn($items);
+      $group->expects($this->once())->method('set')->willReturnCallback(function (string $field, string $value) use (&$written, $group) {
+        $written = $value;
+        return $group;
+      });
+      $this->assertTrue($lifecycle->removeOpening($group), $label);
+      $this->assertSame($record, WorkspaceLifecycle::parse($written), "$label: acceptance kept, opening null");
+      $this->assertTrue($lifecycle->isNotOpen($this->group($written)), $label);
+    }
+
+    // A record without an opening: nothing written.
+    $closed = $this->createMock(FieldableEntityInterface::class);
+    $closedItems = $this->createMock(FieldItemListInterface::class);
+    $closedItems->method('__get')->with('value')->willReturn(json_encode($record));
+    $closed->method('hasField')->willReturn(TRUE);
+    $closed->method('get')->willReturn($closedItems);
+    $closed->expects($this->never())->method('set');
+    $this->assertFalse($lifecycle->removeOpening($closed));
+
+    // No valid record: refused.
+    $this->expectException(\LogicException::class);
+    $lifecycle->removeOpening($this->group(NULL));
+  }
+
+  /**
+   * An opening is scrubbed to fixed values and stays open and valid.
+   *
+   * @covers ::scrub
+   * @covers ::isScrubbed
+   */
+  public function testScrubOpening(): void {
+    $lifecycle = $this->lifecycle();
+    foreach (['organisation' => NULL, 'person' => $this->personOperator()] as $label => $operator) {
+      $record = ['opening' => $this->opening([], $operator)] + WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
+      $this->assertFalse(WorkspaceLifecycle::isScrubbed($record), $label);
+      $scrubbed = WorkspaceLifecycle::scrub($record);
+      $this->assertNotNull($scrubbed, $label);
+      $this->assertTrue(WorkspaceLifecycle::isScrubbed($scrubbed), $label);
+      $this->assertSame($scrubbed, WorkspaceLifecycle::scrub($scrubbed), "$label: idempotent");
+
+      // A scrubbed copy behaves like the original: valid, open, same time.
+      $group = $this->group(json_encode($scrubbed));
+      $this->assertTrue($lifecycle->isOpen($group), $label);
+      $this->assertSame(1_800_001_000, $lifecycle->settingsSummary($group)['opened_at'], $label);
+      $this->assertSame(0, $scrubbed['opening']['uid'], $label);
+      $this->assertSame(0, $scrubbed['acceptance']['uid'], $label);
+      $this->assertSame(12, $scrubbed['opening']['revision_id'], $label);
+      $this->assertSame(array_keys($record['opening']['operator']), array_keys($scrubbed['opening']['operator']), "$label: same shape");
+      $this->assertSame($record['opening']['operator']['country_code'], $scrubbed['opening']['operator']['country_code'], "$label: country kept");
+
+      $encoded = (string) json_encode($scrubbed);
+      foreach (['Example Org', 'Jane', 'Doe', 'Main street', '12345', 'Town', '@example.org'] as $needle) {
+        $this->assertStringNotContainsString($needle, $encoded, "$label: $needle removed");
+      }
+    }
+
+    // Partly scrubbed is not scrubbed: a real value left, or a real account.
+    $clean = WorkspaceLifecycle::scrub(['opening' => $this->opening()] + WorkspaceLifecycle::buildRecord($this->acceptance(), 7));
+    $left = $clean;
+    $left['opening']['operator']['email'] = 'operator@example.org';
+    $this->assertFalse(WorkspaceLifecycle::isScrubbed($left));
+    $account = $clean;
+    $account['opening']['uid'] = 7;
+    $this->assertFalse(WorkspaceLifecycle::isScrubbed($account));
+    // Same values in another key order are clean.
+    $reordered = $clean;
+    $reordered['opening'] = array_reverse($clean['opening'], TRUE);
+    $reordered['opening']['operator'] = array_reverse($clean['opening']['operator'], TRUE);
+    $this->assertTrue(WorkspaceLifecycle::isScrubbed($reordered));
   }
 
   /**
@@ -344,7 +606,9 @@ class WorkspaceLifecycleTest extends UnitTestCase {
       'null acceptance' => ['acceptance' => NULL] + $clean,
       'extra top-level key' => $clean + ['note' => 'Jane Doe'],
       'missing opening' => array_diff_key($clean, ['opening' => TRUE]),
-      'opening present' => ['opening' => ['name' => 'Jane Doe']] + $clean,
+      'malformed opening' => ['opening' => ['name' => 'Jane Doe']] + $clean,
+      'opening with an extra key' => ['opening' => $this->opening() + ['name' => 'Jane Doe']] + $clean,
+      'operator with an extra key' => ['opening' => $this->opening([], $this->opening()['operator'] + ['phone' => '0123'])] + $clean,
       'extra acceptance key' => ['acceptance' => $acceptance + ['mail' => 'jane@example.test']] + $clean,
       'missing uid' => ['acceptance' => array_diff_key($acceptance, ['uid' => TRUE])] + $clean,
       'uid as string' => ['acceptance' => ['uid' => '0'] + $acceptance] + $clean,
