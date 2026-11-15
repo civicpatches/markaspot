@@ -1,5 +1,23 @@
 # Changelog
 
+## [11.9.252](https://github.com/civicpatches/markaspot/compare/11.9.251...11.9.252) (2026-11-15)
+
+### Features
+
+* **markaspot_ai:** classify note drafts by declared origin when the brief switch is on ([fb85708](https://github.com/civicpatches/markaspot/commit/fb857087ccc567e78d330c7d70296c3de65be687))
+* **markaspot_ai:** give the field check a 2000-token answer budget for its reasons ([d4d62b1](https://github.com/civicpatches/markaspot/commit/d4d62b16915b7a64841bf262f6718dbccd778b3c))
+* **markaspot_ai:** return a reason per retained field suggestion when the brief switch is on ([a6b4345](https://github.com/civicpatches/markaspot/commit/a6b43450dc0902f9b01b1733ad03bf88398c715c))
+* **markaspot_ai:** return field-check reasons independent of the note brief switch ([1a16f5f](https://github.com/civicpatches/markaspot/commit/1a16f5fea4f53eb7e6cad3fe8391a6923187b70f))
+* **markaspot_ai:** treat a typed status note as the operator's brief when the switch is on ([9bfe783](https://github.com/civicpatches/markaspot/commit/9bfe783ef11560ad885c2356da02b6e05dac740c))
+* **markaspot_nuxt:** add the per-tenant aiNoteBrief switch for AI note drafts ([b9ca08a](https://github.com/civicpatches/markaspot/commit/b9ca08a334c3ad51893195a7ba66a3fa1307c5e3))
+
+### Bug Fixes
+
+* **fastmap:** keep the workspace verification link valid as long as the pending signup ([c6a89f0](https://github.com/civicpatches/markaspot/commit/c6a89f080a7a8d2ea3d9434e6bb7513c71955d28))
+* **markaspot_ai:** delimit the operator brief with a per-request boundary token ([656bc22](https://github.com/civicpatches/markaspot/commit/656bc22cb54392f921fdd8492d914ca544cadc4a))
+* **markaspot_nuxt:** accept only a JSON boolean for aiNoteBrief on write ([dbe4b25](https://github.com/civicpatches/markaspot/commit/dbe4b259ed5e5a49669724e4d533cd324277e545))
+* **stats:** remove the deprecated /api/stats aliases ([1d26c1f](https://github.com/civicpatches/markaspot/commit/1d26c1fe3dac498f5dc7a3f774fe07f101177c51))
+
 ## [11.9.251](https://github.com/civicpatches/markaspot/compare/11.9.250...11.9.251) (2026-11-11)
 
 ### Features
