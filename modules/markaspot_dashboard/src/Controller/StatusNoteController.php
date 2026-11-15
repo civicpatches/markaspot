@@ -180,9 +180,15 @@ class StatusNoteController extends ControllerBase {
       return $this->noteRequiredResponse($requiredTerm);
     }
 
-    if ($statusTermId !== NULL) {
+    $currentStatusId = $node->hasField('field_status') && !$node->get('field_status')->isEmpty()
+      ? (string) $node->get('field_status')->target_id
+      : NULL;
+    if ($statusTermId !== NULL && (string) $statusTermId !== $currentStatusId) {
       // Persist the validated status in the same node save as its audit note.
       // A later form PATCH must not be required for these records to agree.
+      // A note that keeps the status leaves the loaded value alone: the
+      // stored ID is a string, and the integer would look like a status
+      // change to strict comparators such as ECA's field-changed condition.
       $node->set('field_status', $statusTermId);
     }
 
