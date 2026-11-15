@@ -472,11 +472,45 @@ else {
   $v_all = $ref->invoke($vision, NULL, NULL);
   assert_gt(0, count($v_all), "Without jurisdiction: " . count($v_all) . " categories");
 
-  // Per jurisdiction.
+  // Per jurisdiction: vision offers what GeoReport offers (section 4). That is
+  // the published terms of the root jurisdiction, narrowed to the
+  // jurisdiction's own field_service_categories selection when it has one.
+  // Vision then keeps only leaves: a term with a published child among the
+  // root's terms is no leaf.
   $vision_labels_by_jur = [];
   foreach ($jurs as $id => $j) {
+    $tax_root = $resolve_root($id);
+    $root_cats = $jurs[$tax_root]['cats'];
+    if ($own_category_counts[$id] > 0) {
+      $selected = array_map(
+        static fn($term) => (int) $term->id(),
+        $j['group']->get('field_service_categories')->referencedEntities(),
+      );
+      $offered = array_intersect(array_map('intval', $jurs[$tax_root]['catTids']), $selected);
+      $source = ' (own field_service_categories selection)';
+    }
+    else {
+      $offered = array_map('intval', $jurs[$tax_root]['catTids']);
+      $source = $tax_root !== $id ? " (inherited from {$jurs[$tax_root]['label']})" : '';
+    }
+    $parents_with_children = [];
+    foreach ($root_cats as $term) {
+      $parent_id = (int) ($term->get('parent')->target_id ?? 0);
+      if ($parent_id) {
+        $parents_with_children[$parent_id] = TRUE;
+      }
+    }
+    $expected_tids = array_values(array_filter(
+      $offered,
+      static fn(int $tid) => !isset($parents_with_children[$tid]),
+    ));
+    sort($expected_tids);
+
     $v = $ref->invoke($vision, $id, NULL);
-    assert_equal($j['catCount'], count($v), "{$j['label']}: {$j['catCount']} vision categories");
+    $actual_tids = array_map('intval', array_column($v, 'tid'));
+    sort($actual_tids);
+    $n = count($expected_tids);
+    assert_equal($expected_tids, $actual_tids, "{$j['label']}: $n vision categories$source");
     $vision_labels_by_jur[$id] = array_column($v, 'label');
   }
 
@@ -490,6 +524,11 @@ else {
     for ($k = $i + 1; $k < count($ids); $k++) {
       $a = $ids[$i];
       $b = $ids[$k];
+      // Jurisdictions under the same root share its taxonomy by design.
+      if ($resolve_root($a) === $resolve_root($b)) {
+        assert_true(TRUE, "Vision: {$jurs[$a]['label']} and {$jurs[$b]['label']} share taxonomy (parent-child)");
+        continue;
+      }
       $overlap = array_intersect($vision_tids_by_jur[$a], $vision_tids_by_jur[$b]);
       assert_equal(0, count($overlap), "Vision: no TID overlap {$jurs[$a]['label']} vs {$jurs[$b]['label']}");
     }
