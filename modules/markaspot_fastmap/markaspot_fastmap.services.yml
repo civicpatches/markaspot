@@ -28,6 +28,14 @@ services:
       - '@?markaspot_ai.client'
       - '@?markaspot_nuxt.citizen_wording_resolver'
       - '@file.usage'
+      - '@markaspot_fastmap.workspace_lifecycle'
+
+  markaspot_fastmap.workspace_lifecycle:
+    class: Drupal\markaspot_fastmap\Service\WorkspaceLifecycle
+    arguments:
+      - '@config.factory'
+      - '@datetime.time'
+      - '@module_handler'
 
   markaspot_fastmap.vision_purpose_rules:
     class: Drupal\markaspot_fastmap\Service\VisionPurposeRules

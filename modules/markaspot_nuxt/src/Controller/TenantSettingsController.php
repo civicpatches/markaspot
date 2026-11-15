@@ -1537,7 +1537,7 @@ final class TenantSettingsController extends ControllerBase {
       $countries = $this->countryRepository->getList();
     }
 
-    return new JsonResponse([
+    $data = [
       'jurisdiction_id' => (int) $group->id(),
       'field_platform_name' => $group->hasField('field_platform_name') && !$group->get('field_platform_name')->isEmpty()
         ? $group->get('field_platform_name')->value
@@ -1559,7 +1559,15 @@ final class TenantSettingsController extends ControllerBase {
         ? $group->get('field_privacy_policy')->value
         : '',
       'available_countries' => $countries,
-    ]);
+    ];
+
+    // Other modules may add workspace data only its administrators see. The
+    // route access check has already granted this caller the workspace.
+    // hook_markaspot_nuxt_tenant_general_settings_alter(array &$data,
+    // GroupInterface $group).
+    $this->moduleHandler()->alter('markaspot_nuxt_tenant_general_settings', $data, $group);
+
+    return new JsonResponse($data);
   }
 
   /**

@@ -21,6 +21,7 @@ checkout_grace_days: 14
 demo_workspaces: {  }
 demo_seed_dir: ''
 demo_reset_interval: 0
+lifecycle_enabled: false
 member_limits:
   free: 1
   starter: 5

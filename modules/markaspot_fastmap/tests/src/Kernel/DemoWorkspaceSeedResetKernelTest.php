@@ -33,6 +33,7 @@ use Drupal\markaspot_group\Controller\GroupMembersController;
 use Drupal\markaspot_nuxt\Controller\TenantSettingsController;
 use Drupal\markaspot_passwordless\Controller\PasswordlessAuthController;
 use Drupal\markaspot_fastmap\Service\DemoWorkspaceSeeder;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\media\Entity\Media;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
@@ -377,6 +378,26 @@ final class DemoWorkspaceSeedResetKernelTest extends KernelTestBase {
     $this->assertSame($first['group_id'], $second['group_id']);
     $this->assertSame($first['reports'], $second['reports']);
     $this->assertSame($before, $this->inventory($second['group_id']));
+  }
+
+  /**
+   * Template demos stay outside the lifecycle, also with the switch on.
+   *
+   * The seeder creates its groups itself and never calls the provisioning
+   * service, so it needs no acceptance and writes no record.
+   */
+  public function testSeedWritesNoLifecycleRecordWithSwitchOn(): void {
+    $this->createField('group', 'jur', 'field_lifecycle_record', 'string_long');
+    // Raw write: the switch is the only value this test needs.
+    $this->container->get('config.storage')->write('markaspot_fastmap.settings', ['lifecycle_enabled' => TRUE]);
+    $this->container->get('config.factory')->reset('markaspot_fastmap.settings');
+    $this->assertTrue((new WorkspaceLifecycle($this->container->get('config.factory'), $this->container->get('datetime.time')))->isEnabled());
+
+    $result = $this->seeder()->seed(DemoSeed::fromFile($this->seedDir . '/demo-school-routes.yml'));
+
+    $group = Group::load($result['group_id']);
+    $this->assertTrue($result['created']);
+    $this->assertTrue($group->get('field_lifecycle_record')->isEmpty());
   }
 
   /**

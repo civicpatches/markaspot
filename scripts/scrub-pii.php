@@ -28,6 +28,7 @@
  */
 
 use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\node\NodeInterface;
 use Drupal\user\UserInterface;
 
@@ -63,6 +64,9 @@ const SCRUB_PURGE_TABLES = [
   // Mapping of retained unblurred photo originals; the files themselves are
   // removed from private://markaspot_vision/originals below.
   'markaspot_vision_original',
+  // Unverified workspace signups: mail address, live verification token and
+  // the accepted text versions.
+  'markaspot_fastmap_pending',
 ];
 
 // Where markaspot_vision keeps unblurred photo originals for staff.
@@ -75,6 +79,12 @@ const SCRUB_ORIGINALS_DIRECTORY = 'private://markaspot_vision/originals';
 const SCRUB_DERIVED_TEXT_COLUMNS = [
   'markaspot_ai_sentiment' => ['reasoning'],
 ];
+
+// Workspace lifecycle record on the jurisdiction group (markaspot_fastmap):
+// JSON with the accepting account and, later, the operator snapshot. The
+// account reference is zeroed and the record keeps its shape, so a scrubbed
+// copy keeps each workspace under the same rules.
+const SCRUB_LIFECYCLE_FIELD = 'field_lifecycle_record';
 
 // Carriers this tool knowingly does not rewrite. Verify refuses to pass while
 // any of them holds rows, unless the operator acknowledges them explicitly.
@@ -195,6 +205,21 @@ if ($verify) {
     if ($rows > 0) {
       $residual += $rows;
       printf("FAIL %s: %d rows still hold derived text in %s\n", $table, $rows, implode(', ', $columns));
+    }
+    else {
+      printf("ok   %s\n", $table);
+    }
+  }
+
+  foreach (scrub_lifecycle_tables() as $table) {
+    $count = scrub_lifecycle_count_unscrubbed($table);
+    if ($count === NULL) {
+      printf("FAIL %s: lifecycle records cannot be verified without markaspot_fastmap\n", $table);
+      $residual++;
+    }
+    elseif ($count > 0) {
+      $residual += $count;
+      printf("FAIL %s: %d lifecycle records still hold personal data\n", $table, $count);
     }
     else {
       printf("ok   %s\n", $table);
@@ -363,6 +388,25 @@ foreach (SCRUB_DERIVED_TEXT_COLUMNS as $table => $columns) {
     implode(', ', $columns),
     $rows,
     $apply ? ' cleared' : ' would be cleared'
+  );
+}
+
+// --- Workspace lifecycle records -------------------------------------------
+foreach (scrub_lifecycle_tables() as $table) {
+  $count = scrub_lifecycle_count_unscrubbed($table);
+  if ($count === NULL) {
+    printf("  Lifecycle %s: markaspot_fastmap is not available, rows left as they are\n", $table);
+    continue;
+  }
+  if ($count === 0) {
+    continue;
+  }
+  $left = $apply ? scrub_lifecycle_sweep($table) : 0;
+  printf(
+    "  Lifecycle %s: %d records%s\n",
+    $table,
+    $count,
+    $apply ? sprintf(' rewritten, %d left (outside the known shape, check by hand)', $left) : ' would be rewritten'
   );
 }
 
@@ -867,4 +911,122 @@ function scrub_clear_derived_text(string $table, array $columns): void {
       ->isNotNull($column)
       ->execute();
   }
+}
+
+/**
+ * Returns the existing data and revision tables of the lifecycle record.
+ *
+ * @return string[]
+ *   Table names, empty when the site has no such field.
+ */
+function scrub_lifecycle_tables(): array {
+  $etm = \Drupal::entityTypeManager();
+  if (!$etm->hasDefinition('group')) {
+    return [];
+  }
+  $definitions = \Drupal::service('entity_field.manager')->getFieldStorageDefinitions('group');
+  $definition = $definitions[SCRUB_LIFECYCLE_FIELD] ?? NULL;
+  $mapping = $etm->getStorage('group')->getTableMapping();
+  if ($definition === NULL || !$mapping->requiresDedicatedTableStorage($definition)) {
+    return [];
+  }
+  $schema = \Drupal::database()->schema();
+  $tables = [];
+  foreach ([
+    $mapping->getDedicatedDataTableName($definition),
+    $mapping->getDedicatedRevisionTableName($definition),
+  ] as $table) {
+    if ($schema->tableExists($table) && !in_array($table, $tables, TRUE)) {
+      $tables[] = $table;
+    }
+  }
+  return $tables;
+}
+
+/**
+ * Loads the rows of a lifecycle record table that still hold personal data.
+ *
+ * @return array|null
+ *   Rows with their key columns and "value"; NULL when the record format is
+ *   unknown because markaspot_fastmap is not loaded.
+ */
+function scrub_lifecycle_unscrubbed_rows(string $table): ?array {
+  if (!class_exists(WorkspaceLifecycle::class)) {
+    return scrub_table_rows($table) > 0 ? NULL : [];
+  }
+  $column = SCRUB_LIFECYCLE_FIELD . '_value';
+  $database = \Drupal::database();
+  $key_columns = array_values(array_filter(
+    ['entity_id', 'revision_id', 'langcode', 'delta', 'deleted'],
+    static fn(string $key): bool => $database->schema()->fieldExists($table, $key),
+  ));
+  $query = $database->select($table, 't')
+    ->fields('t', $key_columns);
+  $query->addField('t', $column, 'value');
+  $rows = [];
+  foreach ($query->execute()->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+    $record = is_string($row['value']) ? json_decode($row['value'], TRUE) : NULL;
+    if (!WorkspaceLifecycle::isScrubbed($record)) {
+      $rows[] = $row;
+    }
+  }
+  return $rows;
+}
+
+/**
+ * Counts lifecycle records that still hold personal data.
+ *
+ * @return int|null
+ *   Row count, or NULL when they cannot be judged.
+ */
+function scrub_lifecycle_count_unscrubbed(string $table): ?int {
+  $rows = scrub_lifecycle_unscrubbed_rows($table);
+  return $rows === NULL ? NULL : count($rows);
+}
+
+/**
+ * Rewrites the lifecycle records of one table.
+ *
+ * A record that does not decode is removed: its content is unknown. A
+ * record outside the known shape (an opening section, an extra key, an
+ * invalid value) stays as it is, because this version cannot rebuild it;
+ * verify then fails.
+ *
+ * @return int
+ *   Records left unscrubbed.
+ */
+function scrub_lifecycle_sweep(string $table): int {
+  $rows = scrub_lifecycle_unscrubbed_rows($table) ?? [];
+  $database = \Drupal::database();
+  $column = SCRUB_LIFECYCLE_FIELD . '_value';
+  $left = 0;
+  foreach ($rows as $row) {
+    $record = is_string($row['value']) ? json_decode($row['value'], TRUE) : NULL;
+    $keys = $row;
+    unset($keys['value']);
+    if (!is_array($record)) {
+      $delete = $database->delete($table);
+      foreach ($keys as $key => $value) {
+        $delete->condition($key, $value);
+      }
+      scrub_with_retriable_conflict(function () use ($delete): void {
+        $delete->execute();
+      });
+      continue;
+    }
+    $scrubbed = WorkspaceLifecycle::scrub($record);
+    if ($scrubbed === NULL) {
+      $left++;
+      continue;
+    }
+    $update = $database->update($table)
+      ->fields([$column => json_encode($scrubbed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)]);
+    foreach ($keys as $key => $value) {
+      $update->condition($key, $value);
+    }
+    scrub_with_retriable_conflict(function () use ($update): void {
+      $update->execute();
+    });
+  }
+  return $left;
 }

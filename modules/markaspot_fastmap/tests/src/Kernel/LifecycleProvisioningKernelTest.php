@@ -1,0 +1,441 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Drupal\Tests\markaspot_fastmap\Kernel;
+
+use Drupal\Core\Entity\EntityStorageInterface;
+use Drupal\Core\Hook\Attribute\Hook;
+use Drupal\field\Entity\FieldConfig;
+use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\filter\Entity\FilterFormat;
+use Drupal\group\Entity\Group;
+use Drupal\group\Entity\GroupRole;
+use Drupal\group\Entity\GroupType;
+use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\node\Entity\NodeType;
+use Drupal\paragraphs\Entity\Paragraph;
+use Drupal\paragraphs\Entity\ParagraphsType;
+use Drupal\taxonomy\Entity\Vocabulary;
+use Drupal\user\Entity\User;
+use Drupal\user\UserInterface;
+use PHPUnit\Framework\Attributes\Group as TestGroup;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+
+/**
+ * Tests the lifecycle record that provisioning writes, with real storage.
+ *
+ * Same harness as DemoRequestPublicationKernelTest.
+ *
+ * @covers \Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService::provisionWorkspace
+ */
+#[TestGroup('markaspot_fastmap')]
+#[RunTestsInSeparateProcesses]
+final class LifecycleProvisioningKernelTest extends KernelTestBase {
+
+  /**
+   * {@inheritdoc}
+   */
+  protected static $modules = [
+    'system',
+    'user',
+    'field',
+    'text',
+    'filter',
+    'node',
+    'file',
+    'taxonomy',
+    'options',
+    'datetime',
+    'language',
+    'color_field',
+    'geolocation',
+    'entity',
+    'entity_reference_revisions',
+    'paragraphs',
+    'flexible_permissions',
+    'group',
+    'gnode',
+    'field_permissions',
+    'markaspot_validation',
+    'markaspot_group',
+    'markaspot_nuxt',
+    'markaspot_passwordless',
+    'markaspot_fastmap',
+    // After markaspot_group, like the alphabetical order in production: the
+    // initial status is forced before the creation note is written.
+    'service_request',
+  ];
+
+  /**
+   * The acceptance as it arrives from the pending signup row.
+   */
+  private const ACCEPTANCE = [
+    'terms' => '2026-11-15',
+    'dpa' => '2026-11-15',
+    'declaration' => '1.0',
+    'langcode' => 'de',
+    'accepted_at' => 1799990000,
+  ];
+
+  /**
+   * When set, saving an account with an acceptance time fails.
+   */
+  private bool $failAcceptanceSave = FALSE;
+
+  /**
+   * Makes the account save after the record write fail, on request.
+   */
+  #[Hook('user_presave')]
+  public function userPresave(UserInterface $account): void {
+    if ($this->failAcceptanceSave && !$account->get('field_tos_accepted_at')->isEmpty()) {
+      throw new \RuntimeException('Simulated failure after the record write.');
+    }
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function setUp(): void {
+    parent::setUp();
+
+    $entityTypes = [
+      'user', 'node', 'file', 'taxonomy_term', 'paragraph',
+      'group', 'group_relationship', 'group_config_wrapper',
+    ];
+    foreach ($entityTypes as $entityType) {
+      $this->installEntitySchema($entityType);
+    }
+    $this->installSchema('file', ['file_usage']);
+    $this->installSchema('node', ['node_access']);
+    $this->installConfig(['system', 'user', 'field', 'filter', 'node', 'group']);
+
+    User::create(['uid' => 0, 'name' => '', 'status' => 0])->save();
+    User::create(['uid' => 1, 'name' => 'root', 'status' => 1])->save();
+
+    $this->createContentModel();
+    $this->createJurisdictionModel();
+    $this->createField('group', 'jur', WorkspaceLifecycle::FIELD, 'string_long');
+    $this->createField('user', 'user', 'field_tos_accepted_at', 'timestamp');
+    $this->container->get('entity_field.manager')->clearCachedFieldDefinitions();
+    $this->stubProcessor();
+  }
+
+  /**
+   * Switch on: a valid record for the tenant admin and the account time.
+   */
+  public function testSwitchOnWritesRecordAndAcceptanceTime(): void {
+    $this->setSwitch(TRUE);
+    $result = $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+
+    $group = $this->reloadGroup($result['group_id']);
+    $record = WorkspaceLifecycle::parse($group->get(WorkspaceLifecycle::FIELD)->value);
+    $this->assertNotNull($record, 'The stored record is valid.');
+    $this->assertSame($result['user_id'], $record['acceptance']['uid']);
+    $this->assertSame(['terms' => '2026-11-15', 'dpa' => '2026-11-15', 'declaration' => '1.0'], array_intersect_key($record['acceptance'], array_flip(WorkspaceLifecycle::DOCUMENTS)));
+    $this->assertSame(1799990000, $record['acceptance']['accepted_at']);
+    $this->assertNull($record['opening']);
+
+    $owner = $this->reloadUser($result['user_id']);
+    $this->assertSame('parents@example.test', $owner->getEmail());
+    $this->assertSame(1799990000, (int) $owner->get('field_tos_accepted_at')->value);
+    $this->assertNotFalse($group->getMember($owner), 'The record names a member of the workspace.');
+  }
+
+  /**
+   * The module's own hook registration closes the written record.
+   *
+   * Proves the code of this checkout only where the enabled module is this
+   * checkout (CI). In a worktree the site discovers the module elsewhere, so
+   * the test skips there instead of testing another branch.
+   *
+   * The deny must stay in the module's only implementation of
+   * hook_entity_field_access(): core merges field access results per module,
+   * so a second implementation would overwrite one of the two results.
+   */
+  public function testRealRegistrationDeniesRecord(): void {
+    $loaded = $this->container->get('extension.list.module')->getPath('markaspot_fastmap');
+    if (realpath(DRUPAL_ROOT . '/' . $loaded) !== realpath(dirname(__DIR__, 3))) {
+      $this->markTestSkipped('markaspot_fastmap is loaded from another checkout: ' . $loaded);
+    }
+    $this->setSwitch(TRUE);
+    $result = $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+    $group = $this->reloadGroup($result['group_id']);
+    $this->assertNotNull(WorkspaceLifecycle::parse($group->get(WorkspaceLifecycle::FIELD)->value), 'Written although every account is denied.');
+    foreach ([User::load(1), $this->reloadUser($result['user_id'])] as $account) {
+      $this->assertFalse($group->get(WorkspaceLifecycle::FIELD)->access('view', $account));
+      $this->assertFalse($group->get(WorkspaceLifecycle::FIELD)->access('edit', $account));
+    }
+  }
+
+  /**
+   * Switch on without acceptance: no group, no account.
+   */
+  public function testSwitchOnWithoutAcceptanceLeavesNothing(): void {
+    $this->setSwitch(TRUE);
+    try {
+      $this->provision('lindenhof');
+      $this->fail('Provisioning ran without an acceptance.');
+    }
+    catch (AcceptanceRequiredException) {
+      $this->addToAssertionCount(1);
+    }
+    $this->assertSame(0, $this->countGroups());
+    $this->assertSame([], $this->container->get('entity_type.manager')->getStorage('user')->loadByProperties(['mail' => 'parents@example.test']));
+  }
+
+  /**
+   * A second workspace of the same account gets its own record.
+   */
+  public function testSecondWorkspaceOfSameAccountGetsOwnRecord(): void {
+    $this->setSwitch(TRUE);
+    $first = $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+    $later = ['accepted_at' => 1799995000, 'terms' => '2026-11-20'] + self::ACCEPTANCE;
+    $second = $this->provision('riverside', ['acceptance' => $later]);
+
+    $this->assertSame($first['user_id'], $second['user_id']);
+    $firstRecord = WorkspaceLifecycle::parse($this->reloadGroup($first['group_id'])->get(WorkspaceLifecycle::FIELD)->value);
+    $secondRecord = WorkspaceLifecycle::parse($this->reloadGroup($second['group_id'])->get(WorkspaceLifecycle::FIELD)->value);
+    $this->assertSame('2026-11-15', $firstRecord['acceptance']['terms']);
+    $this->assertSame('2026-11-20', $secondRecord['acceptance']['terms']);
+    $this->assertSame($first['user_id'], $secondRecord['acceptance']['uid']);
+    $this->assertSame(1799995000, (int) $this->reloadUser($first['user_id'])->get('field_tos_accepted_at')->value);
+  }
+
+  /**
+   * Switch off: no record and no account time, acceptance or not.
+   */
+  public function testSwitchOffWritesNoRecord(): void {
+    $this->setSwitch(FALSE);
+    $result = $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+    $this->assertTrue($this->reloadGroup($result['group_id'])->get(WorkspaceLifecycle::FIELD)->isEmpty());
+    $this->assertTrue($this->reloadUser($result['user_id'])->get('field_tos_accepted_at')->isEmpty());
+    // Today's provisioning still sets the expiry.
+    $this->assertFalse($this->reloadGroup($result['group_id'])->get('field_expiry_date')->isEmpty());
+  }
+
+  /**
+   * A failure after the record write rolls the whole workspace back.
+   */
+  public function testFailureAfterRecordWriteRollsBack(): void {
+    $this->setSwitch(TRUE);
+    $this->failAcceptanceSave = TRUE;
+    try {
+      $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+      $this->fail('Provisioning succeeded despite the simulated failure.');
+    }
+    catch (\RuntimeException $e) {
+      $this->assertStringContainsString('Simulated failure after the record write', $e->getMessage());
+    }
+    $this->assertSame(0, $this->countGroups());
+    $this->assertSame([], $this->container->get('entity_type.manager')->getStorage('user')->loadByProperties(['mail' => 'parents@example.test']));
+    $this->assertSame(0, (int) \Drupal::database()->select('group__' . WorkspaceLifecycle::FIELD)->countQuery()->execute()->fetchField());
+  }
+
+  /**
+   * Stores the switch the way a config import or drush cset would.
+   */
+  private function setSwitch(bool $on): void {
+    $this->container->get('config.storage')->write('markaspot_fastmap.settings', [
+      'lifecycle_enabled' => $on,
+      'demo_expiry_days' => 5,
+      'checkout_grace_days' => 14,
+    ]);
+    $this->container->get('config.factory')->reset('markaspot_fastmap.settings');
+  }
+
+  /**
+   * Provisions a workspace for the same e-mail address.
+   */
+  private function provision(string $slug, array $extra = []): array {
+    return $this->container->get('markaspot_fastmap.workspace_provisioning')->provisionWorkspace($extra + [
+      'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.1, 50.8], [7.1, 51.1], [6.8, 50.8]]]],
+      'name' => 'Map ' . $slug,
+      'slug' => $slug,
+      'email' => 'parents@example.test',
+      'categories' => ['Dangerous crossing'],
+      'language' => 'en',
+      'lat' => 50.83,
+      'lng' => 6.9,
+      'zoom' => 15,
+      'template' => 'safe-routes',
+    ]);
+  }
+
+  /**
+   * Counts jurisdiction groups in storage.
+   */
+  private function countGroups(): int {
+    return (int) $this->container->get('entity_type.manager')->getStorage('group')->getQuery()
+      ->accessCheck(FALSE)
+      ->count()
+      ->execute();
+  }
+
+  /**
+   * Loads a group fresh from storage.
+   */
+  private function reloadGroup(int $id): Group {
+    $storage = $this->container->get('entity_type.manager')->getStorage('group');
+    $storage->resetCache([$id]);
+    return $storage->load($id);
+  }
+
+  /**
+   * Loads an account fresh from storage.
+   */
+  private function reloadUser(int $id): User {
+    $storage = $this->container->get('entity_type.manager')->getStorage('user');
+    $storage->resetCache([$id]);
+    return $storage->load($id);
+  }
+
+  /**
+   * Stubs the Open311 processor the report hooks consult.
+   *
+   * Like production, markaspot_group forces a new report to the
+   * jurisdiction's initial status, and service_request writes the creation
+   * note through the processor.
+   */
+  private function stubProcessor(): void {
+    $termStorage = $this->container->get('entity_type.manager')->getStorage('taxonomy_term');
+    $this->container->set('markaspot_open311.processor', new class($termStorage) {
+
+      public function __construct(
+        private readonly EntityStorageInterface $termStorage,
+      ) {}
+
+      /**
+       * Returns the lowest-weight initial status of a jurisdiction.
+       */
+      public function getInitialStatusTid(?int $jurisdictionId = NULL): ?int {
+        $tids = $this->termStorage->getQuery()
+          ->accessCheck(FALSE)
+          ->condition('vid', 'service_status')
+          ->condition('field_jurisdiction', $jurisdictionId)
+          ->condition('field_open311_mapping', 'initial')
+          ->sort('weight')
+          ->range(0, 1)
+          ->execute();
+        return $tids ? (int) reset($tids) : NULL;
+      }
+
+      /**
+       * No boilerplates in this test.
+       */
+      public function getInitialBoilerplateId(?int $jurisdictionId = NULL): ?int {
+        return NULL;
+      }
+
+      /**
+       * Creates a status note like the real processor, without boilerplates.
+       */
+      public function createStatusNoteParagraph(array $fields, string $langcode = ''): Paragraph {
+        $paragraph = Paragraph::create(['type' => 'status']);
+        if (!empty($fields['status_term_id'])) {
+          $paragraph->set('field_status_term', $fields['status_term_id']);
+        }
+        $paragraph->save();
+        return $paragraph;
+      }
+
+    });
+  }
+
+  /**
+   * Creates the node and taxonomy model provisioning writes to.
+   */
+  private function createContentModel(): void {
+    NodeType::create(['type' => 'service_request', 'name' => 'Service Request'])->save();
+    NodeType::create(['type' => 'page', 'name' => 'Page'])->save();
+    foreach (['plain_text' => 'Plain text', 'basic_html' => 'Basic HTML'] as $format => $name) {
+      if (!FilterFormat::load($format)) {
+        FilterFormat::create(['format' => $format, 'name' => $name])->save();
+      }
+    }
+
+    foreach (['service_category', 'service_status'] as $vid) {
+      Vocabulary::create(['vid' => $vid, 'name' => $vid])->save();
+      $this->createField('taxonomy_term', $vid, 'field_jurisdiction', 'entity_reference', ['target_type' => 'group']);
+    }
+    $this->createField('taxonomy_term', 'service_category', 'field_service_code', 'string');
+    $this->createField('taxonomy_term', 'service_category', 'field_category_hex', 'color_field_type', ['format' => '#HEXHEX']);
+    $this->createField('taxonomy_term', 'service_category', 'field_category_icon', 'string');
+    $this->createField('taxonomy_term', 'service_status', 'field_status_hex', 'color_field_type', ['format' => '#HEXHEX']);
+    $this->createField('taxonomy_term', 'service_status', 'field_status_icon', 'string');
+    $this->createField('taxonomy_term', 'service_status', 'field_open311_mapping', 'string');
+
+    foreach (['service_request', 'page'] as $bundle) {
+      $this->createField('node', $bundle, 'body', 'text_with_summary');
+      $this->createField('node', $bundle, 'field_jurisdiction', 'entity_reference', ['target_type' => 'group']);
+    }
+    $this->createField('node', 'service_request', 'field_category', 'entity_reference', ['target_type' => 'taxonomy_term']);
+    $this->createField('node', 'service_request', 'field_geolocation', 'geolocation');
+    $this->createField('node', 'service_request', 'field_address', 'string');
+    $this->createField('node', 'service_request', 'field_status', 'entity_reference', ['target_type' => 'taxonomy_term']);
+    $this->createField('node', 'service_request', 'field_notification', 'boolean');
+
+    ParagraphsType::create(['id' => 'status', 'label' => 'Status'])->save();
+    $this->createField('paragraph', 'status', 'field_status_term', 'entity_reference', ['target_type' => 'taxonomy_term']);
+    $this->createField('paragraph', 'status', 'field_status_note', 'text_long');
+    $this->createField('node', 'service_request', 'field_status_notes', 'entity_reference_revisions', ['target_type' => 'paragraph'], -1);
+  }
+
+  /**
+   * Creates the jurisdiction group type, roles and fields.
+   */
+  private function createJurisdictionModel(): void {
+    $this->createField('user', 'user', 'field_all_groups_member', 'boolean');
+
+    GroupType::create(['id' => 'jur', 'label' => 'Jurisdiction'])->save();
+    foreach (['tenant_admin' => 'Tenant Admin', 'member' => 'Member'] as $role => $label) {
+      GroupRole::create([
+        'id' => 'jur-' . $role,
+        'label' => $label,
+        'group_type' => 'jur',
+        'scope' => 'individual',
+      ])->save();
+    }
+
+    $relationshipStorage = $this->container->get('entity_type.manager')->getStorage('group_relationship_type');
+    foreach (['group_membership', 'group_node:service_request'] as $pluginId) {
+      $relationshipTypeId = 'jur-' . str_replace(':', '-', $pluginId);
+      if (!$relationshipStorage->load($relationshipTypeId)) {
+        $relationshipStorage->createFromPlugin(GroupType::load('jur'), $pluginId)->save();
+      }
+    }
+
+    $this->createField('group', 'jur', 'field_slug', 'string');
+    $this->createField('group', 'jur', 'field_platform_name', 'string');
+    $this->createField('group', 'jur', 'field_nuxt_config', 'text_long');
+    $this->createField('group', 'jur', 'field_boundary', 'text_long');
+    $this->createField('group', 'jur', 'field_parent_jurisdiction', 'entity_reference', ['target_type' => 'group']);
+    $this->createField('group', 'jur', 'field_expiry_date', 'timestamp');
+    $this->createField('group', 'jur', 'field_service_categories', 'entity_reference', ['target_type' => 'taxonomy_term'], -1);
+  }
+
+  /**
+   * Creates one configurable field and its storage.
+   */
+  private function createField(string $entityType, string $bundle, string $fieldName, string $type, array $storageSettings = [], int $cardinality = 1): void {
+    if (!FieldStorageConfig::loadByName($entityType, $fieldName)) {
+      FieldStorageConfig::create([
+        'field_name' => $fieldName,
+        'entity_type' => $entityType,
+        'type' => $type,
+        'cardinality' => $cardinality,
+        'settings' => $storageSettings,
+      ])->save();
+    }
+    FieldConfig::create([
+      'field_name' => $fieldName,
+      'entity_type' => $entityType,
+      'bundle' => $bundle,
+      'label' => $fieldName,
+      'settings' => $storageSettings,
+    ])->save();
+  }
+
+}

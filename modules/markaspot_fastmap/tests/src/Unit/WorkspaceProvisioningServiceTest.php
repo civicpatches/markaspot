@@ -25,8 +25,10 @@ use Drupal\file\FileRepositoryInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\markaspot_ai\Service\AiClientService;
+use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\PlaceholderSignetGenerator;
 use Drupal\markaspot_fastmap\Service\PlaceholderSignetGeneratorInterface;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\node\NodeInterface;
@@ -384,6 +386,10 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
    *   Field names the group mock reports via hasField().
    * @param array|null $savedCategoryTranslations
    *   Receives category translations actually saved by provisioning.
+   * @param \Drupal\user\UserInterface|null $tenantAdmin
+   *   The tenant admin account provisioning creates or finds.
+   * @param bool $tenantAdminExists
+   *   Whether the account already exists (found by mail).
    */
   protected function setupSuccessfulProvisioning(
     int $groupId = 42,
@@ -394,6 +400,8 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
     // default here is the configuration the code actually meets.
     array $existingFields = ['field_logo_light', 'field_logo_dark'],
     ?array &$savedCategoryTranslations = NULL,
+    ?UserInterface $tenantAdmin = NULL,
+    bool $tenantAdminExists = FALSE,
   ): void {
     // Group storage: slug not taken.
     $this->groupStorage->method('loadByProperties')
@@ -457,10 +465,14 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
       });
 
     // User storage: no existing user, create new.
-    $this->userStorage->method('loadByProperties')->willReturn([]);
-    $user = $this->createMock(UserInterface::class);
-    $user->method('id')->willReturn($userId);
-    $user->method('save')->willReturn(1);
+    $user = $tenantAdmin;
+    if ($user === NULL) {
+      $user = $this->createMock(UserInterface::class);
+      $user->method('id')->willReturn($userId);
+      $user->method('save')->willReturn(1);
+    }
+    $this->userStorage->method('loadByProperties')
+      ->willReturnCallback(static fn(array $values): array => $tenantAdminExists && isset($values['mail']) ? [$user] : []);
     $this->userStorage->method('create')->willReturn($user);
 
     // Relationship storage: no existing membership.
@@ -4004,6 +4016,246 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
     );
 
     $this->assertSame('i-lucide-construction', $captured[0]['field_category_icon']);
+  }
+
+  /**
+   * Builds a provisioning service whose lifecycle switch reads $switch.
+   *
+   * @param mixed $switch
+   *   Stored switch value, or a callable returning it on each read.
+   * @param int $reads
+   *   Receives the number of switch reads.
+   */
+  protected function lifecycleService(mixed $switch, int &$reads = 0): WorkspaceProvisioningService {
+    $config = $this->createMock(ImmutableConfig::class);
+    $config->method('get')->willReturnCallback(function (string $key) use ($switch, &$reads) {
+      if ($key === 'lifecycle_enabled') {
+        $reads++;
+        return is_callable($switch) ? $switch($reads) : $switch;
+      }
+      return match ($key) {
+        'checkout_grace_days' => 14,
+        'demo_expiry_days' => 5,
+        default => NULL,
+      };
+    });
+    $open311Config = $this->createMock(ImmutableConfig::class);
+    $open311Config->method('get')->willReturnCallback(fn(string $key) => $key === 'jurisdiction_group_type' ? 'jur' : NULL);
+    $configFactory = $this->createMock(ConfigFactoryInterface::class);
+    $configFactory->method('get')->willReturnCallback(fn(string $name) => match ($name) {
+      'markaspot_fastmap.settings' => $config,
+      'markaspot_open311.settings' => $open311Config,
+      default => $this->createMock(ImmutableConfig::class),
+    });
+    $time = $this->createMock(TimeInterface::class);
+    $time->method('getRequestTime')->willReturn(1700000000);
+
+    return new WorkspaceProvisioningService(
+      $this->entityTypeManager,
+      $this->database,
+      $this->logger,
+      $this->languageManager,
+      $configFactory,
+      $time,
+      $this->lock,
+      $this->placeholderSignetGenerator,
+      $this->fileRepository,
+      $this->fileSystem,
+      NULL,
+      NULL,
+      NULL,
+      new WorkspaceLifecycle($configFactory, $time),
+    );
+  }
+
+  /**
+   * A valid acceptance as it arrives from the pending signup row.
+   */
+  protected function lifecycleAcceptance(array $override = []): array {
+    return $override + [
+      'terms' => '2026-11-15',
+      'dpa' => '2026-11-15',
+      'declaration' => '1.0',
+      'langcode' => 'de',
+      'accepted_at' => 1699990000,
+    ];
+  }
+
+  /**
+   * Builds a tenant admin double that records field writes.
+   *
+   * @param int $uid
+   *   The account id.
+   * @param array $userFields
+   *   Receives the fields set on the account.
+   */
+  protected function lifecycleTenantAdmin(int $uid, ?array &$userFields): UserInterface {
+    $userFields = [];
+    $user = $this->createMock(UserInterface::class);
+    $user->method('id')->willReturn($uid);
+    $user->method('save')->willReturn(1);
+    $user->method('hasField')->willReturnCallback(static fn(string $name): bool => $name === 'field_tos_accepted_at');
+    $user->method('set')->willReturnCallback(function (string $name, $value) use ($user, &$userFields) {
+      $userFields[$name] = $value;
+      return $user;
+    });
+    return $user;
+  }
+
+  /**
+   * Switch on: no customer workspace without acceptance, whoever calls.
+   *
+   * Refused before the slug lock, the transaction or any entity.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOnRefusesWithoutAcceptance(): void {
+    $service = $this->lifecycleService(TRUE);
+    $this->groupStorage->expects($this->never())->method('create');
+    $this->userStorage->expects($this->never())->method('create');
+    $cases = [
+      'missing' => $this->validData(),
+      'no time' => $this->validData(['acceptance' => array_diff_key($this->lifecycleAcceptance(), ['accepted_at' => TRUE])]),
+      'string time' => $this->validData(['acceptance' => $this->lifecycleAcceptance(['accepted_at' => '1699990000'])]),
+      'bad version' => $this->validData(['acceptance' => $this->lifecycleAcceptance(['terms' => 'a b'])]),
+    ];
+    foreach ($cases as $label => $data) {
+      try {
+        $service->provisionWorkspace($data);
+        $this->fail("Provisioning accepted: $label");
+      }
+      catch (AcceptanceRequiredException) {
+        $this->addToAssertionCount(1);
+      }
+    }
+    $this->assertSame([], $this->lock->events);
+  }
+
+  /**
+   * Switch on: the record carries the acceptance and the tenant admin.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOnWritesRecord(): void {
+    $created = NULL;
+    $setGroupFields = NULL;
+    $userFields = NULL;
+    $user = $this->lifecycleTenantAdmin(10, $userFields);
+    $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, ['field_lifecycle_record'], tenantAdmin: $user);
+
+    $this->lifecycleService(TRUE)->provisionWorkspace($this->validData(['acceptance' => $this->lifecycleAcceptance()]));
+
+    $this->assertSame([
+      'v' => 1,
+      'acceptance' => [
+        'terms' => '2026-11-15',
+        'dpa' => '2026-11-15',
+        'declaration' => '1.0',
+        'langcode' => 'de',
+        'accepted_at' => 1699990000,
+        'uid' => 10,
+      ],
+      'opening' => NULL,
+    ], json_decode($setGroupFields['field_lifecycle_record'], TRUE));
+    $this->assertArrayNotHasKey('field_lifecycle_record', $created, 'Written after the account exists, not in the create payload.');
+    $this->assertSame(['field_tos_accepted_at' => 1699990000], $userFields);
+  }
+
+  /**
+   * An existing account creating another workspace gets a record there.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleExistingAccountGetsRecordOnNewWorkspace(): void {
+    $created = NULL;
+    $setGroupFields = NULL;
+    $userFields = NULL;
+    $user = $this->lifecycleTenantAdmin(77, $userFields);
+    $this->setupSuccessfulProvisioning(43, 77, $created, $setGroupFields, ['field_lifecycle_record'], tenantAdmin: $user, tenantAdminExists: TRUE);
+    $this->userStorage->expects($this->never())->method('create');
+
+    $result = $this->lifecycleService(TRUE)->provisionWorkspace($this->validData(['acceptance' => $this->lifecycleAcceptance()]));
+
+    $this->assertSame(77, $result['user_id']);
+    $record = json_decode($setGroupFields['field_lifecycle_record'], TRUE);
+    $this->assertSame(77, $record['acceptance']['uid']);
+    $this->assertSame(1699990000, $userFields['field_tos_accepted_at']);
+  }
+
+  /**
+   * Switch off: provisioning is unchanged, an acceptance is ignored.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOffWritesNoRecord(): void {
+    foreach ([NULL, FALSE, 1, 'true'] as $switch) {
+      $created = NULL;
+      $setGroupFields = NULL;
+      $userFields = NULL;
+      $this->setUp();
+      $user = $this->lifecycleTenantAdmin(10, $userFields);
+      $fields = ['field_lifecycle_record', 'field_tier', 'field_expiry_date'];
+      $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, $fields, tenantAdmin: $user);
+
+      $this->lifecycleService($switch)->provisionWorkspace($this->validData(['acceptance' => $this->lifecycleAcceptance()]));
+      $this->assertArrayNotHasKey('field_lifecycle_record', $setGroupFields, var_export($switch, TRUE));
+      $this->assertSame([], $userFields, var_export($switch, TRUE));
+      // Today's provisioning still sets the demo expiry.
+      $this->assertSame(1700000000 + 5 * 86400, $setGroupFields['field_expiry_date']);
+
+      // And a provisioning call without any acceptance works as before.
+      $this->setUp();
+      $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, ['field_lifecycle_record']);
+      $result = $this->lifecycleService($switch)->provisionWorkspace($this->validData());
+      $this->assertSame(42, $result['group_id']);
+      $this->assertArrayNotHasKey('field_lifecycle_record', $setGroupFields);
+    }
+  }
+
+  /**
+   * Switch on, field missing: fail closed, nothing is saved.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchOnWithoutFieldFailsClosed(): void {
+    $created = NULL;
+    $setGroupFields = NULL;
+    $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, []);
+    $this->userStorage->expects($this->never())->method('create');
+
+    $this->expectException(\RuntimeException::class);
+    $this->expectExceptionMessage('lifecycle record field is missing');
+    $this->lifecycleService(TRUE)->provisionWorkspace($this->validData(['acceptance' => $this->lifecycleAcceptance()]));
+  }
+
+  /**
+   * The switch is read once: a flip during provisioning leaves no half state.
+   *
+   * @covers ::provisionWorkspace
+   */
+  public function testLifecycleSwitchIsReadOnce(): void {
+    $created = NULL;
+    $setGroupFields = NULL;
+    $userFields = NULL;
+    $user = $this->lifecycleTenantAdmin(10, $userFields);
+    $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, ['field_lifecycle_record'], tenantAdmin: $user);
+    $reads = 0;
+    // On at the first read, off afterwards.
+    $service = $this->lifecycleService(static fn(int $read): bool => $read === 1, $reads);
+
+    $service->provisionWorkspace($this->validData(['acceptance' => $this->lifecycleAcceptance()]));
+
+    $this->assertSame(1, $reads);
+    $this->assertSame(10, json_decode($setGroupFields['field_lifecycle_record'], TRUE)['acceptance']['uid']);
+
+    // Off at the first read, on afterwards: no record, and no refusal either.
+    $this->setUp();
+    $this->setupSuccessfulProvisioning(42, 10, $created, $setGroupFields, ['field_lifecycle_record']);
+    $reads = 0;
+    $result = $this->lifecycleService(static fn(int $read): bool => $read !== 1, $reads)->provisionWorkspace($this->validData());
+    $this->assertSame(42, $result['group_id']);
+    $this->assertSame(1, $reads);
+    $this->assertArrayNotHasKey('field_lifecycle_record', $setGroupFields);
   }
 
 }

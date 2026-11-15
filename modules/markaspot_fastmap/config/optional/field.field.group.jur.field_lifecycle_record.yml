@@ -1,0 +1,18 @@
+langcode: en
+status: true
+dependencies:
+  config:
+    - field.storage.group.field_lifecycle_record
+    - group.type.jur
+id: group.jur.field_lifecycle_record
+field_name: field_lifecycle_record
+entity_type: group
+bundle: jur
+label: 'Lifecycle record'
+description: 'Acceptance of the texts and opening of the workspace (JSON). Written by the platform only.'
+required: false
+translatable: false
+default_value: {  }
+default_value_callback: ''
+settings: {  }
+field_type: string_long

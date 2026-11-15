@@ -1282,7 +1282,18 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
     protected readonly ?AiClientService $aiClient = NULL,
     protected readonly ?CitizenWordingResolver $citizenWordingResolver = NULL,
     protected readonly ?FileUsageInterface $fileUsage = NULL,
+    protected readonly ?WorkspaceLifecycle $workspaceLifecycle = NULL,
   ) {}
+
+  /**
+   * Returns the lifecycle record service.
+   *
+   * Falls back to a local instance on the same config so the provisioning
+   * invariant holds for every way this service is constructed.
+   */
+  private function lifecycle(): WorkspaceLifecycle {
+    return $this->workspaceLifecycle ?? new WorkspaceLifecycle($this->configFactory, $this->time);
+  }
 
   /**
    * {@inheritdoc}
@@ -1349,6 +1360,21 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
 
     $boundaryJson = $this->buildBoundaryJson($boundary, $name);
 
+    // Provisioning invariant: while the lifecycle switch is on, no customer
+    // workspace is created without a valid acceptance, whoever calls this.
+    // The switch is read once, so the guard and the record write below can
+    // never disagree, even when the switch flips during this call. Template
+    // demos never come through here: their slug prefix is refused above and
+    // the demo seeder creates its groups itself, without a record.
+    $lifecycle = $this->lifecycle();
+    $acceptance = NULL;
+    if ($lifecycle->isEnabled()) {
+      if (!WorkspaceLifecycle::isValidAcceptance($data['acceptance'] ?? NULL)) {
+        throw new AcceptanceRequiredException('A valid acceptance is required to create a workspace.');
+      }
+      $acceptance = $data['acceptance'];
+    }
+
     $groupStorage = $this->entityTypeManager->getStorage('group');
     $slugLockName = $this->buildWorkspaceSlugLockName($slug);
     if (!$this->lock->acquire($slugLockName, self::WORKSPACE_SLUG_LOCK_TTL)) {
@@ -1399,6 +1425,10 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         }
         $groupFields['field_boundary'] = $boundaryJson;
         $group = $groupStorage->create($groupFields);
+        if ($acceptance !== NULL && !$lifecycle->hasRecordField($group)) {
+          // Fail closed: without the field the acceptance cannot be proven.
+          throw new \RuntimeException('The lifecycle record field is missing; run the database updates.');
+        }
         $group->save();
 
         // Tier is never set eagerly at provisioning time. Demo workspaces have
@@ -1452,6 +1482,21 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
 
         // 6. Add user as group member with admin role.
         $this->addGroupMembership($group, $user);
+
+        // 6a. Lifecycle record: the acceptance of this signup, for this
+        // workspace and account. An existing account creating another
+        // workspace gets a record on that workspace too.
+        if ($acceptance !== NULL) {
+          $lifecycle->writeAcceptance($group, $acceptance, (int) $user->id());
+          $group->save();
+          if ($user->hasField('field_tos_accepted_at')) {
+            $user->set('field_tos_accepted_at', $acceptance['accepted_at']);
+            $user->save();
+          }
+          else {
+            $this->logger->error('field_tos_accepted_at does not exist on user entity. Run update hooks.');
+          }
+        }
 
         // 7. Add the API key owner as a jurisdiction group member.
         $this->addApiUserMembership($group);

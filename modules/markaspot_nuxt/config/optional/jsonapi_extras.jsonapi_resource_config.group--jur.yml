@@ -230,6 +230,12 @@ resourceFields:
     publicName: field_legal_notice
     enhancer:
       id: ''
+  field_lifecycle_record:
+    disabled: true
+    fieldName: field_lifecycle_record
+    publicName: field_lifecycle_record
+    enhancer:
+      id: ''
   field_logo_dark:
     disabled: true
     fieldName: field_logo_dark

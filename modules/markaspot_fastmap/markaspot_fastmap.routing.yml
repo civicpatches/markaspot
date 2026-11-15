@@ -10,6 +10,20 @@ markaspot_fastmap.create_workspace:
   options:
     no_cache: 'TRUE'
 
+markaspot_fastmap.signup_config:
+  path: '/api/fastmap/signup-config'
+  defaults:
+    _controller: '\Drupal\markaspot_fastmap\Controller\FastMapWorkspaceController::signupConfig'
+    _title: 'FastMap Signup Configuration'
+    _format: 'json'
+  methods: [GET]
+  requirements:
+    # The service key is checked inside the controller, as for
+    # create-workspace; failed keys count toward its flood window.
+    _access: 'TRUE'
+  options:
+    no_cache: 'TRUE'
+
 markaspot_fastmap.verify_workspace:
   path: '/api/fastmap/verify/{token}'
   defaults:

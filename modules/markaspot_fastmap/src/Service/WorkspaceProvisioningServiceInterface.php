@@ -14,12 +14,16 @@ interface WorkspaceProvisioningServiceInterface {
    *
    * @param array $data
    *   Workspace parameters: name, slug, email, categories, lat, lng, zoom,
-   *   template, language, boundary.
+   *   template, language, boundary. While the lifecycle switch is on, also
+   *   "acceptance" as built by WorkspaceLifecycle::acceptanceFromSignup().
    *
    * @return array
    *   Result with group_id, slug, name, url, categories count, user_id and
    *   the curated citizen-wording data used by the welcome-mail flow.
    *
+   * @throws \Drupal\markaspot_fastmap\Service\AcceptanceRequiredException
+   *   While the lifecycle switch is on and the acceptance is missing or
+   *   invalid. Thrown before anything is written.
    * @throws \RuntimeException
    *   When slug is already taken or entity creation fails.
    */

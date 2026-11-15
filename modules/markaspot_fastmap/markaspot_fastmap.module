@@ -21,6 +21,7 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Service\DemoStaffAccount;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
 use Drupal\markaspot_validation\Plugin\Validation\Geo\GeoJsonBoundary;
 use Drupal\node\NodeInterface;
@@ -42,8 +43,20 @@ use Drupal\user\UserInterface;
  *
  * Access is granted when the user has the Group-level 'update any' or
  * 'update own' permission for the node's bundle within its jurisdiction.
+ *
+ * The lifecycle record of a workspace is closed to every account, uid 1
+ * included: server code reads and writes it through the entity API without
+ * access checks, so it never leaves or enters through JSON:API, views or
+ * forms, whatever the JSON:API resource config. Keep this the module's only
+ * implementation of the hook: core merges field access results per module
+ * (EntityAccessControlHandler::fieldAccess()), so a second implementation
+ * would overwrite this one.
  */
 function markaspot_fastmap_entity_field_access(string $operation, FieldDefinitionInterface $field_definition, AccountInterface $account, ?FieldItemListInterface $items = NULL): AccessResult {
+  if ($field_definition->getTargetEntityTypeId() === 'group' && $field_definition->getName() === WorkspaceLifecycle::FIELD) {
+    return AccessResult::forbidden('The lifecycle record is handled by the platform only.');
+  }
+
   // Only act on edit operations for specific base fields.
   $gated_fields = ['status', 'promote', 'sticky'];
   if ($operation !== 'edit' || !in_array($field_definition->getName(), $gated_fields, TRUE)) {
@@ -88,6 +101,17 @@ function markaspot_fastmap_entity_field_access(string $operation, FieldDefinitio
   return $hasPermission
     ? AccessResult::allowed()->cachePerUser()->addCacheableDependency($group)->addCacheableDependency($entity)
     : AccessResult::neutral()->cachePerUser()->addCacheableDependency($group);
+}
+
+/**
+ * Implements hook_jsonapi_entity_field_filter_access().
+ *
+ * Nobody filters or sorts on the lifecycle record of a workspace.
+ */
+function markaspot_fastmap_jsonapi_entity_field_filter_access(FieldDefinitionInterface $field_definition, AccountInterface $account): AccessResult {
+  return $field_definition->getTargetEntityTypeId() === 'group' && $field_definition->getName() === WorkspaceLifecycle::FIELD
+    ? AccessResult::forbidden('The lifecycle record cannot be filtered on.')
+    : AccessResult::neutral();
 }
 
 /**
@@ -1095,6 +1119,26 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
     if ($demo !== NULL) {
       $settings['demo'] = $demo;
     }
+  }
+}
+
+/**
+ * Implements hook_markaspot_nuxt_tenant_general_settings_alter().
+ *
+ * Adds the lifecycle object to the dashboard's general settings, only for a
+ * workspace with a valid lifecycle record. The route has already checked
+ * that the caller administers this workspace. The public settings response
+ * never carries it.
+ */
+function markaspot_fastmap_markaspot_nuxt_tenant_general_settings_alter(array &$data, $group): void {
+  if (!$group instanceof GroupInterface) {
+    return;
+  }
+  /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycle $lifecycle */
+  $lifecycle = \Drupal::service('markaspot_fastmap.workspace_lifecycle');
+  $summary = $lifecycle->settingsSummary($group);
+  if ($summary !== NULL) {
+    $data['lifecycle'] = $summary;
   }
 }
 

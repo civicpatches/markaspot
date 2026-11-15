@@ -35,6 +35,9 @@ markaspot_fastmap.settings:
     demo_reset_interval:
       type: integer
       label: 'Seconds between cron resets of the demo workspaces (0 = off)'
+    lifecycle_enabled:
+      type: boolean
+      label: 'Self-service lifecycle: new signups accept the texts and get a lifecycle record'
     deletion_grace_days:
       type: integer
       label: 'Days between a confirmed workspace deletion and the teardown'

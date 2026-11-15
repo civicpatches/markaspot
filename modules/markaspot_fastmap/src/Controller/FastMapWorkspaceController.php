@@ -17,6 +17,8 @@ use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
+use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
+use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningServiceInterface;
 use Drupal\markaspot_fastmap\Validation\CategoryTranslations;
 use Drupal\markaspot_fastmap\Validation\WorkspaceBoundary;
@@ -110,6 +112,14 @@ class FastMapWorkspaceController extends ControllerBase {
   private const SIGNUP_BINDING_COLLECTION = 'markaspot_fastmap_signup_binding';
 
   /**
+   * Keyvalue collection of released signups that must be started again.
+   *
+   * Keyed by the token hash; reserves no map name. Lets every later opening
+   * of the link show the same answer, also after a mail scanner opened it.
+   */
+  private const SIGNUP_RESTART_COLLECTION = 'markaspot_fastmap_signup_restart';
+
+  /**
    * The database connection.
    *
    * @var \Drupal\Core\Database\Connection
@@ -179,6 +189,14 @@ class FastMapWorkspaceController extends ControllerBase {
   protected TimeInterface $time;
 
   /**
+   * The lifecycle record service (platform switch and acceptance).
+   *
+   * Read through lifecycle(), which builds it from this controller's config
+   * factory and time service when the container has none.
+   */
+  protected ?WorkspaceLifecycle $lifecycle = NULL;
+
+  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container): static {
@@ -198,7 +216,37 @@ class FastMapWorkspaceController extends ControllerBase {
     if ($container->has('entity.repository')) {
       $instance->entityRepository = $container->get('entity.repository');
     }
+    if ($container->has('markaspot_fastmap.workspace_lifecycle')) {
+      $instance->lifecycle = $container->get('markaspot_fastmap.workspace_lifecycle');
+    }
     return $instance;
+  }
+
+  /**
+   * GET /api/fastmap/signup-config.
+   *
+   * Tells the Nuxt server whether the lifecycle switch is on, so it can show
+   * the acceptance sentence and send the acceptance. Service key in the
+   * X-Service-Key header only. A valid key is answered at once, whatever
+   * the flood state: the Nuxt server calls from one address, which signups
+   * also count against. Only failed attempts are limited and counted, in the
+   * same flood window as workspace creation.
+   */
+  public function signupConfig(Request $request): JsonResponse {
+    $expectedKey = (string) ($this->config('markaspot_fastmap.settings')->get('service_key') ?? '');
+    $apiKey = (string) ($request->headers->get('X-Service-Key') ?? '');
+    if ($expectedKey !== '' && $apiKey !== '' && hash_equals($expectedKey, $apiKey)) {
+      return $this->sensitiveJsonResponse([
+        'lifecycle_enabled' => $this->lifecycle()->isEnabled(),
+      ], 200);
+    }
+
+    $floodIdentifier = $this->getCreateWorkspaceFloodIdentifier($request, FALSE);
+    if (!$this->flood->isAllowed(self::CREATE_WORKSPACE_FLOOD_EVENT, self::CREATE_WORKSPACE_FLOOD_LIMIT, self::CREATE_WORKSPACE_FLOOD_WINDOW, $floodIdentifier)) {
+      return $this->sensitiveJsonResponse(['error' => 'Too many attempts. Try again later.'], 429);
+    }
+    $this->flood->register(self::CREATE_WORKSPACE_FLOOD_EVENT, self::CREATE_WORKSPACE_FLOOD_WINDOW, $floodIdentifier);
+    return $this->sensitiveJsonResponse(['error' => 'Invalid API key'], 403);
   }
 
   /**
@@ -303,6 +351,21 @@ class FastMapWorkspaceController extends ControllerBase {
     $wordingCandidate = $data['wording'] ?? NULL;
     if (is_string($wordingCandidate) && CitizenWordingResolver::isSupportedPreset($wordingCandidate)) {
       $wording = $wordingCandidate;
+    }
+
+    // Acceptance of the texts, only while the lifecycle switch is on. The
+    // client sends the three versions and the UI language; the time is the
+    // request time of this signup. With the switch off the member is ignored
+    // and nothing of it is stored.
+    $acceptance = NULL;
+    if ($this->lifecycle()->isEnabled()) {
+      $acceptance = $this->lifecycle()->acceptanceFromSignup($data['acceptance'] ?? NULL);
+      if ($acceptance === NULL) {
+        return new JsonResponse([
+          'error' => 'Accepting the Terms of Service, the Data Processing Agreement and the Operator Declaration is required.',
+          'code' => 'acceptance_required',
+        ], 422);
+      }
     }
 
     $slugLockName = $this->buildWorkspaceSlugLockName($slug);
@@ -448,6 +511,9 @@ class FastMapWorkspaceController extends ControllerBase {
           ? ProjectPromptConstraint::normalize($data['ai_system_prompt'])
           : '',
       ];
+      if ($acceptance !== NULL) {
+        $workspaceData['acceptance'] = $acceptance;
+      }
 
       try {
         $this->database->insert('markaspot_fastmap_pending')
@@ -646,6 +712,10 @@ class FastMapWorkspaceController extends ControllerBase {
           return $this->sensitiveJsonResponse($response, 200);
         }
 
+        if ($this->isReleasedSignup($token)) {
+          return $this->restartRequiredResponse();
+        }
+
         return $this->sensitiveJsonResponse(['error' => 'Invalid or expired verification token'], 404);
       }
 
@@ -669,6 +739,12 @@ class FastMapWorkspaceController extends ControllerBase {
       try {
         $result = $this->provisioning->provisionWorkspace($workspaceData);
         $provisionedGroupId = (int) $result['group_id'];
+      }
+      catch (AcceptanceRequiredException) {
+        // The provisioning service is the only judge: a signup stored before
+        // the lifecycle switch was turned on carries no acceptance. Nothing
+        // was created; release the row so the map name is free again.
+        return $this->releasePendingSignup((int) $record['id'], $token, (int) $record['created']);
       }
       catch (WorkspaceBoundaryException $e) {
         return $this->sensitiveJsonResponse(['error' => $e->getMessage(), 'code' => 'boundary_confirmation_required'], 422);
@@ -785,6 +861,67 @@ class FastMapWorkspaceController extends ControllerBase {
     finally {
       $this->lock->release($tokenLockName);
     }
+  }
+
+  /**
+   * Removes a pending signup that must be started again.
+   *
+   * Frees the reserved map name and drops the signup binding, the same way a
+   * failed verification mail does.
+   */
+  private function releasePendingSignup(int $pendingId, string $token, int $created): JsonResponse {
+    // The marker comes first: once the row is gone, a later opening of the
+    // link (the person after a mail scanner) only finds the marker. If it
+    // cannot be written, the row is released anyway so the map name is free.
+    try {
+      $this->keyValueExpirable->get(self::SIGNUP_RESTART_COLLECTION)->setWithExpire(
+        hash('sha256', $token),
+        TRUE,
+        max(1, $this->verificationTtl() - ($this->now() - $created)),
+      );
+    }
+    catch (\Exception $e) {
+      $this->fastmapLogger->warning('Could not store the restart marker of pending signup @id: @msg', [
+        '@id' => $pendingId,
+        '@msg' => $e->getMessage(),
+      ]);
+    }
+    $this->database->delete('markaspot_fastmap_pending')
+      ->condition('id', $pendingId)
+      ->execute();
+    try {
+      $this->keyValueExpirable->get(self::SIGNUP_BINDING_COLLECTION)->delete(hash('sha256', $token));
+    }
+    catch (\Exception) {
+      // The binding expires on its own; it is useless without the row.
+    }
+    $this->fastmapLogger->info('Pending signup @id released: it carries no acceptance and must be started again.', [
+      '@id' => $pendingId,
+    ]);
+
+    return $this->restartRequiredResponse();
+  }
+
+  /**
+   * Whether a verify token belongs to a released signup.
+   */
+  private function isReleasedSignup(string $token): bool {
+    try {
+      return $this->keyValueExpirable->get(self::SIGNUP_RESTART_COLLECTION)->get(hash('sha256', $token)) === TRUE;
+    }
+    catch (\Exception) {
+      return FALSE;
+    }
+  }
+
+  /**
+   * The answer for a signup that must be started again.
+   */
+  private function restartRequiredResponse(): JsonResponse {
+    return $this->sensitiveJsonResponse([
+      'error' => 'This signup must be started again.',
+      'code' => 'signup_restart_required',
+    ], 410);
   }
 
   /**
@@ -1344,6 +1481,19 @@ class FastMapWorkspaceController extends ControllerBase {
       $days = self::MAX_VERIFICATION_DAYS;
     }
     return $days * 86400;
+  }
+
+  /**
+   * The lifecycle record service, built on this controller's clock if unset.
+   */
+  private function lifecycle(): WorkspaceLifecycle {
+    if ($this->lifecycle === NULL) {
+      // config() sets the config factory of ControllerBase on first use.
+      // Without the module handler the service reads the operating mode.
+      $this->config('markaspot_fastmap.settings');
+      $this->lifecycle = new WorkspaceLifecycle($this->configFactory, $this->time);
+    }
+    return $this->lifecycle;
   }
 
   /**

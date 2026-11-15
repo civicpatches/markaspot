@@ -78,6 +78,13 @@ class TenantSettingsControllerTest extends UnitTestCase {
   protected CacheBackendInterface $membershipCache;
 
   /**
+   * The module handler the controller alters responses with.
+   *
+   * @var \Drupal\Core\Extension\ModuleHandlerInterface&\PHPUnit\Framework\MockObject\MockObject
+   */
+  protected ModuleHandlerInterface $moduleHandler;
+
+  /**
    * The mocked stream wrapper manager.
    *
    * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface|\PHPUnit\Framework\MockObject\MockObject
@@ -201,6 +208,10 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $loggerFactory = $this->createMock(LoggerChannelFactoryInterface::class);
     $loggerFactory->method('get')->willReturn($this->createMock(LoggerInterface::class));
     $container->set('logger.factory', $loggerFactory);
+
+    // The general settings response is alterable by other modules.
+    $this->moduleHandler = $this->createMock(ModuleHandlerInterface::class);
+    $container->set('module_handler', $this->moduleHandler);
 
     \Drupal::setContainer($container);
 
@@ -1895,6 +1906,27 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertEquals('public', $data['field_visibility']);
     $this->assertEquals('<p>Legal</p>', $data['field_legal_notice']);
     $this->assertEquals('<p>Privacy</p>', $data['field_privacy_policy']);
+  }
+
+  /**
+   * Other modules can add data to the general settings, nothing else.
+   *
+   * @covers ::getGeneralSettings
+   */
+  public function testGetGeneralSettingsIsAlterable(): void {
+    $group = $this->createMockGroup(['field_platform_name' => 'Test City']);
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+    $this->moduleHandler->expects($this->once())->method('alter')
+      ->with('markaspot_nuxt_tenant_general_settings', $this->isArray(), $group)
+      ->willReturnCallback(function (string $hook, array &$data, $context): void {
+        $data['lifecycle'] = ['accepted_at' => 1800000000, 'open' => FALSE];
+      });
+
+    $response = $this->controller->getGeneralSettings(Request::create('/api/tenant/14/general', 'GET'), '14');
+
+    $data = json_decode($response->getContent(), TRUE);
+    $this->assertSame('Test City', $data['field_platform_name']);
+    $this->assertSame(['accepted_at' => 1800000000, 'open' => FALSE], $data['lifecycle']);
   }
 
   /**

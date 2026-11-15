@@ -11,6 +11,7 @@ use Drupal\Component\Serialization\Yaml;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\Core\Extension\Requirement\RequirementSeverity;
+use Drupal\markaspot_fastmap\Service\LifecycleRecordSchema;
 use Drupal\user\Entity\Role;
 
 /**
@@ -217,6 +218,24 @@ function markaspot_fastmap_install(): void {
   }
 
   markaspot_fastmap_update_11916();
+
+  // A site that enables the module later ends up like an updated one: the
+  // switch present, the JSON:API exclusion where the resource config exists,
+  // the record field created or checked.
+  foreach (_markaspot_fastmap_lifecycle_record_schema()->apply() as $message) {
+    $logger->info($message);
+  }
+}
+
+/**
+ * Builds the schema step of the lifecycle record.
+ */
+function _markaspot_fastmap_lifecycle_record_schema(): LifecycleRecordSchema {
+  return new LifecycleRecordSchema(
+    \Drupal::entityTypeManager(),
+    \Drupal::configFactory(),
+    \Drupal::service('extension.list.module')->getPath('markaspot_fastmap') . '/config/optional',
+  );
 }
 
 /**
@@ -1664,4 +1683,11 @@ function markaspot_fastmap_update_11930(): string {
   return $added === []
     ? 'Demo workspace settings already present.'
     : 'Added demo workspace settings: ' . implode(', ', $added) . '.';
+}
+
+/**
+ * Adds the lifecycle switch, the record field and its JSON:API exclusion.
+ */
+function markaspot_fastmap_update_11931(): string {
+  return implode(' ', _markaspot_fastmap_lifecycle_record_schema()->apply());
 }
