@@ -192,6 +192,8 @@ class VisionStaffBudgetStatusTest extends UnitTestCase {
     $this->assertSame([
       'view_field_priority' => FALSE,
       'vision_staff_budget' => $expected,
+      'filter_field_e_mail' => FALSE,
+      'filter_field_phone' => FALSE,
     ], $data['capabilities']);
     $this->assertFalse($data['maintenance_access']);
     $this->assertSame($authenticated, array_key_exists('user', $data));

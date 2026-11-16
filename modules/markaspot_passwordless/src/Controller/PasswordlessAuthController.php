@@ -25,6 +25,8 @@ use Drupal\Core\Session\SessionConfigurationInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\group\Entity\GroupMembership;
+use Drupal\jsonapi\Context\FieldResolver;
+use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
 use Drupal\markaspot_group\MembershipRoleNormalizer;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Service\FeatureScopeResolver;
@@ -161,6 +163,10 @@ class PasswordlessAuthController extends ControllerBase {
    *   Detects invalidations that overlap building that slice.
    * @param \Drupal\markaspot_vision\Service\StaffAnalysisAccess|null $staffAnalysisAccess
    *   The optional vision staff budget resolver.
+   * @param \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface|null $jsonApiResourceTypes
+   *   The optional JSON:API resource types.
+   * @param \Drupal\jsonapi\Context\FieldResolver|null $jsonApiFieldResolver
+   *   The current account's optional JSON:API field resolver.
    */
   public function __construct(
     OtpService $otp_service,
@@ -179,6 +185,8 @@ class PasswordlessAuthController extends ControllerBase {
     protected ?CacheBackendInterface $authStatusCache = NULL,
     protected ?CacheTagsChecksumInterface $cacheTagsChecksum = NULL,
     protected ?StaffAnalysisAccess $staffAnalysisAccess = NULL,
+    protected ?ResourceTypeRepositoryInterface $jsonApiResourceTypes = NULL,
+    protected ?FieldResolver $jsonApiFieldResolver = NULL,
   ) {
     $this->otpService = $otp_service;
     $this->currentUser = $current_user;
@@ -222,6 +230,10 @@ class PasswordlessAuthController extends ControllerBase {
       $container->get('cache.default'),
       $container->get('cache_tags.invalidator.checksum'),
       $staff_analysis_access,
+      $container->has('jsonapi.resource_type.repository')
+        ? $container->get('jsonapi.resource_type.repository') : NULL,
+      $container->has('jsonapi.field_resolver')
+        ? $container->get('jsonapi.field_resolver') : NULL,
     );
   }
 
@@ -763,6 +775,8 @@ class PasswordlessAuthController extends ControllerBase {
         && $account->hasPermission('view field_priority')
         && FieldConfig::loadByName('node', 'service_request', 'field_priority') !== NULL,
       'vision_staff_budget' => $this->hasVisionStaffBudget($request),
+      'filter_field_e_mail' => $this->canFilterContactField('field_e_mail'),
+      'filter_field_phone' => $this->canFilterContactField('field_phone'),
     ];
 
     if ($account->isAuthenticated()) {
@@ -798,6 +812,31 @@ class PasswordlessAuthController extends ControllerBase {
       ->setCacheMaxAge(0));
     $response->headers->set('Cache-Control', 'private, no-store');
     return $response;
+  }
+
+  /**
+   * Reports the existing JSON:API decision without granting any field access.
+   */
+  protected function canFilterContactField(string $fieldName): bool {
+    if ($this->jsonApiResourceTypes === NULL || $this->jsonApiFieldResolver === NULL) {
+      return FALSE;
+    }
+
+    try {
+      $type = $this->jsonApiResourceTypes->get('node', 'service_request');
+      if ($type === NULL || $type->isInternal() || !$type->isFieldEnabled($fieldName)) {
+        return FALSE;
+      }
+      // Core combines every filter hook and, when neutral, field view access.
+      // Reuse that resolution so field configuration and all vetoes remain
+      // authoritative. In particular, a scope exception is not a field grant.
+      $this->jsonApiFieldResolver->resolveInternalEntityQueryPath($type, $type->getPublicName($fieldName), 'CONTAINS');
+      return TRUE;
+    }
+    catch (\Throwable) {
+      // Missing fields, denied access or unavailable JSON:API fail closed.
+      return FALSE;
+    }
   }
 
   /**
