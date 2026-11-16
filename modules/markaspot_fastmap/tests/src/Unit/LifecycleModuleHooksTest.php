@@ -12,6 +12,7 @@ use Drupal\Core\Entity\ContentEntityTypeInterface;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
@@ -161,6 +162,11 @@ class LifecycleModuleHooksTest extends UnitTestCase {
     $provisioning = $this->createMock(WorkspaceProvisioningServiceInterface::class);
     $provisioning->expects($this->once())->method('teardownWorkspace')->with(6);
     $container->set('markaspot_fastmap.workspace_provisioning', $provisioning);
+
+    // Not self-service (no operating mode, the module handler knows no
+    // fastmap): the waiting-reports block reads nothing; the notifier service
+    // is not in this container, so a call would fail the test.
+    $container->set('module_handler', $this->createMock(ModuleHandlerInterface::class));
 
     $record->expects($this->never())->method('getMembers');
     markaspot_fastmap_cron();

@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Il tuo abbonamento è terminato. Il mese in corso non viene rimborsato.
+workspace_reports_waiting:
+  subject: 'Segnalazioni in attesa della tua approvazione: @workspace_name'
+  body: |
+    Mappa: @workspace_name
+    In attesa della tua approvazione: @count
+
+    Controllale nella tua dashboard:
+    @dashboard_url
+
+    Le segnalazioni compaiono sulla mappa solo dopo la tua approvazione; puoi modificarlo in Impostazioni > Funzionalità.
+
+    Non riceverai altre e-mail finché non arriveranno nuove segnalazioni.

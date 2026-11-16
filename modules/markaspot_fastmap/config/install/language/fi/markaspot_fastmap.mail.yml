@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Tilauksesi on päättynyt. Kuluvan kuukauden maksua ei palauteta.
+workspace_reports_waiting:
+  subject: 'Ilmoituksia odottaa hyväksyntääsi: @workspace_name'
+  body: |
+    Kartta: @workspace_name
+    Odottaa hyväksyntääsi: @count
+
+    Tarkista ne hallintapaneelissasi:
+    @dashboard_url
+
+    Ilmoitukset näkyvät kartalla vasta, kun olet hyväksynyt ne; voit muuttaa tätä kohdassa Asetukset > Ominaisuudet.
+
+    Et saa uutta sähköpostia ennen kuin uusia ilmoituksia saapuu.

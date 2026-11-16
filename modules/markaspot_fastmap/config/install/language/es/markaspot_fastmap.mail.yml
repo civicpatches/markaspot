@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Tu suscripción ha terminado. El mes en curso no se reembolsa.
+workspace_reports_waiting:
+  subject: 'Hay reportes esperando tu aprobación: @workspace_name'
+  body: |
+    Mapa: @workspace_name
+    Esperando tu aprobación: @count
+
+    Revísalos en tu panel de control:
+    @dashboard_url
+
+    Los reportes solo aparecen en el mapa después de tu aprobación; puedes cambiarlo en Configuración > Funciones.
+
+    No recibirás otro correo hasta que lleguen nuevos reportes.

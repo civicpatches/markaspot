@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Dit abonnement er ophørt. Den nuværende måned refunderes ikke.
+workspace_reports_waiting:
+  subject: 'Henvendelser venter på din godkendelse: @workspace_name'
+  body: |
+    Kort: @workspace_name
+    Venter på din godkendelse: @count
+
+    Se dem i dit dashboard:
+    @dashboard_url
+
+    Henvendelser vises først på kortet, når du har godkendt dem; det kan du ændre under Indstillinger > Funktioner.
+
+    Du får ikke flere e-mails, før der kommer nye henvendelser.

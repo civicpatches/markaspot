@@ -11,6 +11,7 @@ use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\markaspot_fastmap\Service\PublishedLimitReachedException;
 use Drupal\markaspot_fastmap\Service\TierConfigService;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_group\Service\JurisdictionHierarchyResolverInterface;
@@ -174,7 +175,13 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
         default => 'monthlyLimitMessage',
       };
 
-      $this->context->addViolation($this->resolveLimitMessage($constraint, $messageProperty, $group, $value), [
+      $message = $this->resolveLimitMessage($constraint, $messageProperty, $group, $value);
+      // Workspaces under the lifecycle model name the refusal with a machine
+      // code the dashboard matches; every other workspace keeps its text.
+      if ($messageProperty === 'publishedLimitMessage' && $this->lifecycleGate?->isRecordWorkspace($group)) {
+        $message = PublishedLimitReachedException::prefix($message);
+      }
+      $this->context->addViolation($message, [
         '@limit' => $tierLimits['limit'],
       ]);
     }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_fastmap\Kernel;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
+use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\field\Entity\FieldConfig;
@@ -15,6 +16,7 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\markaspot_fastmap\Service\PublishedLimitReachedException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
@@ -116,6 +118,11 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
   private const OPEN_RECORD = '{"v":1,"acceptance":{"terms":"t1","dpa":"d1","declaration":"o1","langcode":"en","accepted_at":1800000000,"uid":0},"opening":{"opened_at":1800001000,"uid":7,"revision_id":1,"operator":{"organization":"Example Org","address_line1":"Main street 1","postal_code":"12345","locality":"Town","country_code":"DE","email":"operator@example.org"}}}';
 
   /**
+   * Today's sentence of a refused publish at 50, default wording, English.
+   */
+  private const LIMIT_SENTENCE = 'The publication limit has been reached. reports: 50. Unpublish existing items or choose a plan.';
+
+  /**
    * The open Free workspace with a lifecycle record.
    */
   private GroupInterface $recordWorkspace;
@@ -140,6 +147,10 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
    */
   public function register(ContainerBuilder $container): void {
     parent::register($container);
+    // Lets a publish lose the race for the last slot (backstop test).
+    if ($container->hasDefinition('markaspot_fastmap.tier_config')) {
+      $container->getDefinition('markaspot_fastmap.tier_config')->setClass(RacingTierConfig::class);
+    }
     // A worktree run discovers the module's services from another checkout;
     // the TierLimit constraint asks the gate for the staff bypass.
     if (!$container->hasDefinition('markaspot_fastmap.workspace_lifecycle')) {
@@ -290,6 +301,104 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
     $this->assertSame(422, $response->getStatusCode(), (string) $response->getContent());
     $this->assertStringContainsString('50', (string) $response->getContent());
     $this->assertFalse($this->reload($held)->isPublished());
+    // Without a record the text stays as it was, byte for byte, no code.
+    $this->assertSame(['Entity is not valid: ' . self::LIMIT_SENTENCE], $this->errorDetails($response));
+  }
+
+  /**
+   * With a record the refusal of the constraint carries the machine code.
+   *
+   * The exact JSON:API shape the dashboard matches on: an entity-level
+   * violation, so the detail reads "Entity is not valid: " followed by the
+   * code and the sentence, with the pointer /data.
+   */
+  public function testLimitRefusalInRecordWorkspaceCarriesTheCode(): void {
+    $held = $this->heldReportAtLimit(TRUE);
+    $this->setCurrentUser($this->recordTenantAdmin);
+    $response = $this->patchStatus($held, TRUE);
+    $this->assertSame(422, $response->getStatusCode(), (string) $response->getContent());
+    $this->assertSame(['Entity is not valid: published_limit_reached: ' . self::LIMIT_SENTENCE], $this->errorDetails($response));
+    $errors = json_decode((string) $response->getContent(), TRUE)['errors'];
+    $this->assertSame('/data', $errors[0]['source']['pointer']);
+    $this->assertSame('422', (string) $errors[0]['status']);
+  }
+
+  /**
+   * The presave backstop (a publish that loses the race for the last slot).
+   *
+   * The validation counts 49, the save under the lock counts 50: the
+   * TierLimit constraint passes and markaspot_fastmap_node_presave()
+   * refuses. With a record: a 422 whose detail starts with the code. Without
+   * a record: today's storage exception, unchanged.
+   */
+  public function testBackstopRefusalShapes(): void {
+    $held = $this->heldReportAtLimit(TRUE);
+    $this->setCurrentUser($this->recordTenantAdmin);
+    RacingTierConfig::$race = TRUE;
+    $response = $this->patchStatus($held, TRUE);
+    RacingTierConfig::$race = FALSE;
+    $this->assertSame(422, $response->getStatusCode(), (string) $response->getContent());
+    $this->assertSame(['published_limit_reached: ' . self::LIMIT_SENTENCE], $this->errorDetails($response));
+    $this->assertFalse($this->reload($held)->isPublished());
+
+    // The same refusal on a save without validation: the storage exception
+    // carries the 422 exception, whatever the caller.
+    $this->setCurrentUser($this->recordTenantAdmin);
+    $held = $this->reload($held);
+    try {
+      $held->setPublished()->save();
+      $this->fail('The publish over the limit was stored.');
+    }
+    catch (EntityStorageException $e) {
+      $previous = $e->getPrevious();
+      $this->assertInstanceOf(PublishedLimitReachedException::class, $previous);
+      $this->assertSame(422, $previous->getStatusCode());
+      $this->assertSame('published_limit_reached: ' . self::LIMIT_SENTENCE, $e->getMessage());
+    }
+
+    // Without a record (and without the staff bypass, so the limit binds):
+    // today's storage exception, unchanged. Through JSON:API that is a 500
+    // with this message as detail; a kernel test fails on the logged 500, so
+    // the save is checked directly.
+    Role::load('tenant_admin')->revokePermission('bypass mas validation')->save();
+    $legacy = $this->reload($this->heldReportAtLimit());
+    $this->setCurrentUser(User::load($this->tenantAdmin->id()));
+    try {
+      $legacy->setPublished()->save();
+      $this->fail('The publish over the limit was stored.');
+    }
+    catch (EntityStorageException $e) {
+      $this->assertSame(sprintf('Cannot publish service request: jurisdiction %d has reached the published report limit of 50.', $this->workspace->id()), $e->getMessage());
+      $this->assertNotInstanceOf(PublishedLimitReachedException::class, $e->getPrevious());
+    }
+  }
+
+  /**
+   * A citizen report at the limit with approval off: saved, never refused.
+   *
+   * Markaspot_fastmap_node_presave() keeps it unpublished; no refusal text,
+   * prefixed or not, reaches the citizen.
+   */
+  public function testCitizenReportAtLimitIsKeptUnpublishedWithoutRefusal(): void {
+    $this->setCurrentUser(new AnonymousUserSession());
+    for ($i = 0; $i < 50; $i++) {
+      Node::create($this->reportValues('Published ' . $i, TRUE) + ['status' => 1])->save();
+    }
+    $this->setFlag($this->recordWorkspace, FALSE);
+    $node = $this->createAsAnonymous(TRUE);
+    $this->assertFalse($node->isPublished());
+    $this->assertFalse($this->review()->isHeld($node), 'Approval is off: not held, only kept under the limit.');
+  }
+
+  /**
+   * The detail strings of a JSON:API error response.
+   *
+   * @return string[]
+   *   One detail per error.
+   */
+  private function errorDetails(Response $response): array {
+    $body = json_decode((string) $response->getContent(), TRUE);
+    return array_column(is_array($body) ? ($body['errors'] ?? []) : [], 'detail');
   }
 
   /**

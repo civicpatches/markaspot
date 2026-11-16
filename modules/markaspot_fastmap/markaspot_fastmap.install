@@ -1448,33 +1448,7 @@ function markaspot_fastmap_update_11923(): void {
  * applied manually (cp1 fastmap, demo) — finds nothing missing and no-ops.
  */
 function markaspot_fastmap_update_11924(): string {
-  $config = \Drupal::configFactory()->getEditable('markaspot_fastmap.mail');
-  $path = \Drupal::service('extension.list.module')->getPath('markaspot_fastmap')
-    . '/config/install/markaspot_fastmap.mail.yml';
-
-  $shipped = is_file($path) ? Yaml::decode(file_get_contents($path)) : NULL;
-  if (!is_array($shipped)) {
-    return 'Could not read shipped markaspot_fastmap.mail.yml, nothing backfilled.';
-  }
-
-  $backfilled = [];
-  foreach ($shipped as $key => $value) {
-    if ($key === 'langcode') {
-      continue;
-    }
-    if ($config->get($key) === NULL) {
-      $config->set($key, $value);
-      $backfilled[] = $key;
-    }
-  }
-
-  if (empty($backfilled)) {
-    return 'markaspot_fastmap.mail already has all shipped top-level keys, nothing to backfill.';
-  }
-
-  $config->save();
-
-  return 'Backfilled markaspot_fastmap.mail key(s): ' . implode(', ', $backfilled) . '.';
+  return _markaspot_fastmap_backfill_mail_templates();
 }
 
 /**
@@ -1620,38 +1594,12 @@ function markaspot_fastmap_update_11928(): string {
  */
 function markaspot_fastmap_update_11929(): string {
   $messages = [markaspot_fastmap_update_11924()];
-
-  $keys = [
+  $translated = _markaspot_fastmap_backfill_mail_translations([
     'workspace_deletion_confirm',
     'workspace_deletion_scheduled',
     'workspace_deletion_scheduled_paid',
     'workspace_deletion_operator',
-  ];
-  $languageManager = \Drupal::languageManager();
-  $modulePath = \Drupal::service('extension.list.module')->getPath('markaspot_fastmap');
-  $translated = [];
-  foreach (array_keys($languageManager->getLanguages()) as $langcode) {
-    if ($langcode === 'en') {
-      continue;
-    }
-    $path = $modulePath . '/config/install/language/' . $langcode . '/markaspot_fastmap.mail.yml';
-    $shipped = is_file($path) ? Yaml::decode(file_get_contents($path)) : NULL;
-    if (!is_array($shipped)) {
-      continue;
-    }
-    $override = $languageManager->getLanguageConfigOverride($langcode, 'markaspot_fastmap.mail');
-    $changed = FALSE;
-    foreach ($keys as $key) {
-      if (is_array($shipped[$key] ?? NULL) && $override->get($key) === NULL) {
-        $override->set($key, $shipped[$key]);
-        $changed = TRUE;
-      }
-    }
-    if ($changed) {
-      $override->save();
-      $translated[] = $langcode;
-    }
-  }
+  ]);
   $messages[] = $translated === []
     ? 'No deletion mail translations to backfill.'
     : 'Backfilled deletion mail translations: ' . implode(', ', $translated) . '.';
@@ -1690,4 +1638,112 @@ function markaspot_fastmap_update_11930(): string {
  */
 function markaspot_fastmap_update_11931(): string {
   return implode(' ', _markaspot_fastmap_lifecycle_record_schema()->apply());
+}
+
+/**
+ * Backfills the mail templates of the lifecycle model.
+ *
+ * Workspace_opened_support (support mail when a map opens) and
+ * workspace_reports_waiting (operator mail about waiting reports) exist only
+ * in the shipped config/install file on sites installed before them. Sending
+ * finds them there anyway; the mail coverage health check requires them in
+ * the active config. The waiting-reports mail also gets its shipped
+ * translation as an override for each installed language, as for a fresh
+ * install. Additive only: an existing key, edited or not, stays as it is.
+ */
+function markaspot_fastmap_update_11932(): string {
+  $messages = [_markaspot_fastmap_backfill_mail_templates()];
+  $translated = _markaspot_fastmap_backfill_mail_translations([
+    'workspace_opened_support',
+    'workspace_reports_waiting',
+  ]);
+  $messages[] = $translated === []
+    ? 'No lifecycle mail translations to backfill.'
+    : 'Backfilled lifecycle mail translations: ' . implode(', ', $translated) . '.';
+
+  return implode(' ', $messages);
+}
+
+/**
+ * Adds every missing top-level key of the shipped mail templates.
+ *
+ * Config/install is applied only on hook_install(), so a key added to the
+ * shipped markaspot_fastmap.mail.yml later never reaches the active config of
+ * an existing site. Idempotent and additive only: an existing top-level key
+ * (including one an admin hand-edited) is never touched, only missing keys
+ * are added from the shipped YAML; langcode is skipped.
+ *
+ * @return string
+ *   A message naming the keys added.
+ */
+function _markaspot_fastmap_backfill_mail_templates(): string {
+  $config = \Drupal::configFactory()->getEditable('markaspot_fastmap.mail');
+  $path = \Drupal::service('extension.list.module')->getPath('markaspot_fastmap')
+    . '/config/install/markaspot_fastmap.mail.yml';
+
+  $shipped = is_file($path) ? Yaml::decode(file_get_contents($path)) : NULL;
+  if (!is_array($shipped)) {
+    return 'Could not read shipped markaspot_fastmap.mail.yml, nothing backfilled.';
+  }
+
+  $backfilled = [];
+  foreach ($shipped as $key => $value) {
+    if ($key === 'langcode') {
+      continue;
+    }
+    if ($config->get($key) === NULL) {
+      $config->set($key, $value);
+      $backfilled[] = $key;
+    }
+  }
+
+  if (empty($backfilled)) {
+    return 'markaspot_fastmap.mail already has all shipped top-level keys, nothing to backfill.';
+  }
+
+  $config->save();
+
+  return 'Backfilled markaspot_fastmap.mail key(s): ' . implode(', ', $backfilled) . '.';
+}
+
+/**
+ * Adds shipped translations of mail keys as language overrides.
+ *
+ * For each installed language other than English that ships a translation
+ * of a key, the key is added to the language override of
+ * markaspot_fastmap.mail unless the override already has it.
+ *
+ * @param string[] $keys
+ *   The mail keys.
+ *
+ * @return string[]
+ *   The language codes whose override changed.
+ */
+function _markaspot_fastmap_backfill_mail_translations(array $keys): array {
+  $languageManager = \Drupal::languageManager();
+  $modulePath = \Drupal::service('extension.list.module')->getPath('markaspot_fastmap');
+  $translated = [];
+  foreach (array_keys($languageManager->getLanguages()) as $langcode) {
+    if ($langcode === 'en') {
+      continue;
+    }
+    $path = $modulePath . '/config/install/language/' . $langcode . '/markaspot_fastmap.mail.yml';
+    $shipped = is_file($path) ? Yaml::decode(file_get_contents($path)) : NULL;
+    if (!is_array($shipped)) {
+      continue;
+    }
+    $override = $languageManager->getLanguageConfigOverride($langcode, 'markaspot_fastmap.mail');
+    $changed = FALSE;
+    foreach ($keys as $key) {
+      if (is_array($shipped[$key] ?? NULL) && $override->get($key) === NULL) {
+        $override->set($key, $shipped[$key]);
+        $changed = TRUE;
+      }
+    }
+    if ($changed) {
+      $override->save();
+      $translated[] = $langcode;
+    }
+  }
+  return $translated;
 }

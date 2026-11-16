@@ -467,6 +467,21 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
 
     $this->assertSame('legacy@example.org', $legacy['body']['operator']['email']);
 
+    // The effective approval flag the citizen confirmation reads: top-level
+    // features.reviewBeforePublish, resolved from the workspace root, also
+    // for a child jurisdiction.
+    $this->assertTrue($notOpen['body']['features']['reviewBeforePublish']);
+    $this->assertFalse($legacy['body']['features']['reviewBeforePublish']);
+    $child = Group::create([
+      'type' => 'jur',
+      'label' => 'District',
+      'field_parent_jurisdiction' => $this->workspaces['mine']->id(),
+    ]);
+    $child->save();
+    $this->workspaces['child'] = $child;
+    $this->assertTrue($this->publicSettings('child')['body']['features']['reviewBeforePublish'], 'Child: the root flag.');
+    unset($this->workspaces['child']);
+
     $this->open('mine', $this->accounts['owner'], ['confirmed' => TRUE]);
     $open = $this->publicSettings('mine');
     $this->assertSame('3600', $open['max_age']);

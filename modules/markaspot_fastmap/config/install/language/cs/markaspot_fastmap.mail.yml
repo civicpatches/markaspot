@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Vaše předplatné skončilo. Aktuální měsíc se nevrací.
+workspace_reports_waiting:
+  subject: 'Hlášení čekají na vaše schválení: @workspace_name'
+  body: |
+    Mapa: @workspace_name
+    Čeká na vaše schválení: @count
+
+    Zkontrolujte je ve svém dashboardu:
+    @dashboard_url
+
+    Hlášení se na mapě zobrazí až po vašem schválení; změnit to můžete v Nastavení > Funkce.
+
+    Další e-mail obdržíte, až přibudou nová hlášení.

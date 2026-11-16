@@ -73,3 +73,15 @@ workspace_opened_support:
     Contact e-mail: @operator_email
 
     If these details are obviously false, block the workspace and write to the account e-mail above.
+workspace_reports_waiting:
+  subject: 'Reports are waiting for your approval: @workspace_name'
+  body: |
+    Map: @workspace_name
+    Waiting for your approval: @count
+
+    Review them in your dashboard:
+    @dashboard_url
+
+    Reports appear on the map only after your approval; you can change this under Settings > Features.
+
+    No further e-mail follows until new reports arrive.

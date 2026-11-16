@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Din prenumeration har upphört. Innevarande månad återbetalas inte.
+workspace_reports_waiting:
+  subject: 'Anmälningar väntar på ditt godkännande: @workspace_name'
+  body: |
+    Karta: @workspace_name
+    Väntar på ditt godkännande: @count
+
+    Granska dem i din instrumentpanel:
+    @dashboard_url
+
+    Anmälningar visas på kartan först när du har godkänt dem; det kan du ändra under Inställningar > Funktioner.
+
+    Du får inget nytt e-postmeddelande förrän nya anmälningar kommer in.

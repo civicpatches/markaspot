@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     انتهى اشتراكك. لا يتم استرداد مبلغ الشهر الحالي.
+workspace_reports_waiting:
+  subject: 'بلاغات بانتظار موافقتك: @workspace_name'
+  body: |
+    الخريطة: @workspace_name
+    بانتظار موافقتك: @count
+
+    راجعها من لوحة التحكم الخاصة بك:
+    @dashboard_url
+
+    لا تظهر البلاغات على الخريطة إلا بعد موافقتك، ويمكنك تغيير ذلك من الإعدادات > الميزات.
+
+    لن تصلك رسالة أخرى حتى تصل بلاغات جديدة.

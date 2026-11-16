@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Ihr Abonnement ist beendet. Der laufende Monat wird nicht erstattet.
+workspace_reports_waiting:
+  subject: 'Meldungen warten auf Ihre Freigabe: @workspace_name'
+  body: |
+    Karte: @workspace_name
+    Warten auf Ihre Freigabe: @count
+
+    Prüfen Sie sie in Ihrem Dashboard:
+    @dashboard_url
+
+    Meldungen erscheinen erst nach Ihrer Freigabe auf der Karte; das können Sie unter Einstellungen > Funktionen ändern.
+
+    Bis neue Meldungen eingehen, erhalten Sie keine weitere E-Mail.

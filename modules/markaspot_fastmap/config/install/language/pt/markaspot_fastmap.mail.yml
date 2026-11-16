@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     A sua subscrição terminou. O mês em curso não é reembolsado.
+workspace_reports_waiting:
+  subject: 'Há relatos a aguardar a sua aprovação: @workspace_name'
+  body: |
+    Mapa: @workspace_name
+    A aguardar a sua aprovação: @count
+
+    Reveja-os no seu painel:
+    @dashboard_url
+
+    Os relatos só aparecem no mapa depois da sua aprovação; pode alterar isto em Definições > Funcionalidades.
+
+    Não receberá outro e-mail até chegarem novos relatos.

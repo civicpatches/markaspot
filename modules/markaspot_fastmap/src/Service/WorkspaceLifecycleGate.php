@@ -237,15 +237,48 @@ class WorkspaceLifecycleGate {
    * uid in the session by any header.
    */
   public function mayCreateInClosedWorkspace(GroupInterface $workspace, AccountInterface $account): bool {
-    if ($account->isAnonymous() || in_array('api_user', $account->getRoles(), TRUE)) {
-      return FALSE;
-    }
-    if (!$this->actsThroughOwnSession($account)) {
+    if (!$this->actsAsOwnAccount($account)) {
       return FALSE;
     }
     if ($account->hasPermission('administer nodes')) {
       return TRUE;
     }
+    return $this->holdsRoleIn($workspace, $account);
+  }
+
+  /**
+   * Whether an account is the workspace's own team.
+   *
+   * Holds a role in the workspace through its own membership, whatever the
+   * authentication. Never the API key owner, which is a member of every
+   * workspace and stands for the public on Open311, and never a platform
+   * administrator without a role there. Used for the operator mail only;
+   * the closed intake keeps the session condition of
+   * mayCreateInClosedWorkspace().
+   */
+  public function isWorkspaceTeam(GroupInterface $workspace, AccountInterface $account): bool {
+    if ($account->isAnonymous()
+      || in_array('api_user', $account->getRoles(), TRUE)
+      || $account->getAccountName() === 'api_user') {
+      return FALSE;
+    }
+    return $this->holdsRoleIn($workspace, $account);
+  }
+
+  /**
+   * Whether a logged-in account other than the API key owner acts as itself.
+   */
+  private function actsAsOwnAccount(AccountInterface $account): bool {
+    if ($account->isAnonymous() || in_array('api_user', $account->getRoles(), TRUE)) {
+      return FALSE;
+    }
+    return $this->actsThroughOwnSession($account);
+  }
+
+  /**
+   * Whether an account holds a role in the workspace through its membership.
+   */
+  private function holdsRoleIn(GroupInterface $workspace, AccountInterface $account): bool {
     /** @var \Drupal\group\Entity\Storage\GroupRoleStorageInterface $roles */
     $roles = $this->entityTypeManager->getStorage('group_role');
     return $roles->loadByUserAndGroup($account, $workspace, FALSE) !== [];

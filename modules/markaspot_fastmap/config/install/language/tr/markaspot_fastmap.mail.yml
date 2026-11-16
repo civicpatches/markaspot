@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Aboneliğiniz sona erdi. Geçerli ayın ücreti iade edilmez.
+workspace_reports_waiting:
+  subject: 'Onayınızı bekleyen bildirimler var: @workspace_name'
+  body: |
+    Harita: @workspace_name
+    Onayınızı bekleyen: @count
+
+    Bunları panonuzda inceleyin:
+    @dashboard_url
+
+    Bildirimler haritada yalnızca siz onayladıktan sonra görünür; bunu Ayarlar > Özellikler bölümünden değiştirebilirsiniz.
+
+    Yeni bildirimler gelene kadar başka bir e-posta almayacaksınız.

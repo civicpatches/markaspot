@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Twoja subskrypcja zakończyła się. Bieżący miesiąc nie jest zwracany.
+workspace_reports_waiting:
+  subject: 'Zgłoszenia czekają na Twoją akceptację: @workspace_name'
+  body: |
+    Mapa: @workspace_name
+    Czeka na Twoją akceptację: @count
+
+    Przejrzyj je w swoim panelu:
+    @dashboard_url
+
+    Zgłoszenia pojawiają się na mapie dopiero po Twojej akceptacji; możesz to zmienić w Ustawienia > Funkcje.
+
+    Kolejny e-mail otrzymasz dopiero, gdy wpłyną nowe zgłoszenia.

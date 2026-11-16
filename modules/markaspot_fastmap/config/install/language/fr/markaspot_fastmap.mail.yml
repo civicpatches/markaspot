@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Votre abonnement a pris fin. Le mois en cours n'est pas remboursé.
+workspace_reports_waiting:
+  subject: 'Des signalements attendent votre validation : @workspace_name'
+  body: |
+    Carte : @workspace_name
+    En attente de votre validation : @count
+
+    Consultez-les depuis votre tableau de bord :
+    @dashboard_url
+
+    Les signalements n'apparaissent sur la carte qu'après votre validation ; vous pouvez modifier ce réglage sous Paramètres > Fonctionnalités.
+
+    Vous ne recevrez pas d'autre e-mail tant que de nouveaux signalements ne seront pas arrivés.

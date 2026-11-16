@@ -62,6 +62,27 @@ services:
   # Autowiring alias for the hook class.
   Drupal\markaspot_fastmap\Service\WorkspaceOpening: '@markaspot_fastmap.workspace_opening'
 
+  # Sends at the end of the request (needs_destruction) and from cron.
+  markaspot_fastmap.waiting_reports_notifier:
+    class: Drupal\markaspot_fastmap\Service\WaitingReportsNotifier
+    arguments:
+      - '@entity_type.manager'
+      - '@markaspot_fastmap.workspace_lifecycle'
+      - '@markaspot_fastmap.workspace_lifecycle_gate'
+      - '@markaspot_nuxt.review_before_publish'
+      - '@markaspot_group.hierarchy_resolver'
+      - '@module_handler'
+      - '@keyvalue'
+      - '@lock'
+      - '@plugin.manager.mail'
+      - '@config.factory'
+      - '@datetime.time'
+      - '@logger.channel.markaspot_fastmap'
+    tags:
+      - { name: needs_destruction }
+  # Autowiring alias for the hook class.
+  Drupal\markaspot_fastmap\Service\WaitingReportsNotifier: '@markaspot_fastmap.waiting_reports_notifier'
+
   markaspot_fastmap.vision_purpose_rules:
     class: Drupal\markaspot_fastmap\Service\VisionPurposeRules
     arguments:

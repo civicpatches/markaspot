@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Je abonnement is beëindigd. De lopende maand wordt niet terugbetaald.
+workspace_reports_waiting:
+  subject: 'Meldingen wachten op je goedkeuring: @workspace_name'
+  body: |
+    Kaart: @workspace_name
+    Wachten op je goedkeuring: @count
+
+    Bekijk ze in je dashboard:
+    @dashboard_url
+
+    Meldingen verschijnen pas op de kaart nadat je ze hebt goedgekeurd; je kunt dit wijzigen onder Instellingen > Functies.
+
+    Je krijgt geen nieuwe e-mail totdat er nieuwe meldingen binnenkomen.

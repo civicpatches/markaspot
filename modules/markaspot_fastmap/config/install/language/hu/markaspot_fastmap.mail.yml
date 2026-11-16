@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Az előfizetésed megszűnt. Az aktuális hónap díját nem térítjük vissza.
+workspace_reports_waiting:
+  subject: 'Bejelentések várnak a jóváhagyásodra: @workspace_name'
+  body: |
+    Térkép: @workspace_name
+    Jóváhagyásra vár: @count
+
+    Nézd meg őket az irányítópultodon:
+    @dashboard_url
+
+    A bejelentések csak a jóváhagyásod után jelennek meg a térképen; ezt a Beállítások > Funkciók menüpontban módosíthatod.
+
+    Amíg nem érkeznek új bejelentések, nem kapsz újabb e-mailt.

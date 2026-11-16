@@ -154,3 +154,13 @@ markaspot_fastmap.mail:
         body:
           type: text
           label: 'Email body'
+    workspace_reports_waiting:
+      type: mapping
+      label: 'Operator notification when reports wait for approval'
+      mapping:
+        subject:
+          type: text
+          label: 'Email subject'
+        body:
+          type: text
+          label: 'Email body'

@@ -45,3 +45,15 @@ workspace_deletion_scheduled:
 workspace_deletion_scheduled_paid:
   body: |
     Abonnementet ditt er avsluttet. Inneværende måned refunderes ikke.
+workspace_reports_waiting:
+  subject: 'Meldinger venter på godkjenningen din: @workspace_name'
+  body: |
+    Kart: @workspace_name
+    Venter på godkjenningen din: @count
+
+    Se dem i dashbordet ditt:
+    @dashboard_url
+
+    Meldinger vises på kartet først etter at du har godkjent dem; dette kan du endre under Innstillinger > Funksjoner.
+
+    Du får ingen ny e-post før det kommer nye meldinger.
