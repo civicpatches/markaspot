@@ -53,3 +53,25 @@ services:
   logger.channel.markaspot_dashboard:
     parent: logger.channel_base
     arguments: ['markaspot_dashboard']
+
+  markaspot_dashboard.staff_intake_session:
+    class: Drupal\markaspot_dashboard\Service\StaffIntakeSession
+    arguments: ['@authentication_collector', '@current_user']
+
+  markaspot_dashboard.staff_intake_context:
+    class: Drupal\markaspot_dashboard\Service\StaffIntakeContext
+
+  markaspot_dashboard.staff_intake_store:
+    class: Drupal\markaspot_dashboard\Service\StaffIntakeTicketStore
+    arguments: ['@database', '@datetime.time']
+
+  markaspot_dashboard.staff_intake_ticket:
+    class: Drupal\markaspot_dashboard\Service\StaffIntakeTicket
+    arguments:
+      - '@entity_type.manager'
+      - '@config.factory'
+      - '@current_user'
+      - '@markaspot_nuxt.staff_capability'
+      - '@markaspot_dashboard.staff_intake_session'
+      - '@markaspot_dashboard.staff_intake_store'
+      - '@markaspot_dashboard.staff_intake_context'

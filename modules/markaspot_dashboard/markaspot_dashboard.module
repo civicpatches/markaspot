@@ -250,3 +250,10 @@ function markaspot_dashboard_node_delete(NodeInterface $node): void {
     ]);
   }
 }
+
+/**
+ * Implements hook_cron().
+ */
+function markaspot_dashboard_cron(): void {
+  \Drupal::service('markaspot_dashboard.staff_intake_store')->purge();
+}

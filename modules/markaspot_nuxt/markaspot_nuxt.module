@@ -211,6 +211,13 @@ function markaspot_nuxt_node_presave(NodeInterface $node): void {
     return;
   }
 
+  // One validated dashboard primary object may consume its intake exemption.
+  // No consent value is set; taking the entry also prevents a second attempt.
+  if ($request && \Drupal::hasService('markaspot_dashboard.staff_intake_context')
+    && \Drupal::service('markaspot_dashboard.staff_intake_context')->take($request, $node)) {
+    return;
+  }
+
   if (!$node->hasField('field_gdpr')) {
     return;
   }

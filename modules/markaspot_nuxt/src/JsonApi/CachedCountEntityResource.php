@@ -7,6 +7,7 @@ namespace Drupal\markaspot_nuxt\JsonApi;
 use Drupal\Core\Http\Exception\CacheableBadRequestHttpException;
 use Drupal\Component\Assertion\Inspector;
 use Drupal\Core\Entity\Query\Sql\Query;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\jsonapi\Controller\EntityResource;
 use Drupal\jsonapi\JsonApiResource\Data;
@@ -18,12 +19,15 @@ use Drupal\jsonapi\Query\Filter;
 use Drupal\jsonapi\Query\Sort;
 use Drupal\jsonapi\ResourceType\ResourceType;
 use Drupal\markaspot_request_index\RequestIndexReader;
+use Drupal\node\NodeInterface;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
  * Performance-optimised JSON:API collection handler for service_request.
  *
- * Overrides two @internal EntityResource methods:
+ * Caches collection reads and binds validated staff intake on creates.
+ *
+ * Collection overrides of @internal EntityResource methods:
  *
  * 1. getCollectionQuery() — wraps the query in a DeferredAccessQueryWrapper
  *    which runs a fast Phase-1 candidate fetch (no access joins, no aggregate
@@ -57,6 +61,9 @@ use Symfony\Component\HttpFoundation\Request;
  *     CacheableMetadata $query_cacheability
  *   ): QueryInterface
  *
+ * The create overrides must preserve Core validation before save and clear
+ * the optional staff-intake object context on every exit.
+ *
  * @internal This class is part of the markaspot_nuxt module internals.
  *
  * @phpstan-ignore classExtendsInternalClass.classExtendsInternalClass
@@ -69,6 +76,42 @@ final class CachedCountEntityResource extends EntityResource {
    * @var int
    */
   private const MAX_COUNT_CAP = 10000;
+
+  /**
+   * Clears the primary-object binding on every create exit, including errors.
+   */
+  public function createIndividual(ResourceType $resource_type, Request $request) {
+    try {
+      return parent::createIndividual($resource_type, $request);
+    }
+    finally {
+      // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection (Core controller constructor remains compatible)
+      if (\Drupal::hasService('markaspot_dashboard.staff_intake_context')) {
+        // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
+        \Drupal::service('markaspot_dashboard.staff_intake_context')->clear($request);
+      }
+    }
+  }
+
+  /**
+   * Binds only Core's primary object after all validation has succeeded.
+   *
+   * Core calls this with the deserialized primary object before save() starts
+   * its SQL transaction. A constraint could run before other constraints, so
+   * consumption here deliberately follows the entire parent validation.
+   */
+  protected static function validate(EntityInterface $entity, ?array $field_names = NULL) {
+    parent::validate($entity, $field_names);
+    // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection (Core's validation method is static)
+    if ($entity instanceof NodeInterface && \Drupal::hasService('markaspot_dashboard.staff_intake_ticket')) {
+      // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
+      $request = \Drupal::requestStack()->getCurrentRequest();
+      if ($request) {
+        // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
+        \Drupal::service('markaspot_dashboard.staff_intake_ticket')->bindValidatedPrimary($request, $entity);
+      }
+    }
+  }
 
   /**
    * {@inheritdoc}

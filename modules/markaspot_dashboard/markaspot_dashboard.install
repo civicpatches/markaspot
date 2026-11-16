@@ -79,6 +79,7 @@ function markaspot_dashboard_schema(): array {
     ],
   ];
 
+  $schema['markaspot_staff_intake_ticket'] = _markaspot_dashboard_staff_intake_schema();
   return $schema;
 }
 
@@ -344,5 +345,34 @@ function _markaspot_dashboard_ensure_field_author(string $bundle): void {
     $logger->info('Created field instance paragraph.@bundle.field_author.', [
       '@bundle' => $bundle,
     ]);
+  }
+}
+
+/**
+ * Defines hashed, session-bound, single-use staff intake records.
+ */
+function _markaspot_dashboard_staff_intake_schema(): array {
+  return [
+    'description' => 'Short-lived staff intake ticket hashes; no plaintext credentials.',
+    'fields' => [
+      'ticket_hash' => ['type' => 'varchar_ascii', 'length' => 64, 'not null' => TRUE],
+      'session_hash' => ['type' => 'varchar_ascii', 'length' => 64, 'not null' => TRUE],
+      'uid' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'workspace_id' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'created' => ['type' => 'int', 'not null' => TRUE],
+      'used' => ['type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0],
+    ],
+    'primary key' => ['ticket_hash'],
+    'indexes' => ['expiry' => ['created']],
+  ];
+}
+
+/**
+ * Creates storage for short-lived staff intake tickets, without data changes.
+ */
+function markaspot_dashboard_update_11903(): void {
+  $schema = \Drupal::database()->schema();
+  if (!$schema->tableExists('markaspot_staff_intake_ticket')) {
+    $schema->createTable('markaspot_staff_intake_ticket', _markaspot_dashboard_staff_intake_schema());
   }
 }

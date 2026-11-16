@@ -349,3 +349,15 @@ markaspot_dashboard.status_selection_patch:
   options:
     _format: 'json'
     _auth: ['cookie']
+
+markaspot_dashboard.staff_intake_ticket:
+  path: '/api/dashboard/staff-intake-ticket'
+  defaults:
+    _controller: '\Drupal\markaspot_dashboard\Controller\StaffIntakeTicketController::issue'
+  methods: [POST]
+  requirements:
+    _user_is_logged_in: 'TRUE'
+    _csrf_request_header_token: 'TRUE'
+  options:
+    _auth: ['cookie']
+    _format: 'json'
