@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_dashboard\Kernel;
 
+use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Component\Serialization\Yaml;
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\Core\Session\AccountProxyInterface;
@@ -343,11 +344,41 @@ final class StatusNoteKeepsStatusKernelTest extends KernelTestBase {
       ['changed' => [['process_tunr6d6' => FALSE, 'process_notify_status_term' => FALSE]], 'mails' => []],
       ['changed' => $this->observed, 'mails' => $this->mailIds()],
     );
-    // In this fixture a second note does not move the changed time, with or
-    // without the status write: entity_reference_revisions stops comparing at
-    // the first delta when that paragraph has a translation in the report's
-    // language. Not part of this behaviour, so not asserted here.
-    $this->assertNoteStored($response, $before, $this->closed, 'Photo of the repaired bench added.', FALSE);
+    $this->assertNoteStored($response, $before, $this->closed, 'Photo of the repaired bench added.');
+  }
+
+  /**
+   * Second and third note-only requests update the report without status mail.
+   */
+  public function testRepeatedNoteOnlySavesMoveChangedTime(): void {
+    $now = $this->container->get('datetime.time')->getRequestTime();
+    $time = $this->createMock(TimeInterface::class);
+    $time->method('getRequestTime')->willReturnCallback(static function () use (&$now): int {
+      return $now;
+    });
+    $this->container->set('datetime.time', $time);
+    $before = $this->prepare();
+
+    foreach (['First visit.', 'Material ordered.', 'Repair scheduled.'] as $text) {
+      $now += 60;
+      $response = $this->controller()->add($this->request([
+        'request_uuid' => $this->report->uuid(),
+        'status_term_uuid' => $this->open->uuid(),
+        'note' => $text,
+      ]));
+      $report = $this->reload();
+      $this->assertSame($now, (int) $report->getChangedTime(), 'Each added note uses the new request time.');
+      $this->assertNoteStored($response, $before, $this->open, $text);
+      $this->assertSame([['process_tunr6d6' => FALSE, 'process_notify_status_term' => FALSE]], $this->observed);
+      $this->assertSame([], $this->mailIds());
+      $before = [
+        'revision' => (int) $report->getRevisionId(),
+        'changed' => (int) $report->getChangedTime(),
+        'notes' => $report->get('field_status_notes')->count(),
+      ];
+      $this->observed = [];
+      $this->statusTypes = [];
+    }
   }
 
   /**
@@ -417,11 +448,8 @@ final class StatusNoteKeepsStatusKernelTest extends KernelTestBase {
    *   Expected status of the report and of the new note.
    * @param string $text
    *   Expected note text.
-   * @param bool $firstNote
-   *   Whether this is the report's first note; only then the changed time
-   *   moves.
    */
-  private function assertNoteStored(JsonResponse $response, array $before, TermInterface $status, string $text, bool $firstNote = TRUE): void {
+  private function assertNoteStored(JsonResponse $response, array $before, TermInterface $status, string $text): void {
     $this->assertSame(201, $response->getStatusCode());
     $body = json_decode((string) $response->getContent(), TRUE);
     $this->assertSame('success', $body['status']);
@@ -437,9 +465,7 @@ final class StatusNoteKeepsStatusKernelTest extends KernelTestBase {
     $this->assertSame($text, $note->get('field_status_note')->value);
     $this->assertNotEmpty($note->get('created')->value);
     $this->assertGreaterThan($before['revision'], (int) $report->getRevisionId(), 'The note saved a new revision.');
-    if ($firstNote) {
-      $this->assertGreaterThan($before['changed'], (int) $report->getChangedTime(), 'The note moved the changed time.');
-    }
+    $this->assertGreaterThan($before['changed'], (int) $report->getChangedTime(), 'The note moved the changed time.');
     $this->assertCount(1, $this->statusTypes, 'The note saved the report once.');
   }
 

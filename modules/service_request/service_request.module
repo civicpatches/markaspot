@@ -352,6 +352,33 @@ function service_request_node_presave(EntityInterface $node) {
   else {
     _service_request_handle_update($node, $config, $auto_create);
   }
+
+  $original = $node->getOriginal();
+  if ($node->isNew() || $node->isSyncing()
+    || !$node->hasField('field_status_notes')
+    || !$original instanceof NodeInterface
+    || !$original->hasField('field_status_notes')) {
+    return;
+  }
+
+  // Compare paragraph IDs, not revisions: editing a note is not adding one.
+  // This runs after field preSave and after any automatic status note above.
+  $original_ids = array_column($original->get('field_status_notes')->getValue(), 'target_id');
+  foreach ($node->get('field_status_notes') as $item) {
+    $is_new = $item->target_id === NULL && $item->entity?->isNew();
+    if (!$is_new && in_array($item->target_id, $original_ids)) {
+      continue;
+    }
+    if (!$is_new && $item->target_id === NULL) {
+      continue;
+    }
+    // Notes are shared across translations, while changed is translatable.
+    $request_time = \Drupal::time()->getRequestTime();
+    foreach ($node->getTranslationLanguages() as $langcode => $language) {
+      $node->getTranslation($langcode)->setChangedTime($request_time);
+    }
+    break;
+  }
 }
 
 /**
