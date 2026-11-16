@@ -8,6 +8,7 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\group\Entity\GroupMembership;
 use Drupal\group\Entity\GroupRelationshipInterface;
 
 /**
@@ -87,8 +88,14 @@ final class StaffCapability {
     if ($root->hasPermission('view unpublished group_node:service_request entity', $account)) {
       return TRUE;
     }
-    $membership = $root->getMember($account);
+    $membership = GroupMembership::loadSingle($root, $account);
     if (!$membership) {
+      return FALSE;
+    }
+    $roleIds = array_keys($membership->getRoles(FALSE));
+    // Organisation-derived memberships provide navigation scope, not intake.
+    if ($roleIds !== [] && (!function_exists('_markaspot_group_derived_jurisdiction_role_ids')
+      || array_diff($roleIds, _markaspot_group_derived_jurisdiction_role_ids($root)) === [])) {
       return FALSE;
     }
     return $account->hasPermission('access dashboard notifications')

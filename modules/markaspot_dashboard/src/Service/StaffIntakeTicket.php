@@ -10,6 +10,7 @@ use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_nuxt\Service\StaffCapability;
 use Drupal\node\NodeInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -31,6 +32,7 @@ final class StaffIntakeTicket {
     private readonly StaffIntakeSession $session,
     private readonly StaffIntakeTicketStore $store,
     private readonly StaffIntakeContext $context,
+    private readonly LoggerInterface $logger,
   ) {}
 
   /**
@@ -84,7 +86,13 @@ final class StaffIntakeTicket {
       return;
     }
     $uid = (int) $this->currentUser->id();
-    $record = $this->store->find($ticket, $uid, $sessionHash);
+    try {
+      $record = $this->store->find($ticket, $uid, $sessionHash);
+    }
+    catch (\Throwable) {
+      $this->logger->warning('Staff intake ticket storage failed; consent remains required.');
+      return;
+    }
     if ($record === NULL) {
       return;
     }
@@ -101,7 +109,14 @@ final class StaffIntakeTicket {
         return;
       }
     }
-    if ($this->store->consume($ticket, $uid, $sessionHash)) {
+    try {
+      $consumed = $this->store->consume($ticket, $uid, $sessionHash);
+    }
+    catch (\Throwable) {
+      $this->logger->warning('Staff intake ticket storage failed; consent remains required.');
+      return;
+    }
+    if ($consumed) {
       $this->context->bind($request, $node);
     }
   }

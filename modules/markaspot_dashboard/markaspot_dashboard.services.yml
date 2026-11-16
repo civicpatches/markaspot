@@ -75,3 +75,4 @@ services:
       - '@markaspot_dashboard.staff_intake_session'
       - '@markaspot_dashboard.staff_intake_store'
       - '@markaspot_dashboard.staff_intake_context'
+      - '@logger.channel.markaspot_dashboard'

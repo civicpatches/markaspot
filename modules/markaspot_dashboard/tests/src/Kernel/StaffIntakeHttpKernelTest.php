@@ -8,6 +8,8 @@ use Drupal\Core\Cache\NullBackend;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityStorageException;
+use Drupal\Core\Logger\RfcLogLevel;
+use Drupal\Component\Serialization\Yaml;
 use Drupal\node\NodeStorage;
 use Drupal\services_api_key_auth\Entity\ApiKey;
 use Drupal\rest\Entity\RestResourceConfig;
@@ -24,6 +26,7 @@ use Drupal\Core\Session\AnonymousUserSession;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\group\Entity\Group;
+use Drupal\group\Entity\GroupMembership;
 use Drupal\group\Entity\GroupType;
 use Drupal\group\Entity\GroupRole;
 use Drupal\KernelTests\KernelTestBase;
@@ -33,6 +36,8 @@ use Drupal\user\Entity\User;
 use Drupal\user\Entity\Role;
 use PHPUnit\Framework\Attributes\Group as TestGroup;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -306,17 +311,111 @@ final class StaffIntakeHttpKernelTest extends KernelTestBase {
    * Membership of an organisation alone does not authorize workspace intake.
    */
   public function testOrganisationOnlyMembershipDoesNotAuthorize(): void {
+    $this->useModerator();
     $this->workspaceRoot->removeMember($this->staff);
-    GroupType::create(['id' => 'org', 'label' => 'Organisation', 'creator_membership' => FALSE])->save();
-    $relationships = $this->container->get('entity_type.manager')->getStorage('group_relationship_type');
-    if (!$relationships->load('org-group_membership')) {
-      $relationships->createFromPlugin(GroupType::load('org'), 'group_membership')->save();
-    }
-    $organisation = Group::create(['type' => 'org', 'label' => 'Department', 'status' => 1]);
-    $organisation->save();
-    $organisation->addMember($this->staff);
+    $this->joinOrganisation();
+    $membership = GroupMembership::loadSingle($this->workspaceRoot, $this->staff);
+    $this->assertNotFalse($membership, 'The real organisation hook creates a root membership.');
+    $this->assertSame(['jur-org_member'], array_keys($membership->getRoles(FALSE)));
     $response = $this->http('/api/dashboard/staff-intake-ticket', ['workspace_id' => (int) $this->workspaceRoot->id()]);
     $this->assertSame(403, $response->getStatusCode());
+    foreach (['', str_repeat('a', 64)] as $ticket) {
+      $this->assertSame(422, $this->create($ticket)->getStatusCode());
+    }
+  }
+
+  /**
+   * A global moderator with an explicit root membership can create.
+   */
+  public function testModeratorWithExplicitRootMembershipCanCreate(): void {
+    $this->useModerator();
+    $membership = GroupMembership::loadSingle($this->workspaceRoot, $this->staff);
+    $this->assertSame(['jur-member'], array_keys($membership->getRoles(FALSE)));
+    $response = $this->create($this->ticket());
+    $this->assertSame(201, $response->getStatusCode(), $response->getContent());
+    $data = json_decode($response->getContent(), TRUE)['data'];
+    $node = $this->container->get('entity.repository')->loadEntityByUuid('node', $data['id']);
+    $this->assertFalse((bool) $node->get('field_gdpr')->value);
+  }
+
+  /**
+   * Adding an organisation preserves explicit root membership authority.
+   */
+  public function testExplicitRootAndOrganisationMembershipCanCreate(): void {
+    $this->useModerator();
+    $this->joinOrganisation();
+    $roles = array_keys(GroupMembership::loadSingle($this->workspaceRoot, $this->staff)->getRoles(FALSE));
+    $this->assertEqualsCanonicalizing(['jur-member', 'jur-org_member'], $roles);
+    $response = $this->create($this->ticket());
+    $this->assertSame(201, $response->getStatusCode(), $response->getContent());
+  }
+
+  /**
+   * Shipped insider and outsider mappings do not authorize a non-member.
+   */
+  public function testShippedGroupRolesRefuseNonMemberModerator(): void {
+    $this->useModerator();
+    $this->installOrganisationType();
+    $storage = $this->container->get('entity_type.manager')->getStorage('group_role');
+    $modulePath = $this->container->get('extension.list.module')->getPath('markaspot_group');
+    foreach (glob($modulePath . '/config/install/group.role.*.yml') as $path) {
+      $data = Yaml::decode(file_get_contents($path));
+      $role = $storage->load($data['id']);
+      if ($role) {
+        foreach ($data as $key => $value) {
+          $role->set($key, $value);
+        }
+      }
+      else {
+        $role = $storage->create($data);
+      }
+      $role->save();
+    }
+    $this->assertSame('outsider', GroupRole::load('jur-outsider')->getScope());
+    $this->assertSame('insider', GroupRole::load('org-insider')->getScope());
+    $this->assertSame('moderator', GroupRole::load('org-insider')->get('global_role'));
+    $this->workspaceRoot->removeMember($this->staff);
+    $this->assertFalse($this->workspaceRoot->getMember($this->staff));
+    $response = $this->http('/api/dashboard/staff-intake-ticket', ['workspace_id' => (int) $this->workspaceRoot->id()]);
+    $this->assertSame(403, $response->getStatusCode(), $response->getContent());
+  }
+
+  /**
+   * Store errors preserve consent enforcement without exposing the ticket.
+   */
+  #[DataProvider('storeFailureOperations')]
+  public function testStoreFailureKeepsConsentRequired(string $operation): void {
+    $ticket = $this->ticket();
+    $database = $this->container->get('database');
+    $connection = $this->createMock(Connection::class);
+    if ($operation === 'select') {
+      $connection->expects($this->once())->method('select')->willThrowException(new \Error($ticket . "\nStore unavailable"));
+    }
+    else {
+      $connection->method('select')->willReturnCallback($database->select(...));
+      $connection->expects($this->once())->method('update')->willThrowException(new \RuntimeException($ticket . "\nStore unavailable"));
+    }
+    $store = $this->container->get('markaspot_dashboard.staff_intake_store');
+    (new \ReflectionProperty($store, 'connection'))->setValue($store, $connection);
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->expects($this->once())->method('log')->with(
+      RfcLogLevel::WARNING,
+      'Staff intake ticket storage failed; consent remains required.',
+      $this->callback(static fn(array $context): bool => $context['channel'] === 'markaspot_dashboard'
+        && !str_contains(json_encode($context, JSON_THROW_ON_ERROR), $ticket)),
+    );
+    $this->container->get('logger.channel.markaspot_dashboard')->addLogger($logger);
+    $response = $this->create($ticket);
+    $this->assertSame(422, $response->getStatusCode(), $response->getContent());
+    $used = $database->select('markaspot_staff_intake_ticket', 't')->fields('t', ['used'])->execute()->fetchField();
+    $this->assertSame('0', (string) $used);
+  }
+
+  /**
+   * Lists the database operations used to find and consume a ticket.
+   */
+  public static function storeFailureOperations(): array {
+    return ['find' => ['select'], 'consume' => ['update']];
   }
 
   /**
@@ -581,6 +680,46 @@ final class StaffIntakeHttpKernelTest extends KernelTestBase {
     $handlers = $property->getValue($manager);
     $handlers['storage']['node'] = $storage;
     $property->setValue($manager, $handlers);
+  }
+
+  /**
+   * Uses the shipped global moderator permissions, without the test role.
+   */
+  private function useModerator(): void {
+    $data = Yaml::decode(file_get_contents(dirname(__DIR__, 5) . '/config/optional/user.role.moderator.yml'));
+    Role::create($data)->save();
+    $this->workspaceRoot->removeMember($this->staff);
+    $this->staff = $this->account('moderator', ['moderator']);
+    $this->workspaceRoot->addMember($this->staff, ['group_roles' => ['jur-member']]);
+    $this->session = $this->newSession($this->staff);
+    $this->assertTrue($this->staff->hasPermission('edit any service_request content'));
+  }
+
+  /**
+   * Installs the organisation bundle and its real membership plugin.
+   */
+  private function installOrganisationType(): void {
+    GroupType::create(['id' => 'org', 'label' => 'Organisation', 'creator_membership' => FALSE])->save();
+    $relationships = $this->container->get('entity_type.manager')->getStorage('group_relationship_type');
+    if (!$relationships->load('org-group_membership')) {
+      $relationships->createFromPlugin(GroupType::load('org'), 'group_membership')->save();
+    }
+    $this->field('group', 'org', 'field_jurisdiction', 'entity_reference', ['target_type' => 'group']);
+  }
+
+  /**
+   * Joins an organisation whose jurisdiction triggers the real root sync.
+   */
+  private function joinOrganisation(): void {
+    $this->installOrganisationType();
+    $modulePath = $this->container->get('extension.list.module')->getPath('markaspot_group');
+    $data = Yaml::decode(file_get_contents($modulePath . '/config/install/group.role.jur-org_member.yml'));
+    GroupRole::create($data)->save();
+    $organisation = Group::create(['type' => 'org', 'label' => 'Department', 'status' => 1,
+      'field_jurisdiction' => $this->workspaceRoot->id(),
+    ]);
+    $organisation->save();
+    $organisation->addMember($this->staff);
   }
 
   /**
