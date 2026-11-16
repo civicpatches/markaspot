@@ -1,5 +1,11 @@
 # Changelog
 
+## [11.9.253](https://github.com/civicpatches/markaspot/compare/11.9.252...11.9.253) (2026-11-16)
+
+### Bug Fixes
+
+* **dashboard:** leave the status untouched when a note does not change it ([e40cf1e](https://github.com/civicpatches/markaspot/commit/e40cf1e844d674170932e81a77dfb93809ab3967))
+
 ## [11.9.252](https://github.com/civicpatches/markaspot/compare/11.9.251...11.9.252) (2026-11-15)
 
 ### Features
