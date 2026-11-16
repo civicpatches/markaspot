@@ -246,3 +246,19 @@ services:
     arguments:
       - '@markaspot_mail.branding'
       - '@config.factory'
+
+  markaspot_mail.status_mail_key_analyzer:
+    class: Drupal\markaspot_mail\Service\StatusMailKeyAnalyzer
+
+  markaspot_mail.status_mail_key_migration:
+    class: Drupal\markaspot_mail\Service\StatusMailKeyMigration
+    arguments:
+      - '@entity_type.manager'
+      - '@entity_field.manager'
+      - '@state'
+      - '@lock'
+      - '@database'
+      - '@file_system'
+      - '@datetime.time'
+      - '@markaspot_mail.status_mail_key_analyzer'
+      - '@config.factory'

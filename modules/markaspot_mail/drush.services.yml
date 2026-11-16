@@ -18,3 +18,10 @@ services:
       - '@module_handler'
     tags:
       - { name: drush.command }
+
+  markaspot_mail.status_mail_keys_commands:
+    class: Drupal\markaspot_mail\Commands\StatusMailKeysCommands
+    arguments:
+      - '@markaspot_mail.status_mail_key_migration'
+    tags:
+      - { name: drush.command }
