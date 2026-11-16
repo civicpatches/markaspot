@@ -134,10 +134,14 @@ final class NotificationTextBuilder implements MailBuilderInterface {
    *
    * Mirrors FeedbackRequestBuilder: branding frontend_base_url + optional
    * jurisdiction slug prefix + /requests/<request_id>. Returns '' (CTA
-   * omitted) when the tenant has no frontend base configured or the node
-   * carries no request_id — a missing button beats a dead link.
+   * omitted) when the report is unpublished, the tenant has no frontend
+   * base configured or the node carries no request_id: a missing button
+   * beats a dead link.
    */
   private function buildCitizenRequestUrl(NodeInterface $node, string $mode, ?int $jurisdictionId, string $langcode): string {
+    if (!$node->isPublished()) {
+      return '';
+    }
     if (!$node->hasField('request_id') || $node->get('request_id')->isEmpty()) {
       return '';
     }

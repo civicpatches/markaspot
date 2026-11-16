@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_mail\Unit\Builder;
 
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
@@ -132,7 +133,102 @@ final class NotificationTextBuilderTest extends UnitTestCase {
     $this->assertSame('We received your report', $msg->content['headline']);
     $this->assertSame(['Category: Pothole'], $msg->content['body_blocks']);
     $this->assertSame('View your report', $msg->content['cta_label']);
-    $this->assertSame('https://tenant.example.org/amsterdam/requests/42', $msg->content['cta_url']);
+    $this->assertSame('https://tenant.example.org/sample/requests/42', $msg->content['cta_url']);
+  }
+
+  /**
+   * Unpublished reports keep the notification wording without a report link.
+   */
+  #[DataProvider('notificationKeys')]
+  public function testUnpublishedReportOmitsLinkWithoutChangingText(string $notificationKey): void {
+    $slots = [
+      'subject' => 'Update on your report #42',
+      'headline' => 'Your report was updated',
+      'intro' => 'We are processing your report.',
+      'body_blocks' => ['Category: Pothole', 'Thank you for your report.'],
+      'cta_label' => 'View your report',
+      'preheader' => 'An update on your report.',
+    ];
+    $textResolver = $this->createMock(MailTextResolver::class);
+    $textResolver->method('resolve')->with('markaspot_mail.texts', $notificationKey, 'en')->willReturn($slots);
+    $textResolver->method('replaceTokens')->willReturnArgument(0);
+    $builder = $this->buildBuilder(textResolver: $textResolver);
+    $context = new MailContext(
+      module: 'markaspot_mail',
+      key: 'notification_' . $notificationKey,
+      langcode: 'en',
+      params: ['node' => $this->buildPlainNode(FALSE), 'notification_key' => $notificationKey],
+      to: 'citizen@example.com',
+    );
+
+    $message = $builder->build($context);
+
+    $this->assertNotNull($message);
+    $this->assertSame($slots['subject'], $message->subject);
+    $this->assertSame('card_transactional', $message->variant);
+    $this->assertSame('platform', $message->mode);
+    $this->assertNull($message->jurisdictionId);
+    $this->assertSame([
+      'preheader' => $slots['preheader'],
+      'headline' => $slots['headline'],
+      'intro' => $slots['intro'],
+      'body_blocks' => $slots['body_blocks'],
+    ], $message->content);
+    $this->assertStringNotContainsString('/requests/', (string) json_encode($message->content));
+  }
+
+  /**
+   * Provides every shipped citizen notification key and a custom key.
+   */
+  public static function notificationKeys(): array {
+    return [
+      'confirmation' => ['report_confirmation'],
+      'open' => ['status_open'],
+      'closed' => ['status_closed'],
+      'not responsible' => ['status_not_responsible'],
+      'custom' => ['custom_notification'],
+    ];
+  }
+
+  /**
+   * A later publication affects new mails, not the already built message.
+   */
+  public function testReportLinkUsesPublicationStateAtBuildTime(): void {
+    $node = $this->buildPlainNode(NULL);
+    $node->method('isPublished')->willReturnOnConsecutiveCalls(FALSE, TRUE);
+    $slots = [
+      'subject' => 'Update on your report #42',
+      'headline' => 'Your report was updated',
+      'intro' => 'We are processing your report.',
+      'body_blocks' => ['Thank you for your report.'],
+      'cta_label' => 'View your report',
+      'preheader' => 'An update on your report.',
+    ];
+    $resolver = $this->createMock(MailTextResolver::class);
+    $resolver->method('resolve')->willReturn($slots);
+    $resolver->method('replaceTokens')->willReturnArgument(0);
+    $builder = $this->buildBuilder(textResolver: $resolver);
+    $context = new MailContext(
+      module: 'markaspot_mail',
+      key: 'notification_status_open',
+      langcode: 'en',
+      params: ['node' => $node],
+      to: 'citizen@example.com',
+    );
+
+    $unpublished = $builder->build($context);
+    $published = $builder->build($context);
+
+    $this->assertNotNull($unpublished);
+    $this->assertNotNull($published);
+    $this->assertArrayNotHasKey('cta_label', $unpublished->content);
+    $this->assertArrayNotHasKey('cta_url', $unpublished->content);
+    $this->assertSame('View your report', $published->content['cta_label']);
+    $this->assertSame('https://tenant.example.org/sample/requests/42', $published->content['cta_url']);
+    $contentWithoutLink = $published->content;
+    unset($contentWithoutLink['cta_label'], $contentWithoutLink['cta_url']);
+    $this->assertSame($unpublished->content, $contentWithoutLink);
+    $this->assertSame($unpublished->subject, $published->subject);
   }
 
   /**
@@ -203,6 +299,7 @@ final class NotificationTextBuilderTest extends UnitTestCase {
     $requestIdField->method('getString')->willReturn('42');
 
     $node = $this->createMock(NodeInterface::class);
+    $node->method('isPublished')->willReturn(TRUE);
     $node->method('hasField')->willReturnMap([
       ['field_jurisdiction', TRUE],
       ['request_id', TRUE],
@@ -249,12 +346,15 @@ final class NotificationTextBuilderTest extends UnitTestCase {
    * No toUrl() stub on purpose: the builder must derive the CTA from the
    * branding package, never from the node's canonical (backend) URL.
    */
-  private function buildPlainNode(): NodeInterface&MockObject {
+  private function buildPlainNode(?bool $published = TRUE): NodeInterface&MockObject {
     $requestIdField = $this->createMock(FieldItemListInterface::class);
     $requestIdField->method('isEmpty')->willReturn(FALSE);
     $requestIdField->method('getString')->willReturn('42');
 
     $node = $this->createMock(NodeInterface::class);
+    if ($published !== NULL) {
+      $node->method('isPublished')->willReturn($published);
+    }
     $node->method('hasField')->willReturnMap([
       ['field_jurisdiction', FALSE],
       ['request_id', TRUE],
@@ -334,7 +434,7 @@ final class NotificationTextBuilderTest extends UnitTestCase {
       $branding = $this->createMock(MailBrandingService::class);
       $branding->method('getBranding')->willReturn([
         'frontend_base_url' => 'https://tenant.example.org',
-        'jurisdiction_slug' => 'amsterdam',
+        'jurisdiction_slug' => 'sample',
       ]);
     }
     return new NotificationTextBuilder(
