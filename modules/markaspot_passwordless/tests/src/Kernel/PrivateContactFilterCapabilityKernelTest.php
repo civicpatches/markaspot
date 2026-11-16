@@ -17,6 +17,7 @@ use Drupal\group\Entity\GroupType;
 use Drupal\jsonapi\Controller\EntityResource;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_passwordless\Controller\PasswordlessAuthController;
+use Drupal\markaspot_nuxt\JsonApi\CachedCountEntityResource;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\services_api_key_auth\Entity\ApiKey;
@@ -26,6 +27,7 @@ use Drupal\user\UserInterface;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Route;
 
 /**
@@ -43,10 +45,10 @@ final class PrivateContactFilterCapabilityKernelTest extends KernelTestBase {
   protected static $modules = [
     'system', 'user', 'field', 'node', 'text', 'filter', 'file',
     'entity', 'flexible_permissions', 'group', 'gnode', 'markaspot_group',
-    'serialization', 'jsonapi', 'field_permissions', 'markaspot_nuxt',
+    'serialization', 'jsonapi', 'jsonapi_extras', 'field_permissions', 'markaspot_nuxt',
     'image', 'media', 'taxonomy', 'options', 'datetime', 'language',
     'entity_reference_revisions', 'paragraphs', 'markaspot_validation',
-    'service_request', 'markaspot_passwordless', 'services_api_key_auth',
+    'service_request', 'markaspot_passwordless', 'services_api_key_auth', 'basic_auth',
   ];
 
   /**
@@ -396,6 +398,71 @@ final class PrivateContactFilterCapabilityKernelTest extends KernelTestBase {
   }
 
   /**
+   * Authenticated HTTP requests agree with the capability and real controller.
+   */
+  public function testHttpCapabilityMatchesContactFilterDecision(): void {
+    $this->config('jsonapi_extras.settings')->set('include_count', TRUE)->save();
+    $this->container->get('node.grant_storage')->writeDefault();
+    $this->container->get('router.builder')->rebuild();
+    $resource = $this->container->get('jsonapi.entity_resource');
+    $this->assertInstanceOf(CachedCountEntityResource::class, $resource);
+    $this->assertSame(realpath(dirname(__DIR__, 4) . '/markaspot_nuxt/src/JsonApi/CachedCountEntityResource.php'),
+      realpath((new \ReflectionClass($resource))->getFileName()));
+
+    foreach (['own' => FALSE, 'editorial' => TRUE] as $id => $allowed) {
+      $account = $this->accounts[$id];
+      $account->setPassword('synthetic-http-password')->save();
+      $status = $this->authenticatedRequest('/api/auth/status', $account);
+      $this->assertSame(200, $status->getStatusCode(), $status->getContent());
+      $payload = json_decode($status->getContent(), TRUE, flags: JSON_THROW_ON_ERROR);
+      $this->assertTrue($payload['authenticated']);
+      $this->assertSame((string) $account->id(), (string) $payload['user']['uid']);
+      foreach (['field_e_mail', 'field_phone'] as $field) {
+        $this->assertSame($allowed, $payload['capabilities']['filter_' . $field]);
+        $query = http_build_query(['filter' => [
+          'contact' => ['condition' => ['path' => $field, 'value' => $this->searchValue($field)]],
+        ]]);
+        $response = $this->authenticatedRequest('/jsonapi/node/service_request?' . $query, $account);
+        $this->assertSame($allowed ? 200 : 403, $response->getStatusCode(), $response->getContent());
+        $document = json_decode($response->getContent(), TRUE, flags: JSON_THROW_ON_ERROR);
+        if ($allowed) {
+          $this->assertSame([$this->foreign->uuid()], array_column($document['data'], 'id'));
+          $this->assertSame(1, $document['meta']['count']);
+        }
+        else {
+          $this->assertStringContainsString('not authorized to filter by the `' . $field . '` field', $document['errors'][0]['detail']);
+          $this->assertArrayNotHasKey('data', $document);
+          $this->assertArrayNotHasKey('meta', $document);
+        }
+      }
+    }
+  }
+
+  /**
+   * Sends credentials through the real authentication and routing subscribers.
+   */
+  private function authenticatedRequest(string $path, AccountInterface $account): Response {
+    $this->container->get('current_user')->setAccount(User::getAnonymousUser());
+    $request = Request::create($path, server: [
+      'PHP_AUTH_USER' => $account->getAccountName(),
+      'PHP_AUTH_PW' => 'synthetic-http-password',
+      'HTTP_ACCEPT' => 'application/vnd.api+json',
+    ]);
+    $stack = $this->container->get('request_stack');
+    $stack->push($request);
+    try {
+      $kernel = $this->container->get('http_kernel');
+      $response = $kernel->handle($request);
+      $this->assertSame((string) $account->id(), (string) $this->container->get('current_user')->id());
+      $kernel->terminate($request, $response);
+      return $response;
+    }
+    finally {
+      $stack->pop();
+    }
+  }
+
+  /**
    * First prove the existing decision, then compare the status capability.
    */
   public static function decisionModes(): array {
@@ -465,7 +532,7 @@ final class PrivateContactFilterCapabilityKernelTest extends KernelTestBase {
       catch (CacheableAccessDeniedHttpException $exception) {
         $this->assertFalse($allowed, $account->getAccountName() . ': ' . $field . ': ' . $exception->getMessage());
         $this->assertSame(403, $exception->getStatusCode());
-        $this->assertStringContainsString($field, $exception->getMessage());
+        $this->assertStringContainsString('not authorized to filter by the `' . $field . '` field', $exception->getMessage());
       }
     }
     if ($this->compareCapabilities) {

@@ -835,6 +835,7 @@ class PasswordlessAuthController extends ControllerBase {
     }
     catch (\Throwable) {
       // Missing fields, denied access or unavailable JSON:API fail closed.
+      $this->getLogger('markaspot_passwordless')->debug('Contact filter capability could not be resolved.');
       return FALSE;
     }
   }
