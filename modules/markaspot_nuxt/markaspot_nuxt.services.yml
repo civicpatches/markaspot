@@ -79,3 +79,7 @@ services:
   # Note: Boolean helper and json_form.* service overrides are registered
   # dynamically via MarkaspotNuxtServiceProvider when json_form_widget is active.
   # This allows updates from versions where json_form_widget was not installed.
+
+  markaspot_nuxt.staff_capability:
+    class: Drupal\markaspot_nuxt\Service\StaffCapability
+    arguments: ['@config.factory', '@entity_type.manager']

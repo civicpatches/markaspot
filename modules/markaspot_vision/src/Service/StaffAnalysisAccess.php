@@ -6,7 +6,7 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\Core\Site\Settings;
-use Drupal\group\Entity\GroupRelationshipInterface;
+use Drupal\markaspot_nuxt\Service\StaffCapability;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -55,42 +55,8 @@ class StaffAnalysisAccess {
    * Matches the existing global and jurisdiction dashboard staff capabilities.
    */
   protected function hasDashboardAccess(): bool {
-    // Shipped moderator, editorial_board and tenant_admin roles have this
-    // restricted dashboard permission; administrators inherit it as well.
-    // Legacy/custom editorial roles may instead carry report editing rights.
-    if ($this->currentUser->hasPermission('access dashboard notifications')
-      || $this->currentUser->hasPermission('administer nodes')
-      || $this->currentUser->hasPermission('edit any service_request content')) {
-      return TRUE;
-    }
-
-    if (!$this->entityTypeManager->hasDefinition('group_relationship')) {
-      return FALSE;
-    }
-
-    $jurisdiction_type = $this->configFactory->get('markaspot_open311.settings')
-      ->get('jurisdiction_group_type') ?: 'jur';
-    $memberships = $this->entityTypeManager->getStorage('group_relationship')
-      ->loadByProperties([
-        'entity_id' => $this->currentUser->id(),
-        'plugin_id' => 'group_membership',
-      ]);
-    foreach ($memberships as $membership) {
-      if (!$membership instanceof GroupRelationshipInterface) {
-        continue;
-      }
-      $group = $membership->getGroup();
-      // The Nuxt dashboard admits elevated jurisdiction memberships, not plain
-      // jur-member, derived jur-org_member or organisation-only memberships.
-      // Unpublished-report access distinguishes jur-moderator, jur-editorial,
-      // jur-tenant_admin and group admins without hard-coding their role IDs.
-      if ($group->bundle() === $jurisdiction_type
-        && $group->hasPermission('view unpublished group_node:service_request entity', $this->currentUser)) {
-        return TRUE;
-      }
-    }
-
-    return FALSE;
+    return (new StaffCapability($this->configFactory, $this->entityTypeManager))
+      ->hasDashboardAccess($this->currentUser);
   }
 
 }
