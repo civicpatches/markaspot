@@ -212,7 +212,8 @@ final class StatusNoteKeepsStatusKernelTest extends KernelTestBase {
     $models = dirname(__DIR__, 4) . '/markaspot_group/config/optional';
     foreach (self::MODELS as $id) {
       $values = Yaml::decode((string) file_get_contents("$models/eca.eca.$id.yml"));
-      $this->assertTrue($values['status'], "The shipped model $id is active.");
+      // Exercise both senders explicitly, including the retired legacy model.
+      $values['status'] = TRUE;
       Eca::create($values)->save();
     }
 

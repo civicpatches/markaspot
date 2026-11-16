@@ -19,6 +19,7 @@ process:
   field_status_hex: field_status_hex
   field_status_hex_opacity: field_status_hex_opacity
   field_status_icon: field_status_icon
+  field_notification_key: field_notification_key
   field_jurisdiction:
     plugin: migration_lookup
     migration: markaspot_migrate_default_content_group_jurisdiction
