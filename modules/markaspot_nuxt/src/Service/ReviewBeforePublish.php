@@ -284,11 +284,17 @@ final class ReviewBeforePublish {
    *
    * @param int[] $jurisdiction_ids
    *   Jurisdiction group IDs, usually a tenant root and its descendants.
+   * @param bool $fresh
+   *   TRUE to read the hold list again instead of the list cached for this
+   *   instance, for long-running callers such as cron.
    *
    * @return int
    *   Held reports whose field_jurisdiction is one of the given IDs.
    */
-  public function countHeld(array $jurisdiction_ids): int {
+  public function countHeld(array $jurisdiction_ids, bool $fresh = FALSE): int {
+    if ($fresh) {
+      $this->heldIds = NULL;
+    }
     $held = $this->heldIds();
     $jurisdiction_ids = array_values(array_filter(array_map('intval', $jurisdiction_ids)));
     if ($held === [] || $jurisdiction_ids === []) {

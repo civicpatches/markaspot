@@ -21,6 +21,7 @@ use Drupal\Core\State\StateInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\markaspot_fastmap\Service\WaitingReportsNotifier;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_fastmap\Service\WorkspaceNotOpenException;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningServiceInterface;
@@ -164,12 +165,21 @@ class LifecycleModuleHooksTest extends UnitTestCase {
     $container->set('markaspot_fastmap.workspace_provisioning', $provisioning);
 
     // Not self-service (no operating mode, the module handler knows no
-    // fastmap): the waiting-reports block reads nothing; the notifier service
-    // is not in this container, so a call would fail the test.
+    // fastmap): the waiting-reports block never reaches the notifier. The
+    // cron catches exceptions, so the call is recorded, not expected to
+    // throw.
     $container->set('module_handler', $this->createMock(ModuleHandlerInterface::class));
+    $notifierCalled = FALSE;
+    $notifier = $this->createMock(WaitingReportsNotifier::class);
+    $notifier->method('sendDue')->willReturnCallback(function () use (&$notifierCalled): array {
+      $notifierCalled = TRUE;
+      return [];
+    });
+    $container->set('markaspot_fastmap.waiting_reports_notifier', $notifier);
 
     $record->expects($this->never())->method('getMembers');
     markaspot_fastmap_cron();
+    $this->assertFalse($notifierCalled, 'Outside self-service mode cron never asks the notifier.');
   }
 
   /**

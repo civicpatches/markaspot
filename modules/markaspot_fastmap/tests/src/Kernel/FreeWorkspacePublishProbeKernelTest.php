@@ -391,6 +391,31 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
   }
 
   /**
+   * The code follows the workspace the report is stored in.
+   *
+   * A report of the workspace without a record, without a category, is
+   * published with the record workspace's ID as request jurisdiction: the
+   * resolver takes that group (open finding, out of scope) and the record
+   * workspace is at its limit. The refusal is today's text, without the
+   * code, because the report belongs to the workspace without a record.
+   */
+  public function testCodeFollowsTheReportsOwnWorkspace(): void {
+    $this->heldReportAtLimit(TRUE);
+    $this->setCurrentUser(new AnonymousUserSession());
+    $values = $this->reportValues('Legacy report') + ['status' => 0];
+    unset($values['field_category']);
+    $legacy = Node::create($values);
+    $legacy->save();
+    $this->assertFalse($this->container->get('markaspot_fastmap.workspace_lifecycle_gate')->isRecordReport($legacy));
+
+    $this->setCurrentUser($this->tenantAdmin);
+    $response = $this->patchStatus($legacy, TRUE, (int) $this->recordWorkspace->id());
+    $this->assertSame(422, $response->getStatusCode(), (string) $response->getContent());
+    $this->assertSame(['Entity is not valid: ' . self::LIMIT_SENTENCE], $this->errorDetails($response));
+    $this->assertFalse($this->reload($legacy)->isPublished());
+  }
+
+  /**
    * The detail strings of a JSON:API error response.
    *
    * @return string[]
@@ -556,8 +581,9 @@ final class FreeWorkspacePublishProbeKernelTest extends KernelTestBase {
   /**
    * Sends the dashboard's status PATCH through JSON:API.
    */
-  private function patchStatus(NodeInterface $node, bool $published): Response {
-    $request = Request::create('/jsonapi/node/service_request/' . $node->uuid(), 'PATCH', [], [], [], [], json_encode(['data' => [
+  private function patchStatus(NodeInterface $node, bool $published, ?int $jurisdictionId = NULL): Response {
+    $uri = '/jsonapi/node/service_request/' . $node->uuid() . ($jurisdictionId !== NULL ? '?jurisdiction_id=' . $jurisdictionId : '');
+    $request = Request::create($uri, 'PATCH', [], [], [], [], json_encode(['data' => [
       'type' => 'node--service_request',
       'id' => $node->uuid(),
       'attributes' => ['status' => $published],

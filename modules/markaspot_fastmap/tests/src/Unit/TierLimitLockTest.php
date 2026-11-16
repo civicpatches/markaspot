@@ -164,9 +164,82 @@ class TierLimitLockTest extends UnitTestCase {
   }
 
   /**
+   * A publish in a lifecycle workspace waits for the lock past one second.
+   *
+   * The lock is busy three times; the default would have given up after the
+   * second attempt. The 422 decision follows the same report check.
+   */
+  public function testRecordPublishTransitionWaitsLonger(): void {
+    $lock = $this->createLockBackend([FALSE, FALSE, FALSE, TRUE]);
+    $original = $this->createMock(NodeInterface::class);
+    $original->method('isPublished')->willReturn(FALSE);
+    $node = $this->createServiceRequestNode(isNew: FALSE, original: $original);
+    $tierConfig = $this->createTierConfig(49, function () use ($lock): void {
+      $this->assertTrue($lock->isHeld(self::LOCK_NAME));
+    });
+    $gate = $this->createMock(WorkspaceLifecycleGate::class);
+    $gate->expects($this->once())->method('isRecordReport')->with($node)->willReturn(TRUE);
+    $this->setDrupalContainer($tierConfig, $lock, $gate);
+
+    markaspot_fastmap_node_presave($node);
+
+    $this->assertTrue($lock->isHeld(self::LOCK_NAME));
+    $this->assertSame(4, count(array_filter($lock->events, static fn(array $event): bool => $event[0] === 'acquire')));
+    $this->assertSame(3, count(array_filter($lock->events, static fn(array $event): bool => $event[0] === 'wait')));
+  }
+
+  /**
+   * A new report in a lifecycle workspace keeps the short wait.
+   *
+   * The report check is not even asked: only publish transitions wait longer.
+   */
+  public function testRecordNewReportKeepsTheDefaultWait(): void {
+    $lock = $this->createLockBackend([FALSE, FALSE, TRUE]);
+    $node = $this->createServiceRequestNode();
+    $tierConfig = $this->createMock(TierConfigService::class);
+    $tierConfig->expects($this->never())->method('countRequests');
+    $tierConfig->method('getLimits')->willReturn(['limit' => 50, 'period' => 'published']);
+    $gate = $this->createMock(WorkspaceLifecycleGate::class);
+    $gate->expects($this->never())->method('isRecordReport');
+    $this->setDrupalContainer($tierConfig, $lock, $gate);
+
+    $this->expectException(EntityStorageException::class);
+    $this->expectExceptionMessage('Cannot acquire tier limit lock for jurisdiction 14.');
+    try {
+      markaspot_fastmap_node_presave($node);
+    }
+    finally {
+      $this->assertSame([
+        ['acquire', self::LOCK_NAME, 30.0],
+        ['wait', self::LOCK_NAME, 1],
+        ['acquire', self::LOCK_NAME, 30.0],
+      ], $lock->events);
+    }
+  }
+
+  /**
+   * The deadline loop gives up once the deadline has passed.
+   */
+  public function testDeadlineLoopGivesUp(): void {
+    // Always busy; each wait takes a tenth of a second.
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturn(FALSE);
+    $lock->method('wait')->willReturnCallback(static function (): bool {
+      usleep(100000);
+      return TRUE;
+    });
+    $this->setDrupalContainer($this->createMock(TierConfigService::class), $lock);
+    $start = microtime(TRUE);
+    $this->assertFalse(_markaspot_fastmap_acquire_tier_limit_lock(14, 1.2));
+    $elapsed = microtime(TRUE) - $start;
+    $this->assertGreaterThanOrEqual(1.2, $elapsed);
+    $this->assertLessThan(3.0, $elapsed);
+  }
+
+  /**
    * Builds a Drupal container for the presave hook under test.
    */
-  private function setDrupalContainer(TierConfigService $tierConfig, LockBackendInterface $lock): void {
+  private function setDrupalContainer(TierConfigService $tierConfig, LockBackendInterface $lock, ?WorkspaceLifecycleGate $gate = NULL): void {
     $group = $this->createJurisdictionGroup();
     $groupStorage = $this->createMock(EntityStorageInterface::class);
     $groupStorage->method('load')
@@ -214,7 +287,7 @@ class TierLimitLockTest extends UnitTestCase {
     $container->set('markaspot_nuxt.feature_scope_resolver', $featureScopeResolver);
     // A workspace without a lifecycle record: the gate leaves the save alone
     // and nobody bypasses the limit (the account holds no permission).
-    $container->set('markaspot_fastmap.workspace_lifecycle_gate', $this->createMock(WorkspaceLifecycleGate::class));
+    $container->set('markaspot_fastmap.workspace_lifecycle_gate', $gate ?? $this->createMock(WorkspaceLifecycleGate::class));
     \Drupal::setContainer($container);
   }
 

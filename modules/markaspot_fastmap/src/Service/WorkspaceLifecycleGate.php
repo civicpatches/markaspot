@@ -62,6 +62,14 @@ class WorkspaceLifecycleGate {
    */
   public const NOT_OPEN_SETTINGS_MAX_AGE = 60;
 
+  /**
+   * Seconds a publish in a lifecycle workspace may wait for the tier lock.
+   *
+   * The dashboard publishes several reports of one workspace at once (bulk
+   * bar, row buttons); every other save keeps the one-second wait.
+   */
+  public const PUBLISH_LOCK_DEADLINE = 10.0;
+
   public function __construct(
     private readonly WorkspaceLifecycle $lifecycle,
     private readonly EntityTypeManagerInterface $entityTypeManager,
@@ -317,6 +325,29 @@ class WorkspaceLifecycleGate {
     // Without the group module file (unit tests) staff never bypass.
     return function_exists('_markaspot_group_user_is_member_in_jurisdiction_scope')
       && _markaspot_group_user_is_member_in_jurisdiction_scope($account, (int) $group->id());
+  }
+
+  /**
+   * Whether a report is stored in a workspace with a valid record.
+   *
+   * Decided on the report's own field_jurisdiction (the default
+   * translation's), each value mapped to its workspace root: the refusal at
+   * the Free limit names the workspace the report belongs to, not a group a
+   * resolver redirected it to.
+   */
+  public function isRecordReport(NodeInterface $node): bool {
+    $untranslated = $node->getUntranslated();
+    $report = $untranslated instanceof NodeInterface ? $untranslated : $node;
+    $field = $report->hasField('field_jurisdiction') ? $report->get('field_jurisdiction') : NULL;
+    if (!$field instanceof EntityReferenceFieldItemListInterface) {
+      return FALSE;
+    }
+    foreach ($field->referencedEntities() as $group) {
+      if ($group instanceof GroupInterface && $this->recordWorkspace($group) !== NULL) {
+        return TRUE;
+      }
+    }
+    return FALSE;
   }
 
   /**

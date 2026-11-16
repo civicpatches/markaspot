@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_fastmap\Kernel;
 
+use Drupal\Core\KeyValueStore\KeyValueDatabaseFactory;
 use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\KeyValueStore\KeyValueStoreInterface;
 use Drupal\Component\Datetime\TimeInterface;
@@ -42,6 +43,7 @@ use PHPUnit\Framework\Attributes\Group as TestGroup;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\Session\Session;
 use Symfony\Component\HttpFoundation\Session\Storage\MockArraySessionStorage;
 
@@ -530,27 +532,138 @@ final class WaitingReportsMailKernelTest extends KernelTestBase {
   }
 
   /**
-   * No recipient, no link: nothing is sent, the note stays, a log line.
+   * No recipient: decided once for the marker, logged once, not hourly.
+   *
+   * No link: nothing sent, the workspace stays due; cron logs an empty base
+   * URL once per run, not per workspace.
    */
-  public function testNoRecipientKeepsTheNote(): void {
+  public function testNoRecipientIsDecidedOnce(): void {
     $open = (int) $this->workspaces['open']->id();
     foreach (['operator', 'colleague'] as $label) {
       $this->accounts[$label]->block()->save();
     }
     $this->createAs(new AnonymousUserSession(), 'open');
-    $this->assertSame([$open => WaitingReportsNotifier::NO_RECIPIENT], $this->notifier()->flush(1900000000));
-    $this->assertSame([$open], $this->pendingIds(), 'the note stays');
-    $this->assertContains("warning: No operator mail about waiting reports for workspace $open: no active tenant admin with an e-mail address.", $this->log);
+    $counted = 0;
+    $notifier = $this->notifierWith($this->container->get('plugin.manager.mail'), NULL, NULL, function () use (&$counted): void {
+      $counted++;
+    });
+    $this->assertSame(WaitingReportsNotifier::NO_RECIPIENT, $notifier->sendIfDue($open, 1900000000));
+    $this->assertSame(0, $counted, 'recipients before the count');
+    $this->assertSame([], $this->pendingIds(), 'decided for this marker');
+    $this->assertSame([], $this->notifier()->sendDue(1900000000 + 3600), 'not again an hour later');
+    $warning = "warning: No operator mail about waiting reports for workspace $open: no active tenant admin with an e-mail address.";
+    $this->assertCount(1, array_keys($this->log, $warning, TRUE));
 
+    // A new report tries again, now with a recipient but without a link.
     $this->accounts['colleague']->activate()->save();
     $this->config('markaspot_fastmap.settings')->set('workspace_base_url', '')->save();
+    $this->createAs(new AnonymousUserSession(), 'open');
     $this->assertSame(WaitingReportsNotifier::NO_LINK, $this->notifier()->sendIfDue($open, 1900000000));
-    $this->assertSame([$open], $this->pendingIds());
+    $this->assertSame([$open], $this->pendingIds(), 'stays due without a link');
+
+    // Cron with two due workspaces and no base URL: one log line, no visit.
+    $this->addWorkspace('second', self::OPEN);
+    $this->kv(WaitingReportsNotifier::PENDING_COLLECTION)->set((string) $this->workspaces['second']->id(), 'marker');
+    $this->log = [];
+    $this->assertSame([], $this->notifier()->sendDue(1900000000));
+    $this->assertSame(['error: No operator mails about waiting reports: markaspot_fastmap.settings:workspace_base_url is empty; 2 workspaces stay due.'], $this->log);
     $this->assertSame([], $this->getMails(['key' => WaitingReportsNotifier::MAIL_KEY]));
 
     $this->config('markaspot_fastmap.settings')->set('workspace_base_url', 'https://maps.example.org')->save();
     $this->assertSame(WaitingReportsNotifier::SENT, $this->notifier()->sendIfDue($open, 1900000000));
     $this->assertCount(1, $this->getMails(['key' => WaitingReportsNotifier::MAIL_KEY]));
+  }
+
+  /**
+   * A send an alter hook cancelled is decided, not retried.
+   */
+  public function testCancelledSendIsHandled(): void {
+    $open = (int) $this->workspaces['open']->id();
+    $this->createAs(new AnonymousUserSession(), 'open');
+    $cancelling = $this->createMock(MailManagerInterface::class);
+    $cancelling->method('mail')->willReturn(['result' => NULL]);
+    $this->assertSame(WaitingReportsNotifier::CANCELLED, $this->notifierWith($cancelling)->sendIfDue($open, 1900000000));
+    $this->assertSame([], $this->pendingIds(), 'handled');
+    $this->assertSame(1900000000, (int) $this->kv(WaitingReportsNotifier::MAILED_COLLECTION)->get((string) $open), 'the stamp stays');
+  }
+
+  /**
+   * The count reads a fresh hold list, not one cached by an earlier count.
+   */
+  public function testCountReadsFreshHoldList(): void {
+    $open = (int) $this->workspaces['open']->id();
+    $this->assertSame(0, $this->notifier()->countWaiting($open));
+    // A hold another process wrote after the list above was read.
+    $this->setFlag('open', FALSE);
+    $report = $this->createAs(new AnonymousUserSession(), 'open');
+    $report->setUnpublished()->save();
+    $this->review()->heldIds();
+    $this->container->get('keyvalue')->get(ReviewBeforePublish::COLLECTION)->set((string) $report->id(), ['created' => 1900000000]);
+    $this->assertSame(1, $this->notifier()->countWaiting($open));
+  }
+
+  /**
+   * The nested save of holdAfterInsert() and the note: exactly one marker.
+   *
+   * Drives the insert listeners in their real order on a report saved
+   * without a hold (approval off at save time): markaspot_nuxt's
+   * holdAfterInsert() unpublishes and saves it again inside the hook (an
+   * update, not a second insert), then the note runs.
+   */
+  public function testHoldAfterInsertWritesOneMarker(): void {
+    $open = (int) $this->workspaces['open']->id();
+    $this->setFlag('open', FALSE);
+    $report = $this->createAs(new AnonymousUserSession(), 'open');
+    $this->assertTrue($report->isPublished());
+    $this->assertSame([], $this->pendingIds());
+    $this->setFlag('open', TRUE);
+
+    $this->setCurrentUser(new AnonymousUserSession());
+    $this->assertTrue($this->review()->holdAfterInsert($report), 'held after insert, with the nested save');
+    $this->notifier()->noteHeldReport($report, new AnonymousUserSession());
+    $this->assertFalse($this->reload($report)->isPublished());
+    $this->assertSame([$open], $this->pendingIds());
+    $this->assertCount(1, $this->kv(WaitingReportsNotifier::PENDING_COLLECTION)->getAll(), 'exactly one marker');
+  }
+
+  /**
+   * A save rolled back after the note leaves no marker.
+   *
+   * Kernel tests keep key/value in memory, which no transaction rolls back;
+   * this case uses the database store production uses. The note is written
+   * inside the save's transaction, as the insert hook does, and the save
+   * fails afterwards.
+   */
+  public function testRolledBackSaveLeavesNoMarker(): void {
+    $open = (int) $this->workspaces['open']->id();
+    $database = $this->container->get('database');
+    $store = new KeyValueDatabaseFactory($this->container->get('serialization.phpserialize'), $database);
+    // The table is created on first use; DDL would end the transaction.
+    $store->get('warm_up')->set('table', TRUE);
+    $notifier = $this->notifierWith($this->container->get('plugin.manager.mail'), $store);
+
+    $report = $this->createAs(new AnonymousUserSession(), 'open');
+    $transaction = $database->startTransaction();
+    $notifier->noteHeldReport($report, new AnonymousUserSession());
+    $this->assertNotNull($store->get(WaitingReportsNotifier::PENDING_COLLECTION)->get((string) $open), 'noted inside the transaction');
+    $transaction->rollBack();
+    unset($transaction);
+
+    $this->assertNull($store->get(WaitingReportsNotifier::PENDING_COLLECTION)->get((string) $open), 'rolled back with the save');
+    $this->clearMails();
+    $this->assertSame([$open => WaitingReportsNotifier::NOTHING_NEW], $notifier->flush(1900000000));
+    $this->assertSame([], $this->getMails(['key' => WaitingReportsNotifier::MAIL_KEY]));
+  }
+
+  /**
+   * The end of the request sends the mail (kernel terminate, destruct()).
+   */
+  public function testKernelTerminateSends(): void {
+    $this->createAs(new AnonymousUserSession(), 'open');
+    $this->assertSame([], $this->getMails(['key' => WaitingReportsNotifier::MAIL_KEY]), 'nothing inside the save');
+    $this->container->get('kernel')->terminate(Request::create('/'), new Response());
+    $this->assertCount(2, $this->getMails(['key' => WaitingReportsNotifier::MAIL_KEY]));
+    $this->assertSame([], $this->pendingIds());
   }
 
   /**

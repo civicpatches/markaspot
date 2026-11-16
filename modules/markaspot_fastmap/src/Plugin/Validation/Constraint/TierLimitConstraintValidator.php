@@ -176,9 +176,9 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
       };
 
       $message = $this->resolveLimitMessage($constraint, $messageProperty, $group, $value);
-      // Workspaces under the lifecycle model name the refusal with a machine
+      // Reports stored in a workspace under the lifecycle model get a machine
       // code the dashboard matches; every other workspace keeps its text.
-      if ($messageProperty === 'publishedLimitMessage' && $this->lifecycleGate?->isRecordWorkspace($group)) {
+      if ($messageProperty === 'publishedLimitMessage' && $this->lifecycleGate?->isRecordReport($value)) {
         $message = PublishedLimitReachedException::prefix($message);
       }
       $this->context->addViolation($message, [

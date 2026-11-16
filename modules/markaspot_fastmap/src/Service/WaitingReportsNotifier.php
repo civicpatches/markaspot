@@ -94,6 +94,7 @@ class WaitingReportsNotifier implements DestructableInterface {
   public const NO_LINK = 'no_link';
   public const BUSY = 'busy';
   public const FAILED = 'failed';
+  public const CANCELLED = 'cancelled';
 
   /**
    * The lock per workspace.
@@ -178,9 +179,14 @@ class WaitingReportsNotifier implements DestructableInterface {
    * Sends the mails of the workspaces noted in this request.
    *
    * Runs at the end of the request, after the response and after every save
-   * of the request has committed.
+   * of the request has committed. The tier limit locks those saves took are
+   * released first (otherwise only by a shutdown function), so a parallel
+   * save of the same workspace does not wait for the mail server.
    */
   public function destruct(): void {
+    if ($this->noted !== [] && function_exists('_markaspot_fastmap_release_held_tier_limit_locks')) {
+      _markaspot_fastmap_release_held_tier_limit_locks();
+    }
     $this->flush();
   }
 
@@ -213,8 +219,20 @@ class WaitingReportsNotifier implements DestructableInterface {
     if (!WorkspaceTier::isSelfService($this->moduleHandler)) {
       return [];
     }
+    $due = $this->dueIds();
+    if ($due === []) {
+      return [];
+    }
+    // Without the base URL no link can be built for any workspace: one log
+    // line per run, the workspaces stay due.
+    if ($this->baseUrl() === '') {
+      $this->logger->error('No operator mails about waiting reports: markaspot_fastmap.settings:workspace_base_url is empty; @count workspaces stay due.', [
+        '@count' => count($due),
+      ]);
+      return [];
+    }
     $outcomes = [];
-    foreach ($this->dueIds() as $gid) {
+    foreach ($due as $gid) {
       $outcomes[$gid] = $this->sendIfDue($gid, $now);
     }
     return $outcomes;
@@ -244,11 +262,13 @@ class WaitingReportsNotifier implements DestructableInterface {
    * do. A workspace that lost its record, is closed again or blocked, and a
    * workspace where nothing waits any more, get the marker read here as
    * handled. Within 24 hours of the last mail the workspace stays due,
-   * without counting. Without a recipient or a link nothing is sent and it
+   * without counting. Without a recipient the marker is handled too (the
+   * next new report tries again); without a link nothing is sent and it
    * stays due. Then, under the lock, the last mail time is read again, and
    * the stamp and the handled marker are written; the mails go out after the
-   * lock. If no recipient got the mail, the stamp and the handled marker are
-   * taken back. Never throws.
+   * lock. A send an alter hook cancelled counts as handled; if every
+   * recipient failed, the stamp and the handled marker are taken back and
+   * cron tries again. Never throws.
    *
    * @param int $gid
    *   The workspace root ID.
@@ -274,17 +294,20 @@ class WaitingReportsNotifier implements DestructableInterface {
       if ($this->tooSoon($key, $now)) {
         return self::TOO_SOON;
       }
-      $count = $this->countWaiting($gid);
-      if ($count === 0) {
-        $this->settle($key, $handledBefore, $marker);
-        return self::NOTHING_WAITING;
-      }
+      // Nobody to tell: decided for this marker, logged once; the next new
+      // report tries again.
       $recipients = $this->recipients($workspace);
       if ($recipients === []) {
         $this->logger->warning('No operator mail about waiting reports for workspace @id: no active tenant admin with an e-mail address.', [
           '@id' => $key,
         ]);
+        $this->settle($key, $handledBefore, $marker);
         return self::NO_RECIPIENT;
+      }
+      $count = $this->countWaiting($gid);
+      if ($count === 0) {
+        $this->settle($key, $handledBefore, $marker);
+        return self::NOTHING_WAITING;
       }
       $link = $this->dashboardUrl($workspace);
       if ($link === NULL) {
@@ -326,12 +349,17 @@ class WaitingReportsNotifier implements DestructableInterface {
       'count' => (string) $count,
       'dashboard_url' => $link,
     ];
-    $delivered = 0;
+    $results = [];
     foreach ($recipients as $user) {
-      $delivered += $this->sendOne($workspace, $user, $params) ? 1 : 0;
+      $results[] = $this->sendOne($workspace, $user, $params);
     }
-    if ($delivered > 0) {
+    if (in_array(self::SENT, $results, TRUE)) {
       return self::SENT;
+    }
+    // A send an alter hook cancelled on purpose is decided; only a failure
+    // of every recipient is tried again.
+    if (in_array(self::CANCELLED, $results, TRUE)) {
+      return self::CANCELLED;
     }
     $this->restore($key, $mailedBefore, $handledBefore);
     return self::FAILED;
@@ -413,7 +441,9 @@ class WaitingReportsNotifier implements DestructableInterface {
    * (TenantSettingsController::countReviewBeforePublishPending()).
    */
   public function countWaiting(int $gid): int {
-    return $this->reviewBeforePublish->countHeld($this->hierarchyResolver->getDescendantIds($gid));
+    // A fresh hold list: a cron run must not count from a list it read
+    // before other requests held new reports.
+    return $this->reviewBeforePublish->countHeld($this->hierarchyResolver->getDescendantIds($gid), TRUE);
   }
 
   /**
@@ -527,12 +557,19 @@ class WaitingReportsNotifier implements DestructableInterface {
     $slug = $workspace->hasField('field_slug') && !$workspace->get('field_slug')->isEmpty()
       ? trim((string) $workspace->get('field_slug')->value)
       : '';
-    $base = (string) ($this->configFactory->get('markaspot_fastmap.settings')->get('workspace_base_url') ?? '');
+    $base = $this->baseUrl();
     if (!function_exists('_markaspot_fastmap_build_workspace_url')) {
       return NULL;
     }
     $url = _markaspot_fastmap_build_workspace_url($slug, $base);
     return $url !== NULL ? $url . self::DASHBOARD_PATH : NULL;
+  }
+
+  /**
+   * The configured workspace base URL, or ''.
+   */
+  private function baseUrl(): string {
+    return trim((string) ($this->configFactory->get('markaspot_fastmap.settings')->get('workspace_base_url') ?? ''));
   }
 
   /**
@@ -545,10 +582,10 @@ class WaitingReportsNotifier implements DestructableInterface {
    * @param array<string, string> $params
    *   Mail parameters.
    *
-   * @return bool
-   *   Whether the mail manager reported success.
+   * @return string
+   *   SENT, CANCELLED (an alter hook stopped it, result NULL) or FAILED.
    */
-  private function sendOne(GroupInterface $workspace, UserInterface $user, array $params): bool {
+  private function sendOne(GroupInterface $workspace, UserInterface $user, array $params): string {
     try {
       $result = $this->mailManager->mail(
         'markaspot_fastmap',
@@ -558,14 +595,21 @@ class WaitingReportsNotifier implements DestructableInterface {
         $params,
         $this->mailFrom(),
       );
+      if (is_array($result) && array_key_exists('result', $result) && $result['result'] === NULL) {
+        $this->logger->notice('The operator mail about waiting reports for workspace @id to account @uid was cancelled by an alter hook.', [
+          '@id' => (string) $workspace->id(),
+          '@uid' => (string) $user->id(),
+        ]);
+        return self::CANCELLED;
+      }
       if (empty($result['result'])) {
         $this->logger->error('The operator mail about waiting reports for workspace @id was not sent to account @uid.', [
           '@id' => (string) $workspace->id(),
           '@uid' => (string) $user->id(),
         ]);
-        return FALSE;
+        return self::FAILED;
       }
-      return TRUE;
+      return self::SENT;
     }
     catch (\Throwable $e) {
       $this->logger->error('The operator mail about waiting reports for workspace @id failed for account @uid: @message', [
@@ -573,7 +617,7 @@ class WaitingReportsNotifier implements DestructableInterface {
         '@uid' => (string) $user->id(),
         '@message' => $e->getMessage(),
       ]);
-      return FALSE;
+      return self::FAILED;
     }
   }
 

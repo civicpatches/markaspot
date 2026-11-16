@@ -649,7 +649,19 @@ function markaspot_fastmap_node_presave(NodeInterface $node): void {
   }
 
   $group_id = (int) $group->id();
-  if (!_markaspot_fastmap_acquire_tier_limit_lock($group_id)) {
+  // Lifecycle model: decided on the workspace the report is stored in
+  // (field_jurisdiction), not on the resolver's group. A publish there may
+  // wait for the lock longer: the dashboard publishes several reports at
+  // once (bulk bar, row buttons). New reports and every other workspace keep
+  // the short wait.
+  $recordReport = FALSE;
+  if ($is_publish_transition) {
+    /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate $lifecycleGate */
+    $lifecycleGate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
+    $recordReport = $lifecycleGate->isRecordReport($node);
+  }
+  $lockDeadline = $recordReport ? WorkspaceLifecycleGate::PUBLISH_LOCK_DEADLINE : 1.0;
+  if (!_markaspot_fastmap_acquire_tier_limit_lock($group_id, $lockDeadline)) {
     throw new EntityStorageException(sprintf('Cannot acquire tier limit lock for jurisdiction %d.', $group_id));
   }
   _markaspot_fastmap_track_node_tier_limit_lock($node, $group_id);
@@ -678,9 +690,7 @@ function markaspot_fastmap_node_presave(NodeInterface $node): void {
     // Lifecycle model: the code and sentence of the TierLimit constraint, as
     // a 422 the storage exception subscriber unwraps. Every other workspace
     // keeps the storage exception below.
-    /** @var \Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate $lifecycleGate */
-    $lifecycleGate = \Drupal::service('markaspot_fastmap.workspace_lifecycle_gate');
-    if ($lifecycleGate->isRecordWorkspace($group)) {
+    if ($recordReport) {
       throw new PublishedLimitReachedException(_markaspot_fastmap_published_limit_sentence($group, (int) $tierLimits['limit']));
     }
     throw new EntityStorageException(sprintf(
@@ -725,8 +735,15 @@ function _markaspot_fastmap_tier_limit_lock_name(int $group_id): ?string {
 
 /**
  * Acquires a jurisdiction tier limit lock.
+ *
+ * @param int $group_id
+ *   The jurisdiction group ID.
+ * @param float $deadline
+ *   Seconds to keep trying. The default 1.0 is one wait of a second and one
+ *   more attempt, as always; a longer deadline repeats wait and attempt
+ *   until it has passed.
  */
-function _markaspot_fastmap_acquire_tier_limit_lock(int $group_id): bool {
+function _markaspot_fastmap_acquire_tier_limit_lock(int $group_id, float $deadline = 1.0): bool {
   $lock_name = _markaspot_fastmap_tier_limit_lock_name($group_id);
   if ($lock_name === NULL) {
     return FALSE;
@@ -739,14 +756,42 @@ function _markaspot_fastmap_acquire_tier_limit_lock(int $group_id): bool {
 
   $lock = \Drupal::lock();
   if (!$lock->acquire($lock_name, 30.0)) {
-    $lock->wait($lock_name, 1);
-    if (!$lock->acquire($lock_name, 30.0)) {
-      return FALSE;
+    if ($deadline <= 1.0) {
+      $lock->wait($lock_name, 1);
+      if (!$lock->acquire($lock_name, 30.0)) {
+        return FALSE;
+      }
+    }
+    else {
+      $end = microtime(TRUE) + $deadline;
+      do {
+        $lock->wait($lock_name, max(1, (int) ceil($end - microtime(TRUE))));
+        $acquired = $lock->acquire($lock_name, 30.0);
+      } while (!$acquired && microtime(TRUE) < $end);
+      if (!$acquired) {
+        return FALSE;
+      }
     }
   }
 
   $held_locks[$lock_name] = TRUE;
   return TRUE;
+}
+
+/**
+ * Releases every tier limit lock this request still holds.
+ *
+ * For the end of a request whose saves have committed: the lock of a save
+ * is otherwise released by a shutdown function, after kernel terminate.
+ */
+function _markaspot_fastmap_release_held_tier_limit_locks(): void {
+  $held_locks = &drupal_static('_markaspot_fastmap_tier_limit_locks', []);
+  $node_locks = &drupal_static('_markaspot_fastmap_tier_limit_node_locks', []);
+  foreach (array_keys($held_locks) as $lock_name) {
+    \Drupal::lock()->release($lock_name);
+  }
+  $held_locks = [];
+  $node_locks = [];
 }
 
 /**
@@ -1504,7 +1549,9 @@ function markaspot_fastmap_cron(): void {
   // self-service platform, where no note is ever written. ---
   if (WorkspaceTier::isSelfService(\Drupal::moduleHandler())) {
     $waitingLastRun = (int) $state->get('markaspot_fastmap.last_reports_waiting_run', 0);
-    if (($now - $waitingLastRun) >= 3600) {
+    // A tolerance: with an hourly cron whose start drifts by a few seconds,
+    // ">= 3600" skips every second run.
+    if (($now - $waitingLastRun) >= 3300) {
       $state->set('markaspot_fastmap.last_reports_waiting_run', $now);
       try {
         // Each workspace is decided at the current time, not the cron start.
