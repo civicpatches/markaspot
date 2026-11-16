@@ -588,6 +588,23 @@ final class WaitingReportsMailKernelTest extends KernelTestBase {
   }
 
   /**
+   * One cancelled and one failed send: nobody got it, so it is retried.
+   */
+  public function testCancelledAndFailedSendIsRetried(): void {
+    $open = (int) $this->workspaces['open']->id();
+    $this->createAs(new AnonymousUserSession(), 'open');
+    $calls = 0;
+    $mixed = $this->createMock(MailManagerInterface::class);
+    $mixed->method('mail')->willReturnCallback(static function () use (&$calls): array {
+      return ['result' => $calls++ === 0 ? NULL : FALSE];
+    });
+    $this->assertSame(WaitingReportsNotifier::FAILED, $this->notifierWith($mixed)->sendIfDue($open, 1900000000));
+    $this->assertSame(2, $calls);
+    $this->assertSame([$open], $this->pendingIds(), 'still due');
+    $this->assertNull($this->kv(WaitingReportsNotifier::MAILED_COLLECTION)->get((string) $open), 'the stamp is taken back');
+  }
+
+  /**
    * The count reads a fresh hold list, not one cached by an earlier count.
    */
   public function testCountReadsFreshHoldList(): void {

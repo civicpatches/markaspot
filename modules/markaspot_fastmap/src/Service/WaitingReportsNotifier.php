@@ -266,9 +266,9 @@ class WaitingReportsNotifier implements DestructableInterface {
    * next new report tries again); without a link nothing is sent and it
    * stays due. Then, under the lock, the last mail time is read again, and
    * the stamp and the handled marker are written; the mails go out after the
-   * lock. A send an alter hook cancelled counts as handled; if every
-   * recipient failed, the stamp and the handled marker are taken back and
-   * cron tries again. Never throws.
+   * lock. If nobody got the mail and at least one send failed, the stamp
+   * and the handled marker are taken back and cron tries again; sends that
+   * were all cancelled on purpose count as handled. Never throws.
    *
    * @param int $gid
    *   The workspace root ID.
@@ -356,13 +356,13 @@ class WaitingReportsNotifier implements DestructableInterface {
     if (in_array(self::SENT, $results, TRUE)) {
       return self::SENT;
     }
-    // A send an alter hook cancelled on purpose is decided; only a failure
-    // of every recipient is tried again.
-    if (in_array(self::CANCELLED, $results, TRUE)) {
-      return self::CANCELLED;
+    // Nobody got it. A failure is tried again, also next to a cancelled
+    // send; only sends that were all cancelled on purpose are decided.
+    if (in_array(self::FAILED, $results, TRUE)) {
+      $this->restore($key, $mailedBefore, $handledBefore);
+      return self::FAILED;
     }
-    $this->restore($key, $mailedBefore, $handledBefore);
-    return self::FAILED;
+    return self::CANCELLED;
   }
 
   /**
@@ -595,6 +595,10 @@ class WaitingReportsNotifier implements DestructableInterface {
         $params,
         $this->mailFrom(),
       );
+      // Result NULL: the send was cancelled before transport, by an alter hook
+      // or by this module's own hook_mail(), which sets send = FALSE when the
+      // template has no subject or body (only with a broken shipped
+      // template). Counted as handled, not retried.
       if (is_array($result) && array_key_exists('result', $result) && $result['result'] === NULL) {
         $this->logger->notice('The operator mail about waiting reports for workspace @id to account @uid was cancelled by an alter hook.', [
           '@id' => (string) $workspace->id(),

@@ -62,14 +62,6 @@ class WorkspaceLifecycleGate {
    */
   public const NOT_OPEN_SETTINGS_MAX_AGE = 60;
 
-  /**
-   * Seconds a publish in a lifecycle workspace may wait for the tier lock.
-   *
-   * The dashboard publishes several reports of one workspace at once (bulk
-   * bar, row buttons); every other save keeps the one-second wait.
-   */
-  public const PUBLISH_LOCK_DEADLINE = 10.0;
-
   public function __construct(
     private readonly WorkspaceLifecycle $lifecycle,
     private readonly EntityTypeManagerInterface $entityTypeManager,
@@ -333,7 +325,8 @@ class WorkspaceLifecycleGate {
    * Decided on the report's own field_jurisdiction (the default
    * translation's), each value mapped to its workspace root: the refusal at
    * the Free limit names the workspace the report belongs to, not a group a
-   * resolver redirected it to.
+   * resolver redirected it to. A report without field_jurisdiction is no
+   * record report: it gets the text without the code (accepted).
    */
   public function isRecordReport(NodeInterface $node): bool {
     $untranslated = $node->getUntranslated();
