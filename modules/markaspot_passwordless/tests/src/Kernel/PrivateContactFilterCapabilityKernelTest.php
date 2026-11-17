@@ -155,7 +155,12 @@ final class PrivateContactFilterCapabilityKernelTest extends KernelTestBase {
       'phone_reader' => ['view field_phone'],
       'administrator' => ['bypass node access'],
     ] as $id => $permissions) {
-      Role::create(['id' => $id, 'label' => $id, 'permissions' => $permissions])->save();
+      Role::create([
+        'id' => $id,
+        'label' => $id,
+        'permissions' => $permissions,
+        'is_admin' => $id === 'administrator',
+      ])->save();
     }
     $this->groups['own'] = Group::create(['type' => 'jur', 'label' => 'Workspace A']);
     $this->groups['own']->save();
