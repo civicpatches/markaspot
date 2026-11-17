@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_dashboard\Kernel;
 
 use Drupal\Core\Access\AccessResult;
+use Drupal\Component\Serialization\Yaml;
+use Drupal\Core\Lock\DatabaseLockBackend;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\eca\Entity\Eca;
 use Drupal\language\Entity\ConfigurableLanguage;
@@ -119,6 +121,98 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
       'opted out' => [FALSE, TRUE, 'en', FALSE],
       'closed status without a mail key' => [FALSE, TRUE, 'en', TRUE, ''],
     ];
+  }
+
+  /**
+   * A tenant import cannot remove the duplicate explanation or mail subject.
+   */
+  #[DataProvider('missingTexts')]
+  public function testMissingTextsUseShippedDefaults(string $langcode, bool $published, bool $empty, ?string $subject = NULL): void {
+    $config = $this->config('markaspot_mail.texts')->clear('status_duplicate');
+    $override = $this->container->get('language_manager')->getLanguageConfigOverride('de', 'markaspot_mail.texts');
+    $override->clear('status_duplicate');
+    if ($empty || $subject !== NULL) {
+      $blank = ['subject' => $subject ?? '  ', 'status_note' => '', 'private_status_note' => '  '];
+      $config->set('status_duplicate', $blank);
+      $override->set('status_duplicate', $blank);
+    }
+    $config->save();
+    $override->save();
+    $kept = $this->report(4);
+    $kept->set('request_id', 'KEPT-42')->set('status', $published)->save();
+    $closed = $this->report(4);
+    $closed->set('request_id', 'CLOSED-43')->set('langcode', $langcode)->save();
+    $match = $this->container->get('database')->insert('markaspot_ai_duplicate_matches')->fields([
+      'source_nid' => $kept->id(), 'match_nid' => $closed->id(),
+      'similarity_score' => 0.98, 'status' => 'pending', 'created' => time(),
+    ])->execute();
+    $this->resetMail();
+    $request = Request::create('/', 'POST', [], [], [], [], '{"status":"confirmed"}');
+    $this->assertSame(200, $this->controller()->reviewMatch((int) $match, $request)->getStatusCode());
+    $this->container->get('entity_type.manager')->getStorage('node')->resetCache();
+    $saved = Node::load($closed->id());
+    $path = dirname(__DIR__, 4) . '/markaspot_mail/config/install';
+    $file = $langcode === 'en' ? "$path/markaspot_mail.texts.yml" : "$path/language/$langcode/markaspot_mail.texts.yml";
+    $shipped = Yaml::decode(file_get_contents($file))['status_duplicate'];
+    $expected_note = str_replace('@request_id', 'KEPT-42', $shipped[$published ? 'status_note' : 'private_status_note']);
+    $this->assertSame($expected_note, $saved->get('field_status_notes')->entity->get('field_status_note')->value);
+    $resolver = $this->container->get('markaspot_nuxt.citizen_wording_resolver');
+    $expected_subject = str_replace('[node:request_id]', 'CLOSED-43', $resolver->replaceMailPlaceholders($shipped['subject'], NULL, $langcode));
+    $this->assertCount(1, $this->mails());
+    $this->assertSame('markaspot_mail_notification_status_duplicate', $this->mails()[0]['id']);
+    $this->assertSame($expected_subject, $this->mails()[0]['subject']);
+    // The unbranded fallback must also keep the shipped duplicate subject.
+    $message = ['langcode' => $langcode];
+    markaspot_mail_mail('notification_status_duplicate', $message, ['node' => $saved]);
+    $this->assertSame($expected_subject, $message['subject']);
+  }
+
+  /**
+   * Missing and explicitly blank defaults, in both supported test languages.
+   */
+  public static function missingTexts(): array {
+    return [
+      'missing English' => ['en', TRUE, FALSE],
+      'missing German private' => ['de', FALSE, FALSE],
+      'empty English private' => ['en', FALSE, TRUE],
+      'empty German' => ['de', TRUE, TRUE],
+      'subject token resolves to empty' => ['de', TRUE, FALSE, '[node:field_missing]'],
+    ];
+  }
+
+  /**
+   * Different matches cannot close or notify the same newer report twice.
+   */
+  public function testDifferentMatchesShareClosedReportLock(): void {
+    $older = $this->report(4);
+    $other = $this->report(4);
+    $closed = $this->report(4);
+    $db = $this->container->get('database');
+    $matches = [];
+    foreach ([$older, $other] as $kept) {
+      $matches[] = (int) $db->insert('markaspot_ai_duplicate_matches')->fields([
+        'source_nid' => $closed->id(), 'match_nid' => $kept->id(),
+        'similarity_score' => 0.98, 'status' => 'pending', 'created' => time(),
+      ])->execute();
+    }
+    $this->resetMail();
+    $request = Request::create('/', 'POST', [], [], [], [], '{"status":"confirmed"}');
+    $competing_lock = new DatabaseLockBackend($db);
+    $lock_name = 'markaspot_duplicate_review_node:' . $closed->id();
+    $this->assertTrue($competing_lock->acquire($lock_name, 300.0));
+    try {
+      $this->assertSame(409, $this->controller()->reviewMatch($matches[1], $request)->getStatusCode());
+      $this->assertSame([], $this->mails());
+    }
+    finally {
+      $competing_lock->release($lock_name);
+    }
+    $this->assertSame(200, $this->controller()->reviewMatch($matches[0], $request)->getStatusCode());
+    $this->assertSame(409, $this->controller()->reviewMatch($matches[1], $request)->getStatusCode());
+    $this->assertSame('pending', $db->select('markaspot_ai_duplicate_matches', 'm')->fields('m', ['status'])->condition('id', $matches[1])->execute()->fetchField());
+    $this->assertCount(1, $this->mails());
+    $this->container->get('entity_type.manager')->getStorage('node')->resetCache();
+    $this->assertCount(1, Node::load($closed->id())->get('field_status_notes'));
   }
 
   /**

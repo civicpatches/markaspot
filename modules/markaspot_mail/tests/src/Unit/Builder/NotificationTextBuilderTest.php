@@ -275,6 +275,51 @@ final class NotificationTextBuilderTest extends UnitTestCase {
   }
 
   /**
+   * The CTA uses the kept child's branding while the mail keeps its sender.
+   */
+  public function testDuplicateLinkUsesKeptChildJurisdiction(): void {
+    $parent = $this->createMock(GroupInterface::class);
+    $parent->method('id')->willReturn(7);
+    $parent->method('getEntityTypeId')->willReturn('group');
+    $parent->method('bundle')->willReturn('jur');
+    $parentField = $this->createMock(EntityReferenceFieldItemListInterface::class);
+    $parentField->method('isEmpty')->willReturn(FALSE);
+    $parentField->method('referencedEntities')->willReturn([$parent]);
+    $child = $this->createMock(GroupInterface::class);
+    $child->method('id')->willReturn(9);
+    $child->method('getEntityTypeId')->willReturn('group');
+    $child->method('bundle')->willReturn('jur');
+    $child->method('hasField')->willReturnMap([['field_parent_jurisdiction', TRUE]]);
+    $child->method('get')->with('field_parent_jurisdiction')->willReturn($parentField);
+    $kept = $this->buildPlainNode(requestId: 'KEPT-99', jurisdiction: $child);
+    $kept->method('isPublished')->willReturn(TRUE);
+    $closed = $this->buildPlainNode(requestId: 'CLOSED-100', jurisdiction: $parent);
+    $resolver = $this->createMock(MailTextResolver::class);
+    $resolver->method('resolve')->willReturn([
+      'subject' => 'Duplicate report', 'headline' => '', 'intro' => '',
+      'body_blocks' => [], 'cta_label' => 'View existing entry', 'preheader' => '',
+    ]);
+    $resolver->method('replaceTokens')->willReturnArgument(0);
+    $branding = $this->createMock(MailBrandingService::class);
+    $branding->expects($this->once())->method('getBranding')
+      ->with(9, 'jurisdiction', 'en')->willReturn([
+        'frontend_base_url' => 'https://child.example.test',
+        'jurisdiction_slug' => 'child-district',
+      ]);
+    $message = $this->buildBuilder(textResolver: $resolver, branding: $branding)->build(new MailContext(
+      module: 'markaspot_mail',
+      key: 'notification_status_duplicate',
+      langcode: 'en',
+      params: ['node' => $closed, 'duplicate_kept' => $kept],
+      to: 'citizen@example.test',
+    ));
+    $this->assertNotNull($message);
+    $this->assertSame('https://child.example.test/child-district/requests/KEPT-99', $message->content['cta_url']);
+    $this->assertSame('jurisdiction', $message->mode);
+    $this->assertSame(7, $message->jurisdictionId);
+  }
+
+  /**
    * Selects jurisdiction mode from the referenced group.
    */
   public function testBuildResolvesJurisdictionModeFromNode(): void {
@@ -384,26 +429,30 @@ final class NotificationTextBuilderTest extends UnitTestCase {
   }
 
   /**
-   * Builds a mock node without jurisdiction but with a request_id of 42.
+   * Builds a mock node with an optional jurisdiction and request ID.
    *
    * No toUrl() stub on purpose: the builder must derive the CTA from the
    * branding package, never from the node's canonical (backend) URL.
    */
-  private function buildPlainNode(?bool $published = TRUE, string $requestId = '42'): NodeInterface&MockObject {
+  private function buildPlainNode(?bool $published = TRUE, string $requestId = '42', ?GroupInterface $jurisdiction = NULL): NodeInterface&MockObject {
     $requestIdField = $this->createMock(FieldItemListInterface::class);
     $requestIdField->method('isEmpty')->willReturn(FALSE);
     $requestIdField->method('getString')->willReturn($requestId);
+    $jurisdictionField = $this->createMock(EntityReferenceFieldItemListInterface::class);
+    $jurisdictionField->method('isEmpty')->willReturn($jurisdiction === NULL);
+    $jurisdictionField->method('referencedEntities')->willReturn($jurisdiction ? [$jurisdiction] : []);
 
     $node = $this->createMock(NodeInterface::class);
     if ($published !== NULL) {
       $node->method('isPublished')->willReturn($published);
     }
     $node->method('hasField')->willReturnMap([
-      ['field_jurisdiction', FALSE],
+      ['field_jurisdiction', $jurisdiction !== NULL],
       ['request_id', TRUE],
     ]);
     $node->method('get')->willReturnMap([
       ['request_id', $requestIdField],
+      ['field_jurisdiction', $jurisdictionField],
     ]);
 
     $language = $this->createMock(LanguageInterface::class);

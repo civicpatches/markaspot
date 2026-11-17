@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_dashboard\Kernel;
 
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\markaspot_dashboard\Controller\DuplicateController;
+use Drupal\markaspot_mail\Service\MailTextResolver;
 use Drupal\Tests\markaspot_ai\Kernel\DuplicateAccessKernelTestBase;
 use Drupal\user\Entity\User;
 use PHPUnit\Framework\Attributes\Group as TestGroup;
@@ -21,6 +22,19 @@ use Symfony\Component\HttpFoundation\Request;
 #[TestGroup('markaspot_dashboard')]
 #[RunTestsInSeparateProcesses]
 final class DuplicateReviewApiAccessKernelTest extends DuplicateAccessKernelTestBase {
+
+  /**
+   * Provides the real text resolver without enabling unrelated mail hooks.
+   */
+  protected function setUp(): void {
+    static::$modules[] = 'language';
+    parent::setUp();
+    $this->container->set('markaspot_mail.text_resolver', new MailTextResolver(
+      $this->container->get('config.factory'),
+      $this->container->get('language_manager'),
+      $this->container->get('token'),
+    ));
+  }
 
   /**
    * A same-tenant reviewer may reject a match through the API.
@@ -139,7 +153,7 @@ final class DuplicateReviewApiAccessKernelTest extends DuplicateAccessKernelTest
       $moduleHandler,
       $this->container->get('markaspot_group.status_term_scope'),
       $this->policy(),
-      NULL,
+      $this->container->get('markaspot_mail.text_resolver'),
       $this->container->get('lock'),
     );
     $controller->setStringTranslation($this->container->get('string_translation'));

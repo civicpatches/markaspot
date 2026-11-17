@@ -91,6 +91,14 @@ function markaspot_mail_mail(string $key, array &$message, array $params): void 
 
   /** @var \Drupal\markaspot_nuxt\Service\CitizenWordingResolver $wordingResolver */
   $wordingResolver = \Drupal::service('markaspot_nuxt.citizen_wording_resolver');
+  if ($notificationKey === 'status_duplicate' && trim($slots['subject']) === '') {
+    $slots = _markaspot_mail_replace_runtime_wording_slots(
+      $resolver->resolveShippedDuplicate($langcode),
+      $jurisdiction,
+      $langcode,
+    );
+    $slots = $resolver->replaceTokens($slots, ['node' => $node], $langcode);
+  }
   $wording = $wordingResolver->resolveMailTerms($jurisdiction, $langcode);
   $usesCustomWording = $wording['preset'] !== \Drupal\markaspot_nuxt\Service\CitizenWordingResolver::DEFAULT_PRESET;
 

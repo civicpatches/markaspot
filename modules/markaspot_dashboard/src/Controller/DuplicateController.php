@@ -159,6 +159,13 @@ class DuplicateController extends ControllerBase {
     if (!$lock->acquire($lock_name, 300.0)) {
       return new JsonResponse(['success' => FALSE, 'message' => 'This pair is being reviewed. Please retry.'], 409);
     }
+    $node_lock_name = $data['status'] === 'confirmed'
+      ? 'markaspot_duplicate_review_node:' . max($match->source_nid, $match->match_nid)
+      : NULL;
+    if ($node_lock_name !== NULL && !$lock->acquire($node_lock_name, 300.0)) {
+      $lock->release($lock_name);
+      return new JsonResponse(['success' => FALSE, 'message' => 'This report is being reviewed. Please retry.'], 409);
+    }
     $transaction = $this->database->startTransaction();
     try {
       if ($data['status'] === 'rejected') {
@@ -194,6 +201,24 @@ class DuplicateController extends ControllerBase {
             'message' => 'No selectable closed status is configured for this jurisdiction.',
           ], 409);
         }
+        if ((int) $duplicate_node->get('field_status')->target_id === $closed_tid) {
+          $closed_nid = (int) $duplicate_node->id();
+          $query = $this->database->select('markaspot_ai_duplicate_matches', 'm');
+          $closed_matches = $query->orConditionGroup()
+            ->condition($query->andConditionGroup()
+              ->condition('source_nid', $closed_nid)
+              ->condition('match_nid', $closed_nid, '<'))
+            ->condition($query->andConditionGroup()
+              ->condition('match_nid', $closed_nid)
+              ->condition('source_nid', $closed_nid, '<'));
+          $already_closed = $query->fields('m', ['id'])
+            ->condition('status', 'confirmed')
+            ->condition($closed_matches)
+            ->range(0, 1)->execute()->fetchField();
+          if ($already_closed !== FALSE) {
+            return new JsonResponse(['success' => FALSE, 'message' => 'This report was already closed as a duplicate.'], 409);
+          }
+        }
       }
       // Record the decision before the report save can dispatch a mail.
       $this->database->update('markaspot_ai_duplicate_matches')
@@ -221,6 +246,9 @@ class DuplicateController extends ControllerBase {
     }
     finally {
       unset($transaction);
+      if ($node_lock_name !== NULL) {
+        $lock->release($node_lock_name);
+      }
       $lock->release($lock_name);
     }
   }
@@ -247,6 +275,9 @@ class DuplicateController extends ControllerBase {
   /**
    * Confirm a duplicate: add status note and close the request.
    *
+   * Mail is dispatched during the save inside the transaction, so a later
+   * rollback cannot recall it.
+   *
    * @param \Drupal\node\NodeInterface $duplicate_node
    *   The duplicate service request node.
    * @param \Drupal\node\NodeInterface $source_node
@@ -264,12 +295,16 @@ class DuplicateController extends ControllerBase {
 
     /** @var \Drupal\markaspot_mail\Service\MailTextResolver $resolver */
     $resolver = $this->mailTextResolver ?? throw new \LogicException('Duplicate review requires the mail text resolver.');
+    $note_field = $source_node->isPublished() ? 'status_note' : 'private_status_note';
     $note_text = $resolver->resolveField(
       'markaspot_mail.texts',
       'status_duplicate',
-      $source_node->isPublished() ? 'status_note' : 'private_status_note',
+      $note_field,
       $langcode,
     );
+    if (trim($note_text) === '') {
+      $note_text = $resolver->resolveShippedDuplicateText($note_field, $langcode);
+    }
     $wording = $this->wordingResolver ?? new CitizenWordingResolver();
     $group_type = $this->configFactory->get('markaspot_open311.settings')->get('jurisdiction_group_type') ?: 'jur';
     $jurisdiction = $wording->resolveJurisdictionFromNode($duplicate_node, $group_type);

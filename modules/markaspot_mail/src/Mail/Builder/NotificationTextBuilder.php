@@ -98,6 +98,14 @@ final class NotificationTextBuilder implements MailBuilderInterface {
       $ctx->langcode,
     );
     $slots = $this->textResolver->replaceTokens($slots, ['node' => $node], $ctx->langcode);
+    if ($notificationKey === 'status_duplicate' && trim($slots['subject']) === '') {
+      $slots = $this->replaceRuntimeWording(
+        $this->textResolver->resolveShippedDuplicate($ctx->langcode),
+        $this->resolveJurisdictionGroupFromNode($node),
+        $ctx->langcode,
+      );
+      $slots = $this->textResolver->replaceTokens($slots, ['node' => $node], $ctx->langcode);
+    }
 
     if ($slots['subject'] === '') {
       $this->logger->warning('notification "@notification_key": empty subject after resolve, skipping branded render.', ['@notification_key' => $notificationKey]);
@@ -115,7 +123,8 @@ final class NotificationTextBuilder implements MailBuilderInterface {
     $linkNode = $notificationKey === 'status_duplicate' ? ($ctx->params['duplicate_kept'] ?? NULL) : $node;
     if ($slots['cta_label'] !== '' && $linkNode instanceof NodeInterface
       && ($notificationKey !== 'status_duplicate' || $linkNode->isPublished())) {
-      $ctaUrl = $this->buildCitizenRequestUrl($linkNode, $mode, $jurisdictionId, $ctx->langcode);
+      [$linkMode, $linkJurisdictionId] = $this->resolveJurisdictionFromNode($linkNode);
+      $ctaUrl = $this->buildCitizenRequestUrl($linkNode, $linkMode, $linkJurisdictionId, $ctx->langcode);
       if ($ctaUrl !== '') {
         $content['cta_label'] = $slots['cta_label'];
         $content['cta_url'] = $ctaUrl;

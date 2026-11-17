@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\markaspot_mail\Service;
 
 use Drupal\Component\Utility\Xss;
+use Drupal\Component\Serialization\Yaml;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\language\ConfigurableLanguageManagerInterface;
@@ -23,6 +24,8 @@ use Drupal\language\ConfigurableLanguageManagerInterface;
  * a field missing from both resolves to an empty string (or an empty
  * list for the sequence-typed body_blocks field), leaving the caller to
  * decide its own hardcoded fallback.
+ * Duplicate notifications with no usable subject use the shipped language
+ * defaults, since a generic status update would hide the duplicate decision.
  *
  * resolveField() serves single-field templates (markaspot_resubmission
  * .mail:resubmit_request, markaspot_fastmap.mail:workspace_verification /
@@ -114,7 +117,33 @@ class MailTextResolver {
    */
   public function resolve(string $configName, string $key, string $langcode): array {
     $merged = $this->mergedTemplate($configName, $key, $langcode);
+    if ($configName === 'markaspot_mail.texts' && $key === 'status_duplicate'
+      && trim((string) ($merged['subject'] ?? '')) === '') {
+      $merged = $this->shippedDuplicateTexts($langcode);
+    }
+    return $this->notificationSlots($merged);
+  }
 
+  /**
+   * Resolves all notification slots from the shipped duplicate template.
+   *
+   * @return array{subject: string, headline: string, intro: string, body_blocks: list<string>, cta_label: string, preheader: string}
+   *   The shipped notification slots.
+   */
+  public function resolveShippedDuplicate(string $langcode): array {
+    return $this->notificationSlots($this->shippedDuplicateTexts($langcode));
+  }
+
+  /**
+   * Normalizes template data to the six notification slots.
+   *
+   * @param array<string, mixed> $merged
+   *   The selected template data.
+   *
+   * @return array{subject: string, headline: string, intro: string, body_blocks: list<string>, cta_label: string, preheader: string}
+   *   All notification slots with missing values replaced by empty defaults.
+   */
+  private function notificationSlots(array $merged): array {
     $result = [];
     foreach (self::NOTIFICATION_SLOTS as $slot) {
       if ($slot === 'body_blocks') {
@@ -127,6 +156,29 @@ class MailTextResolver {
 
     /** @var array{subject: string, headline: string, intro: string, body_blocks: list<string>, cta_label: string, preheader: string} $result */
     return $result;
+  }
+
+  /**
+   * Reads a duplicate text from the module's shipped language defaults.
+   */
+  public function resolveShippedDuplicateText(string $field, string $langcode): string {
+    return (string) ($this->shippedDuplicateTexts($langcode)[$field] ?? '');
+  }
+
+  /**
+   * Loads duplicate defaults even after a tenant import removes the key.
+   *
+   * @return array<string, mixed>
+   *   The shipped duplicate texts in the requested language, or English.
+   */
+  private function shippedDuplicateTexts(string $langcode): array {
+    $path = dirname(__DIR__, 2) . '/config/install';
+    $file = "$path/language/$langcode/markaspot_mail.texts.yml";
+    if (!is_file($file)) {
+      $file = "$path/markaspot_mail.texts.yml";
+    }
+    $data = Yaml::decode((string) file_get_contents($file));
+    return $data['status_duplicate'] ?? [];
   }
 
   /**
