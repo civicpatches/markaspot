@@ -259,7 +259,10 @@ final class StatusNoteChangedTimeKernelTest extends KernelTestBase {
    */
   public function testRenumberingSkipsAddedNoteRule(): void {
     $node = $this->report();
-    $before = (int) $node->getChangedTime();
+    // An explicit timestamp isolates this hook's early return from core's
+    // automatic changed-time update when other field values change.
+    $before = (int) $node->getChangedTime() - 1;
+    $node->setChangedTime($before);
     $node->_markaspot_request_id_renumbering = 1;
     $this->now += 60;
     $this->append($node);
