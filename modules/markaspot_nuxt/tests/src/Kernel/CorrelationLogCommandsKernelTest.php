@@ -11,7 +11,6 @@ use Drupal\Component\Render\HtmlEscapedText;
 use Drupal\Core\Render\Markup;
 use Drupal\Core\StringTranslation\PluralTranslatableMarkup;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
-use Drupal\dblog\Controller\DbLogController;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\markaspot_nuxt\Drush\Commands\CorrelationLogCommands;
 use Drupal\markaspot_nuxt\Logging\CorrelationIdProvider;
@@ -66,7 +65,7 @@ final class CorrelationLogCommandsKernelTest extends KernelTestBase {
         '@correlation_id' => $provider->getId(),
         '@name' => '<citizen>',
         '%value' => 'quoted',
-        '@backtrace_string' => 'frame <one>',
+        '@backtrace_string' => "frame <one>\n\tframe  <two>",
         'uid' => 17,
         'channel' => 'request-test',
         'request_uri' => $request->getUri(),
@@ -92,7 +91,7 @@ final class CorrelationLogCommandsKernelTest extends KernelTestBase {
     $this->assertSame('192.0.2.1', $full[0]['hostname']);
     $this->assertStringEndsWith(self::FIRST, $full[0]['location']);
     $this->assertMatchesRegularExpression('/ (CET|CEST)$/', $full[0]['time']);
-    $this->assertSame('Request &lt;citizen&gt;: <em class="placeholder">quoted</em> <pre class="backtrace">frame &lt;one&gt;</pre>', $full[0]['message']);
+    $this->assertSame('Request <citizen>: quoted frame <one> frame <two>', $full[0]['message']);
     $this->assertCount(1, $command->lookup(self::SECOND)->getArrayCopy());
 
     $tester = $this->application();
@@ -136,7 +135,7 @@ final class CorrelationLogCommandsKernelTest extends KernelTestBase {
   }
 
   /**
-   * Core Stringable placeholders retain dblog's markup and escaping semantics.
+   * Core Stringable placeholders are rendered as decoded plain text.
    */
   public function testCoreMarkupVariables(): void {
     $values = [
@@ -150,11 +149,7 @@ final class CorrelationLogCommandsKernelTest extends KernelTestBase {
     foreach ($values as $value) {
       $this->insert(['@correlation_id' => self::FIRST, '@value' => $value], NULL, '@value');
     }
-    $formatter = $this->container->get('class_resolver')->getInstanceFromDefinition(DbLogController::class);
-    $expected = [];
-    foreach ($this->container->get('database')->select('watchdog', 'w')->fields('w')->orderBy('wid')->execute() as $entry) {
-      $expected[] = (string) $formatter->formatMessage($entry);
-    }
+    $expected = ['Label <name>', 'Label <name>', '2 items', 'safe markup', '<unsafe>', 'Nested Label <name>'];
     $rows = CorrelationLogCommands::create($this->container)->lookup(self::FIRST)->getArrayCopy();
     $this->assertSame($expected, array_column($rows, 'message'));
   }

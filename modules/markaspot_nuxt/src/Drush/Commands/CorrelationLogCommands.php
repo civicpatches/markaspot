@@ -8,6 +8,7 @@ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
 use Drupal\Component\Gettext\PoItem;
 use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Component\Render\HtmlEscapedText;
+use Drupal\Component\Utility\Html;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Datetime\DateFormatterInterface;
 use Drupal\Core\DependencyInjection\ClassResolverInterface;
@@ -59,7 +60,7 @@ final class CorrelationLogCommands extends DrushCommands {
    *   Inclusive time bounds, parsed by strtotime().
    *
    * @return \Consolidation\OutputFormatters\StructuredData\RowsOfFields
-   *   Log entries with the same message formatting as the dblog UI.
+   *   Log entries with plain-text messages formatted from dblog placeholders.
    */
   #[CLI\Command(name: 'markaspot:log', aliases: ['mas-log'])]
   #[CLI\Argument(name: 'id', description: 'A full UUID v4 or eight lowercase hex characters.')]
@@ -125,7 +126,7 @@ final class CorrelationLogCommands extends DrushCommands {
           'uid' => (int) $entry->uid,
           'hostname' => $entry->hostname,
           'location' => $entry->location,
-          'message' => (string) $formatter->formatMessage($entry),
+          'message' => preg_replace('/\s+/', ' ', Html::decodeEntities(strip_tags((string) $formatter->formatMessage($entry)))),
         ];
         if (count($rows) === 200) {
           break;
