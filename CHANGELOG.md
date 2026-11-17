@@ -1,5 +1,45 @@
 # Changelog
 
+## [11.9.254](https://github.com/civicpatches/markaspot/compare/11.9.253...11.9.254) (2026-11-17)
+
+### Features
+
+* **dashboard:** let staff create reports in their workspace without the citizen consent through a single-use intake ticket ([3a27178](https://github.com/civicpatches/markaspot/commit/3a271783de338187b6823d5fbe487549a1e2ca25))
+* **fastmap:** add the lifecycle switch, the lifecycle record and acceptance at signup ([c302511](https://github.com/civicpatches/markaspot/commit/c302511461ea1364c57c9900374f3fc46f2b6e82))
+* **fastmap:** keep unopened workspaces closed to public reports and without expiry ([993ab3c](https://github.com/civicpatches/markaspot/commit/993ab3ca1d7dba4507f1bc358e844a64683ea3b2))
+* **fastmap:** let the operator name themselves and open the map ([495cea3](https://github.com/civicpatches/markaspot/commit/495cea36b907d4f2a67d6728ab6e204360a56d76))
+* **fastmap:** notify the operator about waiting reports and name the Free limit ([b1d48c2](https://github.com/civicpatches/markaspot/commit/b1d48c2cd34635c7a8a1d7a1dbd0e30e82944936))
+* **group:** tell the dashboard whether the account may filter private report fields ([ac777d5](https://github.com/civicpatches/markaspot/commit/ac777d5dc88e8ebbf992cf712115a2b4db53a51c))
+* **mail:** add a command that moves status mails from the old automation to the status keys ([76cd0d6](https://github.com/civicpatches/markaspot/commit/76cd0d6ebb1059a3d2009684099fc89b38286b1c))
+* **nuxt:** add a correlation id to every log line and pass it through from the proxy ([d72c212](https://github.com/civicpatches/markaspot/commit/d72c2127572032150170da0e5d0ae52ccb9fb46c))
+* **nuxt:** add a Drush lookup of log entries by correlation id ([e7c824a](https://github.com/civicpatches/markaspot/commit/e7c824a74f45d0dae04fa7c613db10d3ea4ac232))
+
+### Bug Fixes
+
+* **dashboard:** keep organisation-only members out of staff intake and fail closed on ticket store errors ([f0b4e1c](https://github.com/civicpatches/markaspot/commit/f0b4e1c43951c9d55220ce208d37aab7b93a12f8))
+* **dashboard:** keep profile modules discoverable in kernel tests ([010f04f](https://github.com/civicpatches/markaspot/commit/010f04f5ac0b95873df48b1c30ccfb7983dd4ff2))
+* **duplicates:** close the newer report with a localized note and send a duplicate mail instead of the resolved mail ([600be3f](https://github.com/civicpatches/markaspot/commit/600be3fc70ed97d4aa87254b12e3ed8e6437fbcf))
+* **duplicates:** fall back to shipped texts, lock the closed report and link the kept report in its own jurisdiction ([54ff1e0](https://github.com/civicpatches/markaspot/commit/54ff1e045fbe9307c6f8201f62540cd4f6334dfb))
+* **duplicates:** mail only where the closed status mails and keep the duplicate texts free of term agreement ([0964a4e](https://github.com/civicpatches/markaspot/commit/0964a4e5a5c6ecc6276f0562489e72cb5c78ebe5))
+* **fastmap:** drop the longer publish lock wait and retry mixed mail failures ([799d701](https://github.com/civicpatches/markaspot/commit/799d701b0425b47528fc361ca5df3fe958e7b845))
+* **fastmap:** enable notifier dependencies in kernel fixtures ([572cb39](https://github.com/civicpatches/markaspot/commit/572cb39f2c73a9b9d5b2c1cfad01ec5d03501841))
+* **fastmap:** guard tier checks on runtime dependencies ([717ad01](https://github.com/civicpatches/markaspot/commit/717ad019af1c84046ca057d7820cd51ccfd488bf))
+* **fastmap:** wait for the publish lock and settle undeliverable operator mails ([dc8f1ab](https://github.com/civicpatches/markaspot/commit/dc8f1ab2853ec9332ad07061b4b75bd821a31545))
+* **mail:** configure duplicate publication mocks once ([745d062](https://github.com/civicpatches/markaspot/commit/745d062f1bd2cd85085d2b3c3b829176b5a6f2cd))
+* **mail:** leave out the report link when the report is not published ([6ee4676](https://github.com/civicpatches/markaspot/commit/6ee4676ba7886bf0bc868a7720df7d2b7837443f))
+* **mail:** ship only the key-driven status mail automation on new sites ([32d0bed](https://github.com/civicpatches/markaspot/commit/32d0bedcc9df4b4fc5e7992e79b2eb47ea43b59c))
+* **nuxt:** block tenant overrides of fastmap operator texts ([c49af95](https://github.com/civicpatches/markaspot/commit/c49af9563b18dceae21f33b564cfa26d3b4d6f46))
+* **nuxt:** enable monolog without re-importing translations ([66fb065](https://github.com/civicpatches/markaspot/commit/66fb065ac97c09a4f6304323d8a6ca029d863f30))
+* **nuxt:** print plain-text messages in the correlation log lookup ([ee2fef8](https://github.com/civicpatches/markaspot/commit/ee2fef834f8b34d176fa4d12123d3dda0500a97f))
+* **passwordless:** model administrator permissions in filter tests ([c851480](https://github.com/civicpatches/markaspot/commit/c851480f92390a881c8ed25831641c71cd89d8a5))
+* **request_id:** keep the report title in the report's own language ([0b451cb](https://github.com/civicpatches/markaspot/commit/0b451cb03fa4556a2de3b88785548a89ad1a1607))
+* **service-request:** isolate the renumbering timestamp assertion ([174d20d](https://github.com/civicpatches/markaspot/commit/174d20de1b6f66f5b94ae89fbffc64f193367b42))
+* **service-request:** move the changed time when a status note is added ([83633a7](https://github.com/civicpatches/markaspot/commit/83633a7e9ec08b20957d199ac31163cf258a1683))
+
+### Refactoring
+
+* **dashboard:** share the staff capability check without the vision module ([2c26bc5](https://github.com/civicpatches/markaspot/commit/2c26bc5117a7b28b0e26e26a9a453487b1a0e31b))
+
 ## [11.9.253](https://github.com/civicpatches/markaspot/compare/11.9.252...11.9.253) (2026-11-16)
 
 ### Bug Fixes
