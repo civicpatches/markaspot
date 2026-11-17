@@ -90,6 +90,9 @@ final class StaffIntakeHttpKernelTest extends KernelTestBase {
    */
   public function register(ContainerBuilder $container): void {
     parent::register($container);
+    // This module-only kernel has no installed or uninstalled profile.
+    // Keep its enabled profile modules discoverable for permission providers.
+    $container->setParameter('install_profile', NULL);
     $container->register('test.jsonapi_resource_cache', NullBackend::class)->setArguments(['jsonapi_resource_types']);
     $container->getDefinition('jsonapi.resource_type.repository')->replaceArgument(3, new Reference('test.jsonapi_resource_cache'));
   }
