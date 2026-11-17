@@ -314,8 +314,10 @@ class WorkspaceLifecycleGate {
     if ($workspace !== NULL && WorkspaceTier::resolve($workspace, TRUE) === 'free') {
       return FALSE;
     }
-    // Without the group module file (unit tests) staff never bypass.
-    return function_exists('_markaspot_group_user_is_member_in_jurisdiction_scope')
+    // Only an enabled group module provides the runtime membership check.
+    // Loading its file alone does not make that dependency available.
+    return $this->moduleHandler->moduleExists('markaspot_group')
+      && function_exists('_markaspot_group_user_is_member_in_jurisdiction_scope')
       && _markaspot_group_user_is_member_in_jurisdiction_scope($account, (int) $group->id());
   }
 

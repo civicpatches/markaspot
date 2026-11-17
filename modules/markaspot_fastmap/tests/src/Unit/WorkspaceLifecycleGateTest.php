@@ -411,6 +411,23 @@ class WorkspaceLifecycleGateTest extends UnitTestCase {
   }
 
   /**
+   * Loaded hooks cannot grant a staff bypass without the enabled group module.
+   *
+   * @covers ::accountBypassesTierLimit
+   */
+  public function testTierLimitBypassWithoutEnabledGroupModule(): void {
+    require_once dirname(__DIR__, 4) . '/markaspot_group/markaspot_group.module';
+    $this->assertFalse(\Drupal::hasContainer());
+    $gate = $this->gate();
+    $workspace = $this->group(3, NULL);
+    $staff = $this->account(10, ['tenant_admin'], ['bypass mas validation']);
+    $admin = $this->account(40, ['administrator'], ['administer nodes']);
+
+    $this->assertFalse($gate->accountBypassesTierLimit($staff, $workspace));
+    $this->assertTrue($gate->accountBypassesTierLimit($admin, $workspace));
+  }
+
+  /**
    * The Free limit binds workspace staff in workspaces with a record.
    *
    * @covers ::accountBypassesTierLimit
@@ -429,9 +446,9 @@ class WorkspaceLifecycleGateTest extends UnitTestCase {
       $this->assertTrue($gate->accountBypassesTierLimit($admin, $workspace), "platform administrator, record workspace $label");
       $this->assertFalse($gate->accountBypassesTierLimit($citizen, $workspace), "citizen, record workspace $label");
     }
-    // Without a record the old rule holds: membership decides for staff. The
-    // group module file is not loaded in a unit test, so staff never bypass
-    // here; the membership rule is covered by the markaspot_group kernel test
+    // Without a record the old rule holds: membership decides for staff.
+    // Without the membership helper staff never bypass; the runtime rule is
+    // covered by the markaspot_group kernel test
     // ModeratorNewRequestPublishScopeKernelTest.
     if (!function_exists('_markaspot_group_user_is_member_in_jurisdiction_scope')) {
       $this->assertFalse($gate->accountBypassesTierLimit($staff, $old), 'staff, old workspace, no membership check available');

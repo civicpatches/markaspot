@@ -196,12 +196,8 @@ class TierLimitConstraintValidator extends ConstraintValidator implements Contai
     if ($this->lifecycleGate !== NULL) {
       return $this->lifecycleGate->accountBypassesTierLimit($this->currentUser, $group);
     }
-    // Both module files are always loaded on a site; without them (unit
-    // tests) only operators bypass, never staff.
-    if (function_exists('_markaspot_fastmap_account_bypasses_tier_limit')
-      && function_exists('_markaspot_group_user_is_member_in_jurisdiction_scope')) {
-      return _markaspot_fastmap_account_bypasses_tier_limit($this->currentUser, $group);
-    }
+    // Without the injected gate, fail closed for staff. Loaded procedural
+    // hooks alone do not provide a container or a scoped membership check.
     return $this->currentUser->hasPermission('administer nodes');
   }
 
