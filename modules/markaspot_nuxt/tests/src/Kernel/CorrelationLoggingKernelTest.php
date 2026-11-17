@@ -206,6 +206,7 @@ final class CorrelationLoggingKernelTest extends KernelTestBase {
    */
   public function testUpdateEnablesMonolog(): void {
     require_once dirname(__DIR__, 3) . '/markaspot_nuxt.install';
+    $this->assertFalse($this->container->get('module_handler')->moduleExists('locale'));
     $this->disableModules(['monolog']);
     $this->assertFalse($this->container->get('module_handler')->moduleExists('monolog'));
     markaspot_nuxt_update_11921();

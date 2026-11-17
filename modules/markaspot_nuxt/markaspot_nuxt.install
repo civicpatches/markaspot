@@ -1234,6 +1234,32 @@ function markaspot_nuxt_update_11920(): string {
  * Enables correlated JSON logging while retaining database logging.
  */
 function markaspot_nuxt_update_11921(): string {
-  \Drupal::service('module_installer')->install(['monolog']);
+  if (\Drupal::moduleHandler()->moduleExists('monolog')) {
+    return 'Monolog is already enabled.';
+  }
+
+  // locale_system_update() schedules config translation updates even when
+  // translation.import_enabled is FALSE. Its installer guard skips both that
+  // batch and translation downloads. Monolog has no default configuration;
+  // use this guard only during its installation and restore the caller's state.
+  $has_locale = \Drupal::moduleHandler()->moduleExists('locale');
+  $had_install_state = array_key_exists('install_state', $GLOBALS);
+  $install_state = $GLOBALS['install_state'] ?? NULL;
+  try {
+    if ($has_locale) {
+      $GLOBALS['install_state']['installation_finished'] = FALSE;
+    }
+    \Drupal::service('module_installer')->install(['monolog']);
+  }
+  finally {
+    if ($has_locale) {
+      if ($had_install_state) {
+        $GLOBALS['install_state'] = $install_state;
+      }
+      else {
+        unset($GLOBALS['install_state']);
+      }
+    }
+  }
   return 'Enabled Monolog for request correlation logging.';
 }
