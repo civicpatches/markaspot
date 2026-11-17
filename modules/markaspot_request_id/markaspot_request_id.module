@@ -12,6 +12,7 @@ use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Field\BaseFieldDefinition;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Language\LanguageInterface;
 
 /**
  * Implements hook_help().
@@ -111,7 +112,15 @@ function markaspot_request_id_node_presave(EntityInterface $node) {
       }
     }
     else {
-      $node->title = markaspot_request_id_create_title($node, $node->request_id->value);
+      $langcode = $node->language()->getId();
+      if (in_array($langcode, [
+        '',
+        LanguageInterface::LANGCODE_NOT_SPECIFIED,
+        LanguageInterface::LANGCODE_NOT_APPLICABLE,
+      ], TRUE)) {
+        $langcode = \Drupal::languageManager()->getDefaultLanguage()->getId();
+      }
+      $node->title = markaspot_request_id_create_title($node, $node->request_id->value, $langcode);
     }
   }
 }
