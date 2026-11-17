@@ -38,13 +38,6 @@ final class SendTermNotificationMail extends NotificationMailActionBase {
       return;
     }
 
-    // Keep ECA's recipient and consent gates; replace this save's mail key.
-    $kept = DuplicateNotification::keptReport($entity);
-    if ($kept !== NULL) {
-      $this->sendNotification($entity, 'status_duplicate', ['duplicate_kept' => $kept]);
-      return;
-    }
-
     $status_field = $entity->get('field_status');
     if (!$status_field instanceof EntityReferenceFieldItemListInterface || $status_field->isEmpty()) {
       return;
@@ -63,6 +56,13 @@ final class SendTermNotificationMail extends NotificationMailActionBase {
 
     $notification_key = trim((string) ($notification_field->getValue()[0]['value'] ?? ''));
     if ($notification_key === '') {
+      return;
+    }
+
+    // Replace an enabled status mail, preserving the term's no-mail choice.
+    $kept = DuplicateNotification::keptReport($entity);
+    if ($kept !== NULL) {
+      $this->sendNotification($entity, 'status_duplicate', ['duplicate_kept' => $kept]);
       return;
     }
 

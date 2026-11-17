@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Vi er ikke ansvarlige for denne {{ citizen_term_singular }}.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] er en dublet'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: lukket som dublet'
   headline: 'Problemet er allerede indberettet'
-  intro: '{{ citizen_term_singular_title }} beskriver samme problem som en eksisterende {{ citizen_term_singular }}. Behandlingen fortsætter under den {{ citizen_term_singular }}.'
-  cta_label: 'Se den bevarede {{ citizen_term_singular }}'
-  preheader: 'Problemet er allerede indberettet'
-  status_note: 'Lukket som dublet af {{ citizen_term_singular }} #@request_id. Behandlingen fortsætter under den {{ citizen_term_singular }}.'
-  private_status_note: 'Lukket som dublet af en eksisterende {{ citizen_term_singular }}. Behandlingen fortsætter under den {{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: problemet er allerede indberettet. Behandlingen fortsætter i den eksisterende indberetning.'
+  cta_label: 'Se den eksisterende indberetning'
+  preheader: 'Problemet er allerede indberettet.'
+  status_note: 'Lukket som dublet. Behandlingen af problemet fortsætter under #@request_id.'
+  private_status_note: 'Lukket som dublet. Problemet er allerede indberettet, og behandlingen fortsætter i den eksisterende indberetning.'
   body_blocks:
     - '[node:latest_status_note]'

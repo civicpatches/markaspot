@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Este {{ citizen_term_singular }} no es de nuestra competencia.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] está duplicado'
-  headline: 'El problema ya se ha comunicado'
-  intro: '{{ citizen_term_singular_title }} describe el mismo problema que otro {{ citizen_term_singular }} existente. La gestión continuará en ese {{ citizen_term_singular }}.'
-  cta_label: 'Ver el {{ citizen_term_singular }} que se mantiene'
-  preheader: 'El problema ya se ha comunicado'
-  status_note: 'Cerrado por ser un duplicado del {{ citizen_term_singular }} #@request_id. La gestión continúa en ese {{ citizen_term_singular }}.'
-  private_status_note: 'Cerrado por ser un duplicado de un {{ citizen_term_singular }} existente. La gestión continúa en ese {{ citizen_term_singular }}.'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: cierre por duplicidad'
+  headline: 'Este problema ya se ha comunicado'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: este problema ya se ha comunicado. Su tramitación continúa en el reporte existente.'
+  cta_label: 'Ver el reporte existente'
+  preheader: 'Este problema ya se ha comunicado.'
+  status_note: 'Cierre por duplicidad. La tramitación del problema continúa en #@request_id.'
+  private_status_note: 'Cierre por duplicidad. Este problema ya se ha comunicado y su tramitación continúa en el reporte existente.'
   body_blocks:
     - '[node:latest_status_note]'

@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Tämä asia ei kuulu vastuullemme.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] on päällekkäinen'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: suljettu kaksoiskappaleena'
   headline: 'Asiasta on jo ilmoitettu'
-  intro: '{{ citizen_term_singular_title }} koskee samaa asiaa kuin aiempi {{ citizen_term_singular }}. Asian käsittely jatkuu sen yhteydessä.'
-  cta_label: 'Näytä aiempi {{ citizen_term_singular }}'
-  preheader: 'Asiasta on jo ilmoitettu'
-  status_note: 'Suljettu {{ citizen_term_singular }} #@request_id kaksoiskappaleena. Asian käsittely jatkuu sen yhteydessä.'
-  private_status_note: 'Suljettu aiemman {{ citizen_term_singular }} kaksoiskappaleena. Asian käsittely jatkuu sen yhteydessä.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: asiasta on jo ilmoitettu. Käsittely jatkuu aiemman ilmoituksen yhteydessä.'
+  cta_label: 'Näytä aiempi ilmoitus'
+  preheader: 'Asiasta on jo ilmoitettu.'
+  status_note: 'Suljettu kaksoiskappaleena. Asian käsittely jatkuu ilmoituksen #@request_id yhteydessä.'
+  private_status_note: 'Suljettu kaksoiskappaleena. Asiasta on jo ilmoitettu ja käsittely jatkuu aiemman ilmoituksen yhteydessä.'
   body_blocks:
     - '[node:latest_status_note]'

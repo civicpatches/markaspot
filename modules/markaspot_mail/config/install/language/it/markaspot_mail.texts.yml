@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Questa {{ citizen_term_singular }} non è di nostra competenza.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] è un duplicato'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: chiusura per duplicazione'
   headline: 'Il problema è già stato segnalato'
-  intro: '{{ citizen_term_singular_title }} riguarda lo stesso problema di una {{ citizen_term_singular }} esistente. La gestione proseguirà su quel{{ citizen_term_singular }}.'
-  cta_label: 'Visualizza {{ citizen_term_singular }} mantenuta'
-  preheader: 'Il problema è già stato segnalato'
-  status_note: 'Chiusa come duplicato del{{ citizen_term_singular }} #@request_id. La gestione prosegue su quel{{ citizen_term_singular }}.'
-  private_status_note: 'Chiusa come duplicato di una {{ citizen_term_singular }} esistente. La gestione prosegue su quel{{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: il problema è già stato segnalato. La gestione prosegue nella segnalazione esistente.'
+  cta_label: 'Visualizza la segnalazione esistente'
+  preheader: 'Il problema è già stato segnalato.'
+  status_note: 'Chiusura per duplicazione. La gestione del problema prosegue nella segnalazione #@request_id.'
+  private_status_note: 'Chiusura per duplicazione. Il problema è già stato segnalato e la gestione prosegue nella segnalazione esistente.'
   body_blocks:
     - '[node:latest_status_note]'

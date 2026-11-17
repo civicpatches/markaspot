@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Vi er ikke ansvarlige for denne {{ citizen_term_singular }}.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] er et duplikat'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: lukket som duplikat'
   headline: 'Problemet er allerede meldt'
-  intro: '{{ citizen_term_singular_title }} beskriver samme problem som en eksisterende {{ citizen_term_singular }}. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
-  cta_label: 'Se {{ citizen_term_singular }} som beholdes'
-  preheader: 'Problemet er allerede meldt'
-  status_note: 'Lukket som duplikat av {{ citizen_term_singular }} #@request_id. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
-  private_status_note: 'Lukket som duplikat av en eksisterende {{ citizen_term_singular }}. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: problemet er allerede meldt. Behandlingen fortsetter i den eksisterende meldingen.'
+  cta_label: 'Se den eksisterende meldingen'
+  preheader: 'Problemet er allerede meldt.'
+  status_note: 'Lukket som duplikat. Behandlingen av problemet fortsetter under #@request_id.'
+  private_status_note: 'Lukket som duplikat. Problemet er allerede meldt, og behandlingen fortsetter i den eksisterende meldingen.'
   body_blocks:
     - '[node:latest_status_note]'

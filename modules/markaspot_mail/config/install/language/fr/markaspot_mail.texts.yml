@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Ce {{ citizen_term_singular }} ne relève pas de notre compétence.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] est un doublon'
-  headline: '{{ citizen_term_singular_title }} concerne un problème déjà signalé'
-  intro: '{{ citizen_term_singular_title }} décrit le même problème qu’un {{ citizen_term_singular }} existant. Son traitement se poursuit dans ce dernier.'
-  cta_label: 'Voir le {{ citizen_term_singular }} conservé'
-  preheader: '{{ citizen_term_singular_title }} concerne un problème déjà signalé'
-  status_note: 'Fermé comme doublon du {{ citizen_term_singular }} #@request_id. Le traitement se poursuit dans ce dernier.'
-  private_status_note: 'Fermé comme doublon d’un {{ citizen_term_singular }} existant. Le traitement se poursuit dans ce dernier.'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] : clôture pour doublon'
+  headline: 'Ce problème a déjà été signalé'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id] : ce problème a déjà été signalé. Son traitement se poursuit dans le signalement existant.'
+  cta_label: 'Voir le signalement existant'
+  preheader: 'Ce problème a déjà été signalé.'
+  status_note: 'Clôture pour doublon. Le traitement du problème se poursuit sous le numéro #@request_id.'
+  private_status_note: 'Clôture pour doublon. Ce problème a déjà été signalé et son traitement se poursuit dans le signalement existant.'
   body_blocks:
     - '[node:latest_status_note]'

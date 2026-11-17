@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'To zgłoszenie nie leży w naszej właściwości.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] jest duplikatem'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: zamknięcie duplikatu'
   headline: 'Ten problem został już zgłoszony'
-  intro: '{{ citizen_term_singular_title }} dotyczy tego samego problemu co istniejące {{ citizen_term_singular }}. Jego obsługa będzie kontynuowana w tamtym {{ citizen_term_singular }}.'
-  cta_label: 'Zobacz pozostawione {{ citizen_term_singular }}'
-  preheader: 'Ten problem został już zgłoszony'
-  status_note: 'Zamknięto jako duplikat {{ citizen_term_singular }} #@request_id. Obsługa jest kontynuowana w tamtym {{ citizen_term_singular }}.'
-  private_status_note: 'Zamknięto jako duplikat istniejącego {{ citizen_term_singular }}. Obsługa jest kontynuowana w tamtym {{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: ten problem został już zgłoszony. Obsługa jest kontynuowana w ramach istniejącego zgłoszenia.'
+  cta_label: 'Zobacz istniejące zgłoszenie'
+  preheader: 'Ten problem został już zgłoszony.'
+  status_note: 'Zamknięcie duplikatu. Obsługa problemu jest kontynuowana pod numerem #@request_id.'
+  private_status_note: 'Zamknięcie duplikatu. Ten problem został już zgłoszony i obsługa jest kontynuowana w ramach istniejącego zgłoszenia.'
   body_blocks:
     - '[node:latest_status_note]'

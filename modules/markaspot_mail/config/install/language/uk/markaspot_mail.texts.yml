@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Це звернення не належить до нашої компетенції.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] дублює наявне'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: закриття дубліката'
   headline: 'Про цю проблему вже повідомили'
-  intro: '{{ citizen_term_singular_title }} описує ту саму проблему, що й наявне {{ citizen_term_singular }}. Робота продовжиться в межах того {{ citizen_term_singular }}.'
-  cta_label: 'Переглянути {{ citizen_term_singular }}, що залишається'
-  preheader: 'Про цю проблему вже повідомили'
-  status_note: 'Закрито як дублікат {{ citizen_term_singular }} #@request_id. Робота продовжується в межах того {{ citizen_term_singular }}.'
-  private_status_note: 'Закрито як дублікат наявного {{ citizen_term_singular }}. Робота продовжується в межах того {{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: про цю проблему вже повідомили. Робота продовжується в межах попереднього звернення.'
+  cta_label: 'Переглянути попереднє звернення'
+  preheader: 'Про цю проблему вже повідомили.'
+  status_note: 'Закрито як дублікат. Робота над проблемою продовжується в межах звернення #@request_id.'
+  private_status_note: 'Закрито як дублікат. Про цю проблему вже повідомили, і робота продовжується в межах попереднього звернення.'
   body_blocks:
     - '[node:latest_status_note]'

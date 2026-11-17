@@ -194,8 +194,8 @@ class DuplicateController extends ControllerBase {
             'message' => 'No selectable closed status is configured for this jurisdiction.',
           ], 409);
         }
-        $this->confirmDuplicate($duplicate_node, $source_node, $closed_tid);
       }
+      // Record the decision before the report save can dispatch a mail.
       $this->database->update('markaspot_ai_duplicate_matches')
         ->fields([
           'status' => $new_status,
@@ -204,6 +204,9 @@ class DuplicateController extends ControllerBase {
         ])
         ->condition('id', $match_id)
         ->execute();
+      if ($new_status === 'confirmed') {
+        $this->confirmDuplicate($duplicate_node, $source_node, $closed_tid);
+      }
 
       return new JsonResponse([
         'success' => TRUE,

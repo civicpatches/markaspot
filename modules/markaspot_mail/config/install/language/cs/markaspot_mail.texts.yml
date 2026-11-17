@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Toto hlášení nespadá do naší působnosti.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] je duplicitní'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: uzavření duplicity'
   headline: 'Tento problém již byl nahlášen'
-  intro: '{{ citizen_term_singular_title }} popisuje stejný problém jako již existující {{ citizen_term_singular }}. Řešení bude pokračovat u něj.'
-  cta_label: 'Zobrazit ponechané {{ citizen_term_singular }}'
-  preheader: 'Tento problém již byl nahlášen'
-  status_note: 'Uzavřeno jako duplikát {{ citizen_term_singular }} #@request_id. Řešení pokračuje u něj.'
-  private_status_note: 'Uzavřeno jako duplikát existujícího {{ citizen_term_singular }}. Řešení pokračuje u něj.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: tento problém již byl nahlášen. Řešení pokračuje u stávajícího hlášení.'
+  cta_label: 'Zobrazit stávající hlášení'
+  preheader: 'Tento problém již byl nahlášen.'
+  status_note: 'Uzavření duplicity. Řešení problému pokračuje pod číslem #@request_id.'
+  private_status_note: 'Uzavření duplicity. Tento problém již byl nahlášen a řešení pokračuje u stávajícího hlášení.'
   body_blocks:
     - '[node:latest_status_note]'

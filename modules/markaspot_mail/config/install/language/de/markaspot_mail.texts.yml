@@ -35,11 +35,11 @@ status_not_responsible:
 
 status_duplicate:
   subject: '{{ citizen_term_singular_title }} #[node:request_id] wurde als Dublette geschlossen'
-  headline: '{{ citizen_term_singular_title }} betrifft ein bereits gemeldetes Anliegen'
-  intro: '{{ citizen_term_singular_title }} beschreibt dasselbe Anliegen wie eine bereits vorhandene {{ citizen_term_singular_title }}. Die Bearbeitung wird dort fortgesetzt.'
-  cta_label: 'Verbleibende {{ citizen_term_singular_title }} ansehen'
-  preheader: '{{ citizen_term_singular_title }} betrifft ein bereits gemeldetes Anliegen'
-  status_note: 'Als Dublette geschlossen. Das Anliegen wird bei #@request_id weiterbearbeitet. Die Bearbeitung wird dort fortgesetzt.'
-  private_status_note: 'Als Dublette geschlossen. Das Anliegen wurde bereits gemeldet. Die Bearbeitung wird dort fortgesetzt.'
+  headline: 'Anliegen wurde bereits gemeldet'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id] beschreibt ein Anliegen, das bereits gemeldet wurde. Die Bearbeitung wird dort fortgesetzt.'
+  cta_label: 'Bestehendes Anliegen ansehen'
+  preheader: 'Anliegen wurde bereits gemeldet.'
+  status_note: 'Als Dublette geschlossen. Das Anliegen wird unter #@request_id weiterbearbeitet.'
+  private_status_note: 'Als Dublette geschlossen. Das Anliegen wurde bereits gemeldet und wird dort weiterbearbeitet.'
   body_blocks:
     - '[node:latest_status_note]'

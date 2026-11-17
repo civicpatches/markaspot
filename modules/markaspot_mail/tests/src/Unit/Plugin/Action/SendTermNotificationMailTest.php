@@ -15,10 +15,12 @@ use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\markaspot_mail\Plugin\Action\SendTermNotificationMail;
+use Drupal\markaspot_mail\Service\DuplicateNotification;
 use Drupal\node\NodeInterface;
 use Drupal\taxonomy\TermInterface;
 use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use Psr\Log\LoggerInterface;
 
@@ -32,7 +34,8 @@ final class SendTermNotificationMailTest extends UnitTestCase {
   /**
    * Empty keys are a silent no-op and never consume flood capacity.
    */
-  public function testEmptyNotificationKeySkipsSilently(): void {
+  #[DataProvider('emptyNotificationKeys')]
+  public function testEmptyNotificationKeySkipsSilently(string $key, bool $duplicate): void {
     $mail_manager = $this->createMock(MailManagerInterface::class);
     $mail_manager->expects($this->never())->method('mail');
     $flood = $this->createMock(FloodInterface::class);
@@ -47,7 +50,29 @@ final class SendTermNotificationMailTest extends UnitTestCase {
       flood: $flood,
       logger: $logger,
     );
-    $action->execute($this->buildNode(''));
+    $node = $this->buildNode($key);
+    if ($duplicate) {
+      $node->method('save')->willReturnCallback(function () use ($action, $node): int {
+        $action->execute($node);
+        return 2;
+      });
+      DuplicateNotification::save($node, $this->createMock(NodeInterface::class));
+    }
+    else {
+      $action->execute($node);
+    }
+  }
+
+  /**
+   * Empty and whitespace-only keys also disable duplicate notifications.
+   */
+  public static function emptyNotificationKeys(): array {
+    return [
+      'empty' => ['', FALSE],
+      'whitespace' => ['  ', FALSE],
+      'duplicate empty' => ['', TRUE],
+      'duplicate whitespace' => ['  ', TRUE],
+    ];
   }
 
   /**

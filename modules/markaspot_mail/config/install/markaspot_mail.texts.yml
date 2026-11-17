@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'We are not responsible for this {{ citizen_term_singular }}.'
 
 status_duplicate:
-  subject: 'Your {{ citizen_term_singular }} #[node:request_id] was closed as a duplicate'
-  headline: 'Your {{ citizen_term_singular }} describes an existing matter'
-  intro: 'Your {{ citizen_term_singular }} describes the same matter as an existing {{ citizen_term_singular }}. Work on this matter will continue there.'
-  cta_label: 'View the remaining {{ citizen_term_singular }}'
-  preheader: 'Your {{ citizen_term_singular }} describes an existing matter'
-  status_note: 'Closed as a duplicate of {{ citizen_term_singular }} #@request_id. Work on this matter continues there.'
-  private_status_note: 'Closed as a duplicate of an existing {{ citizen_term_singular }}. Work on this matter continues there.'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] was closed as a duplicate'
+  headline: 'This matter was already raised'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id] describes a matter that was already raised. Work will continue under the existing entry.'
+  cta_label: 'View the existing entry'
+  preheader: 'This matter was already raised.'
+  status_note: 'Closed as a duplicate. Work on this matter continues under #@request_id.'
+  private_status_note: 'Closed as a duplicate. This matter was already raised and work continues under the existing entry.'
   body_blocks:
     - '[node:latest_status_note]'

@@ -49,7 +49,9 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
    * Both entry directions keep the older report and disclose only public IDs.
    */
   #[DataProvider('directions')]
-  public function testClosure(bool $reverse, bool $published, string $langcode, bool $consent): void {
+  public function testClosure(bool $reverse, bool $published, string $langcode, bool $consent, string $notificationKey = 'status_closed'): void {
+    Term::load(5)->set('field_notification_key', $notificationKey)->save();
+    $expects_mail = $consent && $notificationKey !== '';
     $kept = $this->report(4);
     $kept->set('request_id', 'KEPT-42')->set('status', $published)->save();
     $closed = $this->report(4);
@@ -81,8 +83,8 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
     $this->assertStringContainsString($langcode === 'de' ? 'Als Dublette' : 'Closed as a duplicate', $body);
     $published ? $this->assertStringContainsString('KEPT-42', $body) : $this->assertStringNotContainsString('KEPT-42', $body);
     $mails = $this->mails();
-    $this->assertCount($consent ? 1 : 0, $mails);
-    if ($consent) {
+    $this->assertCount($expects_mail ? 1 : 0, $mails);
+    if ($expects_mail) {
       $this->assertSame('markaspot_mail_notification_status_duplicate', $mails[0]['id']);
       $this->assertSame($langcode, $mails[0]['langcode']);
       $this->assertSame('reporter@example.test', $mails[0]['to']);
@@ -93,15 +95,15 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
     $this->assertNull(DuplicateNotification::keptReport($saved));
     // An HTTP retry is successful but creates neither a second note nor mail.
     $this->controller()->reviewMatch((int) $match, $request);
-    $this->assertCount($consent ? 1 : 0, $this->mails());
+    $this->assertCount($expects_mail ? 1 : 0, $this->mails());
     $storage->resetCache();
     $this->assertCount(1, Node::load($closed->id())->get('field_status_notes'));
     // The override does not leak into an ordinary later status change.
     $this->resetMail();
     $saved->set('field_status', '4')->save();
     $saved->set('field_status', '5')->save();
-    $this->assertCount($consent ? 1 : 0, $this->mails());
-    if ($consent) {
+    $this->assertCount($expects_mail ? 1 : 0, $this->mails());
+    if ($expects_mail) {
       $this->assertSame('markaspot_mail_notification_status_closed', $this->mails()[0]['id']);
     }
   }
@@ -115,6 +117,7 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
       'newer entry' => [TRUE, TRUE, 'de', TRUE],
       'unpublished kept report' => [FALSE, FALSE, 'de', TRUE],
       'opted out' => [FALSE, TRUE, 'en', FALSE],
+      'closed status without a mail key' => [FALSE, TRUE, 'en', TRUE, ''],
     ];
   }
 
@@ -212,6 +215,18 @@ final class DuplicateClosureKernelTest extends StatusMailKernelTestBase {
        * Whether to fail after creating the note.
        */
       public bool $failOnNote = FALSE;
+
+      /**
+       * Verifies the match decision precedes the report's save side effects.
+       */
+      protected function confirmDuplicate(NodeInterface $duplicate_node, NodeInterface $source_node, int $closed_tid): void {
+        $status = $this->database->select('markaspot_ai_duplicate_matches', 'm')
+          ->fields('m', ['status'])->execute()->fetchField();
+        if ($status !== 'confirmed') {
+          throw new \LogicException('The match must be confirmed before saving the report.');
+        }
+        parent::confirmDuplicate($duplicate_node, $source_node, $closed_tid);
+      }
 
       /**
        * Simulates a report-save failure after the paragraph write.

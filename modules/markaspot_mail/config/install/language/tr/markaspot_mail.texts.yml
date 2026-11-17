@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Bu bildirim sorumluluk alanımız dışında.'
 
 status_duplicate:
-  subject: '#[node:request_id] numaralı {{ citizen_term_singular }} yineleniyor'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: tekrar olduğu için kapatıldı'
   headline: 'Bu sorun daha önce bildirilmiş'
-  intro: '{{ citizen_term_singular_title }} mevcut bir {{ citizen_term_singular }} aynı sorunu anlatıyor. İşlemler mevcut {{ citizen_term_singular }} üzerinden sürdürülecek.'
-  cta_label: 'Açık kalan {{ citizen_term_singular }}i görüntüle'
-  preheader: 'Bu sorun daha önce bildirilmiş'
-  status_note: '#@request_id numaralı {{ citizen_term_singular }} tekrarı olduğu için kapatıldı. İşlemler o {{ citizen_term_singular }} üzerinden sürdürülüyor.'
-  private_status_note: 'Mevcut bir {{ citizen_term_singular }} tekrarı olduğu için kapatıldı. İşlemler o {{ citizen_term_singular }} üzerinden sürdürülüyor.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: bu sorun daha önce bildirilmiş. İşlemler mevcut bildirim üzerinden sürdürülecek.'
+  cta_label: 'Mevcut bildirimi görüntüle'
+  preheader: 'Bu sorun daha önce bildirilmiş.'
+  status_note: 'Tekrar olduğu için kapatıldı. Sorunla ilgili işlemler #@request_id üzerinden sürdürülüyor.'
+  private_status_note: 'Tekrar olduğu için kapatıldı. Bu sorun daha önce bildirilmiş ve işlemler mevcut bildirim üzerinden sürdürülüyor.'
   body_blocks:
     - '[node:latest_status_note]'

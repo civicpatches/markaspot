@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Vi ansvarar inte för denna {{ citizen_term_singular }}.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] är en dubblett'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: stängning på grund av dubblett'
   headline: 'Problemet är redan anmält'
-  intro: '{{ citizen_term_singular_title }} beskriver samma problem som en befintlig {{ citizen_term_singular }}. Handläggningen fortsätter i den {{ citizen_term_singular }}.'
-  cta_label: 'Visa den kvarvarande {{ citizen_term_singular }}'
-  preheader: 'Problemet är redan anmält'
-  status_note: 'Stängd som dubblett av {{ citizen_term_singular }} #@request_id. Handläggningen fortsätter i den {{ citizen_term_singular }}.'
-  private_status_note: 'Stängd som dubblett av en befintlig {{ citizen_term_singular }}. Handläggningen fortsätter i den {{ citizen_term_singular }}.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: problemet är redan anmält. Handläggningen fortsätter i den befintliga anmälan.'
+  cta_label: 'Visa den befintliga anmälan'
+  preheader: 'Problemet är redan anmält.'
+  status_note: 'Stängd som dubblett. Handläggningen av problemet fortsätter under #@request_id.'
+  private_status_note: 'Stängd som dubblett. Problemet är redan anmält och handläggningen fortsätter i den befintliga anmälan.'
   body_blocks:
     - '[node:latest_status_note]'

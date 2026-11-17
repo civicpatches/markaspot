@@ -34,12 +34,12 @@ status_not_responsible:
   preheader: 'Wij zijn niet verantwoordelijk voor deze {{ citizen_term_singular }}.'
 
 status_duplicate:
-  subject: '{{ citizen_term_singular_title }} #[node:request_id] is een dubbele {{ citizen_term_singular }}'
+  subject: '{{ citizen_term_singular_title }} #[node:request_id]: gesloten als duplicaat'
   headline: 'Dit probleem is al gemeld'
-  intro: '{{ citizen_term_singular_title }} gaat over hetzelfde probleem als een bestaande {{ citizen_term_singular }}. De behandeling gaat bij die {{ citizen_term_singular }} verder.'
-  cta_label: 'Bestaande {{ citizen_term_singular }} bekijken'
-  preheader: 'Dit probleem is al gemeld'
-  status_note: 'Gesloten als dubbele {{ citizen_term_singular }} van #@request_id. De behandeling gaat bij die {{ citizen_term_singular }} verder.'
-  private_status_note: 'Gesloten als dubbele {{ citizen_term_singular }} van een bestaande {{ citizen_term_singular }}. De behandeling gaat daar verder.'
+  intro: '{{ citizen_term_singular_title }} #[node:request_id]: dit probleem is al gemeld. De behandeling gaat verder bij de bestaande melding.'
+  cta_label: 'Bestaande melding bekijken'
+  preheader: 'Dit probleem is al gemeld.'
+  status_note: 'Gesloten als duplicaat. De behandeling van het probleem gaat verder onder #@request_id.'
+  private_status_note: 'Gesloten als duplicaat. Dit probleem is al gemeld en de behandeling gaat verder bij de bestaande melding.'
   body_blocks:
     - '[node:latest_status_note]'
