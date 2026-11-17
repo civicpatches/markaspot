@@ -235,7 +235,7 @@ final class WorkspaceAccountNameKernelTest extends KernelTestBase {
   public function testUpdateKeepsPasswordAccountsOnFastmap(): void {
     $imported = $this->account('imported@example.org', 'random-import-password');
     $this->tenantA->addMember($imported);
-    $this->enableModules(['markaspot_fastmap']);
+    $this->enableModules(['markaspot_nuxt', 'markaspot_fastmap']);
 
     $this->container->get('module_handler')->loadInclude('markaspot_group', 'install');
     $this->runRenameUpdate();
@@ -286,7 +286,7 @@ final class WorkspaceAccountNameKernelTest extends KernelTestBase {
     $admin->addRole('administrator');
     $admin->save();
 
-    $this->enableModules(['markaspot_fastmap']);
+    $this->enableModules(['markaspot_nuxt', 'markaspot_fastmap']);
     $provisioning = $this->container->get('markaspot_fastmap.workspace_provisioning');
     $method = new \ReflectionMethod($provisioning, 'createTenantAdmin');
     foreach (['otp@example.org', 'password@example.org', 'admin@example.org'] as $mail) {

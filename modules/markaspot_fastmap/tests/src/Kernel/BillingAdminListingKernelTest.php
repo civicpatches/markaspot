@@ -43,6 +43,7 @@ class BillingAdminListingKernelTest extends KernelTestBase {
     'field_permissions',
     'markaspot_group',
     'markaspot_passwordless',
+    'markaspot_nuxt',
     'markaspot_fastmap',
   ];
 
