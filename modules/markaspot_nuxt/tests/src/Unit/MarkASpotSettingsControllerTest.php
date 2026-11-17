@@ -1115,6 +1115,65 @@ class MarkASpotSettingsControllerTest extends UnitTestCase {
   }
 
   /**
+   * Tests blocked overrides are never served from local or inherited config.
+   *
+   * @param string $scope
+   *   The source of the stored overrides.
+   *
+   * @dataProvider blockedTextOverrideScopeProvider
+   * @covers ::getMarkASpotSettings
+   */
+  public function testGetSettingsOmitsBlockedTextOverrides(string $scope): void {
+    $overrides = [
+      'en' => [
+        'fastmap.verify.login_hint' => 'Tenant verification text',
+        'fastmap.future.nested.text' => 'Tenant operator text',
+        'fields.field_terms_of_use' => 'Tenant terms',
+        'header.app_name' => 'City portal',
+        'fastmap_extra.title' => 'Allowed title',
+      ],
+    ];
+    $config = ['field_nuxt_config' => json_encode(['i18n' => ['overrides' => $overrides]])];
+    $child = $this->createMockGroup($scope === 'inherited' ? [] : $config, 14);
+    $child->expects($this->never())->method('save');
+    if ($scope === 'standalone') {
+      $this->groupStorage->method('load')->with(14)->willReturn($child);
+      $controller = $this->controller;
+    }
+    else {
+      $root = $this->createMockGroup($scope === 'inherited' ? $config : [], 10);
+      $root->expects($this->never())->method('save');
+      $controller = $this->createRootScopedSettingsController($child, $root);
+    }
+
+    $request = Request::create('/api/mark-a-spot-settings?jurisdiction=14', 'GET');
+    $response = $controller->getMarkASpotSettings($request);
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame([
+      'en' => [
+        'header.app_name' => 'City portal',
+        'fastmap_extra.title' => 'Allowed title',
+      ],
+    ], $data['i18n']['overrides']);
+  }
+
+  /**
+   * Provides storage scopes for blocked overrides.
+   *
+   * @return array<string, array{0: string}>
+   *   Standalone, child-local, and inherited override sources.
+   */
+  public static function blockedTextOverrideScopeProvider(): array {
+    return [
+      'standalone jurisdiction' => ['standalone'],
+      'child jurisdiction' => ['child'],
+      'inherited root jurisdiction' => ['inherited'],
+    ];
+  }
+
+  /**
    * Tests entity vocabulary resolution from the portfolio root.
    *
    * @param array|null $rootVocabulary

@@ -462,6 +462,11 @@ class MarkASpotSettingsController extends ControllerBase {
       if ($inheritedTextOverrides !== NULL) {
         $settings['i18n']['overrides'] = $inheritedTextOverrides;
       }
+      if (is_array($settings['i18n']['overrides'] ?? NULL)) {
+        $settings['i18n']['overrides'] = TenantSettingsController::filterBlockedTextOverrides(
+          $settings['i18n']['overrides'],
+        );
+      }
       $entityVocabulary = $this->resolveEntityVocabulary(
         $rootGroup,
         $group,
@@ -1980,9 +1985,11 @@ class MarkASpotSettingsController extends ControllerBase {
       TRUE,
     );
 
-    return is_array($config)
-      ? ($config['i18n']['overrides'] ?? NULL)
-      : NULL;
+    $overrides = is_array($config) ? ($config['i18n']['overrides'] ?? NULL) : NULL;
+
+    return is_array($overrides)
+      ? TenantSettingsController::filterBlockedTextOverrides($overrides)
+      : $overrides;
   }
 
   /**
@@ -2022,7 +2029,7 @@ class MarkASpotSettingsController extends ControllerBase {
       foreach ($localeOverrides as $key => $value) {
         if (!is_string($key)
           || !preg_match(TenantSettingsController::TEXT_OVERRIDE_KEY_PATTERN, $key)
-          || in_array($key, TenantSettingsController::TEXT_OVERRIDE_BLOCKED_KEYS, TRUE)
+          || TenantSettingsController::textOverrideKeyIsBlocked($key)
           || !$this->textOverrideKeySegmentsAreSafe($key)
           || !is_string($value)
           || str_contains($value, '<')

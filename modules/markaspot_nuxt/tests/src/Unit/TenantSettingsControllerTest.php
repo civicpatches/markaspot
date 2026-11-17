@@ -1508,6 +1508,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
           'en' => [
             'header.app_name' => 'City portal',
             'report.buttons.submit' => 'Send {count}',
+            'fastmap_extra.title' => 'Allowed title',
           ],
         ],
       ])
@@ -1520,6 +1521,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
     $this->assertEquals(200, $response->getStatusCode());
     $this->assertSame('Rathausportal', $data['overrides']['de']['header.app_name']);
     $this->assertSame('City portal', $data['overrides']['en']['header.app_name']);
+    $this->assertSame('Allowed title', $data['overrides']['en']['fastmap_extra.title']);
     $this->assertSame('suggestion', $updatedConfig['i18n']['wording']);
     $this->assertTrue($updatedConfig['features']['dashboard']);
     $this->assertArrayNotHasKey('old.key', $updatedConfig['i18n']['overrides']['de']);
@@ -1625,11 +1627,15 @@ class TenantSettingsControllerTest extends UnitTestCase {
   }
 
   /**
-   * Tests updateTextOverrideSettings() rejects blocked full keys.
+   * Tests updateTextOverrideSettings() rejects blocked keys and prefixes.
    *
+   * @param string $key
+   *   The blocked override key.
+   *
+   * @dataProvider blockedTextOverrideKeyProvider
    * @covers ::updateTextOverrideSettings
    */
-  public function testUpdateTextOverrideSettingsRejectsBlockedKey(): void {
+  public function testUpdateTextOverrideSettingsRejectsBlockedKey(string $key): void {
     $storedNuxtConfig = '{}';
     $group = $this->createMutableNuxtConfigGroup($storedNuxtConfig);
     $this->groupStorage->method('load')->with(14)->willReturn($group);
@@ -1644,7 +1650,7 @@ class TenantSettingsControllerTest extends UnitTestCase {
       json_encode([
         'overrides' => [
           'de' => [
-            'fields.field_terms_of_use' => 'Plain text terms copy',
+            $key => 'Plain text override',
           ],
         ],
       ])
@@ -1655,6 +1661,59 @@ class TenantSettingsControllerTest extends UnitTestCase {
 
     $this->assertEquals(422, $response->getStatusCode());
     $this->assertStringContainsString('unsupported dotted key', $data['error']);
+    $this->assertSame('{}', $storedNuxtConfig);
+  }
+
+  /**
+   * Provides blocked text override keys.
+   *
+   * @return array<string, array{0: string}>
+   *   Keys that must never be overridden by tenants.
+   */
+  public static function blockedTextOverrideKeyProvider(): array {
+    return [
+      'terms of use' => ['fields.field_terms_of_use'],
+      'verification text' => ['fastmap.verify.login_hint'],
+      'signup text' => ['fastmap.signup.title'],
+      'future operator text' => ['fastmap.future.nested.text'],
+    ];
+  }
+
+  /**
+   * Tests stored blocked keys are omitted without changing allowed overrides.
+   *
+   * @covers ::getTextOverrideSettings
+   */
+  public function testGetTextOverrideSettingsOmitsBlockedKeys(): void {
+    $group = $this->createMockGroup([
+      'field_nuxt_config' => json_encode([
+        'i18n' => [
+          'overrides' => [
+            'en' => [
+              'fastmap.verify.login_hint' => 'Tenant verification text',
+              'fastmap.future.nested.text' => 'Tenant operator text',
+              'fields.field_terms_of_use' => 'Tenant terms',
+              'header.app_name' => 'City portal',
+              'fastmap_extra.title' => 'Allowed title',
+            ],
+          ],
+        ],
+      ]),
+    ]);
+    $group->expects($this->never())->method('save');
+    $this->groupStorage->method('load')->with(14)->willReturn($group);
+
+    $request = Request::create('/api/tenant/14/text-overrides', 'GET');
+    $response = $this->controller->getTextOverrideSettings($request, '14');
+    $data = json_decode($response->getContent(), TRUE);
+
+    $this->assertSame(200, $response->getStatusCode());
+    $this->assertSame([
+      'en' => [
+        'header.app_name' => 'City portal',
+        'fastmap_extra.title' => 'Allowed title',
+      ],
+    ], $data['overrides']);
   }
 
   /**

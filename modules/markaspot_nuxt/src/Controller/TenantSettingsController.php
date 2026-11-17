@@ -619,7 +619,7 @@ final class TenantSettingsController extends ControllerBase {
       return new \stdClass();
     }
 
-    return $overrides;
+    return self::filterBlockedTextOverrides($overrides);
   }
 
   /**
@@ -664,16 +664,41 @@ final class TenantSettingsController extends ControllerBase {
   }
 
   /**
-   * Checks whether a full dotted key is allowed by the frontend consumer.
+   * Checks whether a dotted override key is reserved by the platform.
    *
    * @param string $key
    *   Flat dotted override key.
    *
    * @return bool
-   *   TRUE when the key is supported by the runtime override consumer.
+   *   TRUE when the key must not be overridden by a tenant.
    */
-  private function textOverrideKeyIsAllowed(string $key): bool {
-    return !in_array($key, self::TEXT_OVERRIDE_BLOCKED_KEYS, TRUE);
+  public static function textOverrideKeyIsBlocked(string $key): bool {
+    return in_array($key, self::TEXT_OVERRIDE_BLOCKED_KEYS, TRUE)
+      || str_starts_with($key, 'fastmap.');
+  }
+
+  /**
+   * Removes reserved keys from stored locale maps without changing other data.
+   *
+   * @param array $overrides
+   *   Stored text overrides keyed by locale.
+   *
+   * @return array
+   *   The override maps without platform-reserved keys.
+   */
+  public static function filterBlockedTextOverrides(array $overrides): array {
+    foreach ($overrides as $locale => $localeOverrides) {
+      if (!is_array($localeOverrides)) {
+        continue;
+      }
+      foreach ($localeOverrides as $key => $value) {
+        if (is_string($key) && self::textOverrideKeyIsBlocked($key)) {
+          unset($overrides[$locale][$key]);
+        }
+      }
+    }
+
+    return $overrides;
   }
 
   /**
@@ -1992,7 +2017,7 @@ final class TenantSettingsController extends ControllerBase {
           ], 422);
         }
 
-        if (!$this->textOverrideKeyIsAllowed($key)) {
+        if (self::textOverrideKeyIsBlocked($key)) {
           return new JsonResponse([
             'error' => "overrides.$locale contains an unsupported dotted key: $key.",
           ], 422);
