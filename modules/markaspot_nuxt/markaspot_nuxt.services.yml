@@ -1,4 +1,33 @@
 services:
+  markaspot_nuxt.correlation_id:
+    class: Drupal\markaspot_nuxt\Logging\CorrelationIdProvider
+    arguments: ['@request_stack', '@uuid']
+  markaspot_nuxt.correlation_response:
+    class: Drupal\markaspot_nuxt\Logging\CorrelationResponseSubscriber
+    arguments: ['@markaspot_nuxt.correlation_id']
+    tags:
+      - { name: event_subscriber }
+  http_middleware.markaspot_correlation:
+    class: Drupal\markaspot_nuxt\Logging\CorrelationMiddleware
+    arguments: ['@markaspot_nuxt.correlation_id']
+    tags:
+      # Outside the Internal Page Cache, which bypasses response subscribers.
+      - { name: http_middleware, priority: 600 }
+  monolog.processor.correlation:
+    class: Drupal\markaspot_nuxt\Logging\CorrelationProcessor
+    arguments: ['@markaspot_nuxt.correlation_id']
+  monolog.formatter.correlation_json:
+    class: Drupal\markaspot_nuxt\Logging\CorrelationJsonFormatter
+    arguments: ['@logger.log_message_parser']
+  monolog.handler.correlation_stderr:
+    class: Monolog\Handler\StreamHandler
+    arguments: ['php://stderr', 'debug', true]
+    shared: false
+  monolog.handler.correlation_drupal:
+    class: Monolog\Handler\GroupHandler
+    arguments: [[]]
+    shared: false
+
   markaspot_nuxt.jsonapi_read_language:
     class: Drupal\markaspot_nuxt\Language\JsonApiReadLanguage
     arguments: ['@request_stack', '@language_manager', '@config.factory', '%jsonapi.base_path%']

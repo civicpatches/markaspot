@@ -4,6 +4,7 @@ namespace Drupal\markaspot_nuxt;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\DependencyInjection\ServiceProviderBase;
+use Drupal\markaspot_nuxt\Logging\CorrelationLoggersPass;
 use Symfony\Component\DependencyInjection\Reference;
 
 /**
@@ -17,6 +18,40 @@ use Symfony\Component\DependencyInjection\Reference;
  * cache expensive COUNT queries for service_request collections.
  */
 class MarkaspotNuxtServiceProvider extends ServiceProviderBase {
+
+  /**
+   * {@inheritdoc}
+   */
+  public function register(ContainerBuilder $container) {
+    if (!$container->hasParameter('monolog.channel_handlers')) {
+      return;
+    }
+    $container->addCompilerPass(new CorrelationLoggersPass());
+
+    // Module YAML is already loaded; site YAML is loaded after register().
+    // Defaults apply regardless of module order and remain overridable.
+    // Monolog pushes handlers onto a stack: the last handler runs first, so a
+    // database failure cannot prevent the stderr write.
+    $container->setParameter('monolog.channel_handlers', [
+      'default' => [
+        'handlers' => [
+          [
+            'name' => 'correlation_drupal',
+            // Preserve templates and variables for all existing Drupal sinks.
+            'processors' => ['current_user', 'request_uri', 'ip', 'referer', 'filter_backtrace'],
+          ],
+          [
+            'name' => 'correlation_stderr',
+            'formatter' => 'correlation_json',
+            'processors' => [],
+          ],
+        ],
+      ],
+    ]);
+    $processors = $container->hasParameter('monolog.logger.processors')
+      ? $container->getParameter('monolog.logger.processors') : [];
+    $container->setParameter('monolog.logger.processors', array_unique([...$processors, 'correlation']));
+  }
 
   /**
    * {@inheritdoc}

@@ -4,6 +4,7 @@ description: 'Exposes Mark-a-Spot configuration and data to Nuxt frontend via JS
 package: Mark-a-Spot
 core_version_requirement: ^10 || ^11
 dependencies:
+  - monolog:monolog
   # service_request defines the taxonomy vocabularies (service_category,
   # service_status, district, sublocality, ...) that our config/optional
   # jsonapi_extras resource configs depend on. Without an explicit dep the

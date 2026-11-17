@@ -67,6 +67,7 @@
         "drupal/migrate_plus": "^6.0",
         "drupal/migrate_source_csv": "^3.8",
         "drupal/migrate_tools": "^6.1",
+        "drupal/monolog": "^3.1",
         "drupal/services_api_key_auth": "dev-4.x",
         "drupal/search_api": "^1.5",
         "drupal/views_bulk_operations": "^4.4",
