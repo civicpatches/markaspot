@@ -32,3 +32,14 @@ status_not_responsible:
     - 'Ved akutt nødsituasjon eller umiddelbar fare, kontakt nødetatene direkte.'
   cta_label: 'Se din {{ citizen_term_singular }}'
   preheader: 'Vi er ikke ansvarlige for denne {{ citizen_term_singular }}.'
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] er et duplikat'
+  headline: 'Problemet er allerede meldt'
+  intro: '{{ citizen_term_singular_title }} beskriver samme problem som en eksisterende {{ citizen_term_singular }}. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
+  cta_label: 'Se {{ citizen_term_singular }} som beholdes'
+  preheader: 'Problemet er allerede meldt'
+  status_note: 'Lukket som duplikat av {{ citizen_term_singular }} #@request_id. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
+  private_status_note: 'Lukket som duplikat av en eksisterende {{ citizen_term_singular }}. Behandlingen fortsetter i den {{ citizen_term_singular }}.'
+  body_blocks:
+    - '[node:latest_status_note]'

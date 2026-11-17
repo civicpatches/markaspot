@@ -1,0 +1,12 @@
+langcode: de-ls
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] gibt es schon'
+  headline: 'Das Problem wurde schon gemeldet'
+  intro: 'Eine andere Person hat das gleiche Problem schon gemeldet. Wir bearbeiten das Problem bei dieser {{ citizen_term_singular_title }} weiter.'
+  cta_label: 'Andere {{ citizen_term_singular_title }} ansehen'
+  preheader: 'Das Problem wurde schon gemeldet'
+  status_note: 'Diese {{ citizen_term_singular_title }} wurde geschlossen. Das gleiche Problem steht in {{ citizen_term_singular_title }} #@request_id. Wir bearbeiten es dort weiter.'
+  private_status_note: 'Diese {{ citizen_term_singular_title }} wurde geschlossen. Das gleiche Problem steht schon in einer anderen {{ citizen_term_singular_title }}. Wir bearbeiten es dort weiter.'
+  body_blocks:
+    - '[node:latest_status_note]'

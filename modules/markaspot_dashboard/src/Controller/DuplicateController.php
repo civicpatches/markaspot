@@ -7,6 +7,10 @@ namespace Drupal\markaspot_dashboard\Controller;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Component\Datetime\TimeInterface;
+use Drupal\Component\Utility\Html;
+use Drupal\markaspot_mail\Service\DuplicateNotification;
+use Drupal\markaspot_mail\Service\MailTextResolver;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
@@ -14,6 +18,7 @@ use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\markaspot_ai\Access\DuplicateMatchAccessPolicy;
 use Drupal\markaspot_group\Service\StatusTermScope;
 use Drupal\node\NodeInterface;
+use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -59,6 +64,9 @@ class DuplicateController extends ControllerBase {
     ModuleHandlerInterface $module_handler,
     StatusTermScope $status_term_scope,
     ?DuplicateMatchAccessPolicy $duplicate_access_policy = NULL,
+    protected ?MailTextResolver $mailTextResolver = NULL,
+    protected ?LockBackendInterface $lock = NULL,
+    protected ?CitizenWordingResolver $wordingResolver = NULL,
   ) {
     $this->database = $database;
     $this->entityTypeManager = $entity_type_manager;
@@ -85,6 +93,9 @@ class DuplicateController extends ControllerBase {
       $container->has('markaspot_ai.duplicate_match_access')
         ? $container->get('markaspot_ai.duplicate_match_access')
         : NULL,
+      $container->get('markaspot_mail.text_resolver'),
+      $container->get('lock'),
+      $container->get('markaspot_nuxt.citizen_wording_resolver'),
     );
   }
 
@@ -141,43 +152,74 @@ class DuplicateController extends ControllerBase {
       throw new BadRequestHttpException('Invalid status. Must be "confirmed" or "rejected".');
     }
 
-    $new_status = $data['status'];
-    $closed_tid = NULL;
-
-    $node_storage = $this->entityTypeManager->getStorage('node');
-    $duplicate_node = $node_storage->load($match->match_nid);
-    $source_node = $node_storage->load($match->source_nid);
-
-    if ($new_status === 'confirmed') {
-      $closed_tid = $this->resolveClosedStatusTid($duplicate_node);
-      if ($closed_tid === NULL) {
-        return new JsonResponse([
-          'success' => FALSE,
-          'message' => 'No selectable closed status is configured for this jurisdiction.',
-        ], 409);
+    // Serialize decisions and re-read the pair after acquiring the lock.
+    // Roll back the match and paragraph writes if the report save fails.
+    $lock = $this->lock ?? throw new \LogicException('Duplicate review requires the lock service.');
+    $lock_name = 'markaspot_duplicate_review:' . $match_id;
+    if (!$lock->acquire($lock_name, 300.0)) {
+      return new JsonResponse(['success' => FALSE, 'message' => 'This pair is being reviewed. Please retry.'], 409);
+    }
+    $transaction = $this->database->startTransaction();
+    try {
+      if ($data['status'] === 'rejected') {
+        $this->database->update('markaspot_ai_duplicate_matches')
+          ->fields([
+            'status' => 'rejected',
+            'reviewed_by' => $this->currentUser->id(),
+            'reviewed_at' => $this->time->getRequestTime(),
+          ])->condition('id', $match_id)->execute();
+        return new JsonResponse(['success' => TRUE, 'match_id' => $match_id, 'status' => 'rejected']);
       }
-    }
 
-    // Update the match status.
-    $this->database->update('markaspot_ai_duplicate_matches')
-      ->fields([
+      $match = $this->database->select('markaspot_ai_duplicate_matches', 'm')
+        ->fields('m')->condition('id', $match_id)->execute()->fetchObject();
+      $new_status = $data['status'];
+      $node_storage = $this->entityTypeManager->getStorage('node');
+      $node_storage->resetCache([$match->source_nid, $match->match_nid]);
+      $duplicate_node = $node_storage->load(max($match->match_nid, $match->source_nid));
+      $source_node = $node_storage->load(min($match->match_nid, $match->source_nid));
+      $roles = [
+        'kept' => ['nid' => (int) $source_node->id(), 'request_id' => $this->getServiceRequestId($source_node)],
+        'closed' => ['nid' => (int) $duplicate_node->id(), 'request_id' => $this->getServiceRequestId($duplicate_node)],
+      ];
+
+      if ($new_status === 'confirmed' && $match->status === 'confirmed') {
+        return new JsonResponse(['success' => TRUE, 'match_id' => $match_id, 'status' => $new_status] + $roles);
+      }
+      if ($new_status === 'confirmed') {
+        $closed_tid = $this->resolveClosedStatusTid($duplicate_node);
+        if ($closed_tid === NULL) {
+          return new JsonResponse([
+            'success' => FALSE,
+            'message' => 'No selectable closed status is configured for this jurisdiction.',
+          ], 409);
+        }
+        $this->confirmDuplicate($duplicate_node, $source_node, $closed_tid);
+      }
+      $this->database->update('markaspot_ai_duplicate_matches')
+        ->fields([
+          'status' => $new_status,
+          'reviewed_by' => $this->currentUser->id(),
+          'reviewed_at' => $this->time->getRequestTime(),
+        ])
+        ->condition('id', $match_id)
+        ->execute();
+
+      return new JsonResponse([
+        'success' => TRUE,
+        'match_id' => $match_id,
         'status' => $new_status,
-        'reviewed_by' => $this->currentUser->id(),
-        'reviewed_at' => $this->time->getRequestTime(),
-      ])
-      ->condition('id', $match_id)
-      ->execute();
-
-    // If confirmed, auto-close the duplicate and add status note.
-    if ($new_status === 'confirmed') {
-      $this->confirmDuplicate($duplicate_node, $source_node, $closed_tid);
+      ] + ($new_status === 'confirmed' ? $roles : []));
     }
-
-    return new JsonResponse([
-      'success' => TRUE,
-      'match_id' => $match_id,
-      'status' => $new_status,
-    ]);
+    catch (\Throwable $e) {
+      $transaction->rollBack();
+      $this->entityTypeManager->getStorage('node')->resetCache();
+      throw $e;
+    }
+    finally {
+      unset($transaction);
+      $lock->release($lock_name);
+    }
   }
 
   /**
@@ -217,24 +259,26 @@ class DuplicateController extends ControllerBase {
     // Get the language of the duplicate request.
     $langcode = $duplicate_node->language()->getId();
 
-    // Build the status note message based on language.
-    $source_request_id = $this->getServiceRequestId($source_node);
-    if ($langcode === 'de') {
-      $note_text = "Als Duplikat von #{$source_request_id} markiert";
-    }
-    else {
-      $note_text = "Marked as duplicate of #{$source_request_id}";
+    /** @var \Drupal\markaspot_mail\Service\MailTextResolver $resolver */
+    $resolver = $this->mailTextResolver ?? throw new \LogicException('Duplicate review requires the mail text resolver.');
+    $note_text = $resolver->resolveField(
+      'markaspot_mail.texts',
+      'status_duplicate',
+      $source_node->isPublished() ? 'status_note' : 'private_status_note',
+      $langcode,
+    );
+    $wording = $this->wordingResolver ?? new CitizenWordingResolver();
+    $group_type = $this->configFactory->get('markaspot_open311.settings')->get('jurisdiction_group_type') ?: 'jur';
+    $jurisdiction = $wording->resolveJurisdictionFromNode($duplicate_node, $group_type);
+    $note_text = $wording->replaceMailPlaceholders($note_text, $jurisdiction, $langcode);
+    if ($source_node->isPublished()) {
+      $note_text = str_replace('@request_id', $this->getServiceRequestId($source_node), $note_text);
     }
 
-    // Add the status note.
+    // Associate the paragraph with the new status, in the report's language.
+    $duplicate_node->set('field_status', ['target_id' => $closed_tid]);
     $this->addStatusNote($duplicate_node, $note_text);
-
-    if ($duplicate_node->hasField('field_status')) {
-      $duplicate_node->set('field_status', ['target_id' => $closed_tid]);
-    }
-
-    // Save the node.
-    $duplicate_node->save();
+    DuplicateNotification::save($duplicate_node, $source_node);
   }
 
   /**
@@ -250,11 +294,12 @@ class DuplicateController extends ControllerBase {
     $current_status = $node->hasField('field_status') ? $node->get('field_status')->target_id : NULL;
 
     // Convert line breaks to <br> tags for proper display.
-    $note_text_html = nl2br($note_text, FALSE);
+    $note_text_html = nl2br(Html::escape($note_text), FALSE);
 
     $paragraph_storage = $this->entityTypeManager->getStorage('paragraph');
     $status_note_paragraph = $paragraph_storage->create([
       'type' => 'status',
+      'langcode' => $node->language()->getId(),
       'field_status_note' => [
         'value' => $note_text_html,
         'format' => 'basic_html',
@@ -320,8 +365,11 @@ class DuplicateController extends ControllerBase {
    *   The service request ID (e.g., "123-2026") or the nid as fallback.
    */
   protected function getServiceRequestId(NodeInterface $node): string {
+    if ($node->hasField('request_id') && !$node->get('request_id')->isEmpty()) {
+      return (string) $node->get('request_id')->value;
+    }
     $title = $node->getTitle();
-    if (preg_match('/#(\d+-\d+)/', $title, $matches)) {
+    if (preg_match('/#(\S+)/', $title, $matches)) {
       return $matches[1];
     }
     return (string) $node->id();

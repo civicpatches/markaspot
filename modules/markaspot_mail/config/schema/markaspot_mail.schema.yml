@@ -106,6 +106,9 @@ markaspot_mail.texts:
     status_closed:
       type: markaspot_mail.texts.slot_set
       label: 'Status update: closed'
+    status_duplicate:
+      type: markaspot_mail.texts.slot_set
+      label: 'Status update: duplicate'
     status_not_responsible:
       type: markaspot_mail.texts.slot_set
       label: 'Status update: not responsible'
@@ -169,6 +172,12 @@ markaspot_mail.texts.slot_set:
     cta_label:
       type: label
       label: 'Call-to-action label'
+    status_note:
+      type: text
+      label: 'Duplicate status note for a published remaining report'
+    private_status_note:
+      type: text
+      label: 'Duplicate status note for an unpublished remaining report'
     backend_cta_label:
       type: label
       label: 'Label of the Drupal backend link in staff mails when markaspot_mail.settings:staff_links is both'

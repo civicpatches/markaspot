@@ -32,3 +32,14 @@ status_not_responsible:
     - 'Is er sprake van een noodgeval of direct gevaar? Neem dan rechtstreeks contact op met de lokale hulpdiensten.'
   cta_label: 'Bekijk uw {{ citizen_term_singular }}'
   preheader: 'Wij zijn niet verantwoordelijk voor deze {{ citizen_term_singular }}.'
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] is een dubbele {{ citizen_term_singular }}'
+  headline: 'Dit probleem is al gemeld'
+  intro: '{{ citizen_term_singular_title }} gaat over hetzelfde probleem als een bestaande {{ citizen_term_singular }}. De behandeling gaat bij die {{ citizen_term_singular }} verder.'
+  cta_label: 'Bestaande {{ citizen_term_singular }} bekijken'
+  preheader: 'Dit probleem is al gemeld'
+  status_note: 'Gesloten als dubbele {{ citizen_term_singular }} van #@request_id. De behandeling gaat bij die {{ citizen_term_singular }} verder.'
+  private_status_note: 'Gesloten als dubbele {{ citizen_term_singular }} van een bestaande {{ citizen_term_singular }}. De behandeling gaat daar verder.'
+  body_blocks:
+    - '[node:latest_status_note]'

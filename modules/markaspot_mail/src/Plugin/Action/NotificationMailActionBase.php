@@ -110,8 +110,15 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
 
   /**
    * Sends one notification through the common recipient throttle.
+   *
+   * @param \Drupal\node\NodeInterface $entity
+   *   The report being saved.
+   * @param string $notificationKey
+   *   The editable notification template key.
+   * @param array $context
+   *   Additional rendering context for this dispatch only.
    */
-  protected function sendNotification(NodeInterface $entity, string $notificationKey): void {
+  protected function sendNotification(NodeInterface $entity, string $notificationKey, array $context = []): void {
     // Always bind the CURRENT entity. Caching the first node on the plugin
     // instance would resolve recipient tokens against a stale node if the
     // instance is ever reused (bulk operations) — a PII misdirection.
@@ -188,7 +195,7 @@ abstract class NotificationMailActionBase extends ConfigurableActionBase impleme
     $params = [
       'node' => $entity,
       'notification_key' => $notificationKey,
-    ];
+    ] + $context;
 
     $message = $this->mailManager->mail('markaspot_mail', 'notification_' . $notificationKey, $recipient, $langcode, $params);
     if ($message['result']) {

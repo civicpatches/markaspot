@@ -32,3 +32,14 @@ status_not_responsible:
     - 'Sürgős vészhelyzet vagy közvetlen veszély esetén forduljon közvetlenül a helyi segélyszolgálatokhoz.'
   cta_label: 'Bejelentés megtekintése'
   preheader: 'Ez a bejelentés nem tartozik hatáskörünkbe.'
+
+status_duplicate:
+  subject: 'A(z) #[node:request_id] {{ citizen_term_singular }} ismétlődés'
+  headline: 'Ezt a problémát már bejelentették'
+  intro: 'A {{ citizen_term_singular }} ugyanarra a problémára vonatkozik, mint egy meglévő {{ citizen_term_singular }}. Az ügyintézés annál folytatódik.'
+  cta_label: 'A megmaradó {{ citizen_term_singular }} megtekintése'
+  preheader: 'Ezt a problémát már bejelentették'
+  status_note: 'Lezárva a(z) #@request_id {{ citizen_term_singular }} ismétléseként. Az ügyintézés annál folytatódik.'
+  private_status_note: 'Lezárva egy meglévő {{ citizen_term_singular }} ismétléseként. Az ügyintézés annál folytatódik.'
+  body_blocks:
+    - '[node:latest_status_note]'

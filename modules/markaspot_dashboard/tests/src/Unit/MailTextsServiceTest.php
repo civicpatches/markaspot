@@ -371,6 +371,7 @@ class MailTextsServiceTest extends UnitTestCase {
       'report_confirmation',
       'status_open',
       'status_closed',
+      'status_duplicate',
       'status_not_responsible',
       'group_assignment',
       'assignee_notification',

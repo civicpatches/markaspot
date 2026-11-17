@@ -1012,3 +1012,38 @@ function markaspot_mail_update_10019(): string {
 function markaspot_mail_update_10020(): string {
   return _markaspot_mail_import_shipped_translations();
 }
+
+/**
+ * Adds duplicate mail texts without overwriting any operator-owned key.
+ */
+function markaspot_mail_update_10021(): string {
+  $path = \Drupal::service('extension.list.module')->getPath('markaspot_mail');
+  $manager = \Drupal::languageManager();
+  $default = $manager->getDefaultLanguage()->getId();
+  $config = \Drupal::configFactory()->getEditable('markaspot_mail.texts');
+  if ($config->get('status_duplicate') === NULL) {
+    $file = "$path/config/install/language/$default/markaspot_mail.texts.yml";
+    if (!is_file($file)) {
+      $file = "$path/config/install/markaspot_mail.texts.yml";
+    }
+    $data = Yaml::decode((string) file_get_contents($file));
+    $config->set('status_duplicate', $data['status_duplicate'])->save();
+  }
+  if ($manager instanceof ConfigurableLanguageManagerInterface) {
+    foreach (array_keys($manager->getLanguages()) as $langcode) {
+      if ($langcode === $default) {
+        continue;
+      }
+      $file = "$path/config/install/language/$langcode/markaspot_mail.texts.yml";
+      if (!is_file($file)) {
+        continue;
+      }
+      $override = $manager->getLanguageConfigOverride($langcode, 'markaspot_mail.texts');
+      if ($override->get('status_duplicate') === NULL) {
+        $data = Yaml::decode((string) file_get_contents($file));
+        $override->set('status_duplicate', $data['status_duplicate'])->save();
+      }
+    }
+  }
+  return 'Added missing duplicate notification texts; existing texts were preserved.';
+}

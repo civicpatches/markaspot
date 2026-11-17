@@ -48,6 +48,7 @@ final class MailTextsForm extends ConfigFormBase {
     'report_confirmation',
     'status_open',
     'status_closed',
+    'status_duplicate',
     'status_not_responsible',
     'group_assignment',
     'assignee_notification',
@@ -144,9 +145,11 @@ final class MailTextsForm extends ConfigFormBase {
       $form[$key]['cta_label'] = [
         '#type' => 'textfield',
         '#title' => $this->t('Call-to-action button label'),
-        '#description' => in_array($key, ['group_assignment', 'assignee_notification'], TRUE)
+        '#description' => $key === 'status_duplicate'
+          ? $this->t('Leave empty to hide the button. It links to the remaining report only when it is published.')
+          : (in_array($key, ['group_assignment', 'assignee_notification'], TRUE)
           ? $this->t('Leave empty to keep the platform default button label. When a report URL is available, the button links to it.')
-          : $this->t('Leave empty to hide the button. When set, it links to the report itself.'),
+          : $this->t('Leave empty to hide the button. When set, it links to the report itself.')),
         '#default_value' => (string) ($slots['cta_label'] ?? ''),
         '#maxlength' => 254,
       ];
@@ -198,6 +201,12 @@ final class MailTextsForm extends ConfigFormBase {
       if (in_array($key, self::STAFF_KEYS, TRUE) && $backendCtaLabel !== '') {
         $slots['backend_cta_label'] = $backendCtaLabel;
       }
+      // Keep the localized public-note templates when editing mail slots.
+      foreach (['status_note', 'private_status_note'] as $noteKey) {
+        if ($config->get("$key.$noteKey") !== NULL) {
+          $slots[$noteKey] = $config->get("$key.$noteKey");
+        }
+      }
       $config->set($key, $slots);
     }
 
@@ -242,6 +251,7 @@ final class MailTextsForm extends ConfigFormBase {
       'report_confirmation' => (string) $this->t('Report confirmation'),
       'status_open' => (string) $this->t('Status update: open / in progress'),
       'status_closed' => (string) $this->t('Status update: closed'),
+      'status_duplicate' => (string) $this->t('Status update: duplicate'),
       'status_not_responsible' => (string) $this->t('Status update: not responsible'),
       'group_assignment' => (string) $this->t('Organisation assignment'),
       'assignee_notification' => (string) $this->t('Assignee notification'),
@@ -259,6 +269,7 @@ final class MailTextsForm extends ConfigFormBase {
       'report_confirmation' => $this->t('Sent when a citizen submits a new report.'),
       'status_open' => $this->t('Sent when a report is forwarded to the responsible department and marked as being worked on.'),
       'status_closed' => $this->t('Sent when a report has been resolved.'),
+      'status_duplicate' => $this->t('Sent when a report is closed as a duplicate. The button links to the remaining report only when it is published.'),
       'status_not_responsible' => $this->t("Sent when a report is reviewed and found to be outside this jurisdiction's responsibility."),
       'group_assignment' => $this->t(
         'Sent when a request is assigned to an organisation. You can also use {{ organisation }} and {{ request_id }}. Empty slots keep the platform default text.',

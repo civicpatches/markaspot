@@ -232,6 +232,49 @@ final class NotificationTextBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Duplicate CTAs point only at a published remaining report.
+   */
+  public function testDuplicateLinkUsesPublishedKeptReport(): void {
+    $closed = $this->buildPlainNode();
+    foreach ([TRUE, FALSE] as $published) {
+      $kept = $this->buildPlainNode(requestId: 'KEPT-99');
+      $kept->method('isPublished')->willReturn($published);
+      $resolver = $this->createMock(MailTextResolver::class);
+      $slots = [
+        'subject' => 'Duplicate report',
+        'headline' => '',
+        'intro' => 'This matter is already being handled.',
+        'body_blocks' => [],
+        'cta_label' => 'View remaining report',
+        'preheader' => '',
+      ];
+      $resolver->method('resolve')->willReturn($slots);
+      $resolver->method('replaceTokens')->willReturnArgument(0);
+      $branding = $this->createMock(MailBrandingService::class);
+      $branding->method('getBranding')->willReturn([
+        'frontend_base_url' => 'https://reports.example.test',
+        'jurisdiction_slug' => 'district',
+      ]);
+      $builder = $this->buildBuilder(textResolver: $resolver, branding: $branding);
+      $message = $builder->build(new MailContext(
+        module: 'markaspot_mail',
+        key: 'notification_status_duplicate',
+        langcode: 'en',
+        params: ['node' => $closed, 'duplicate_kept' => $kept],
+        to: 'citizen@example.test',
+      ));
+      $this->assertNotNull($message);
+      if ($published) {
+        $this->assertSame('https://reports.example.test/district/requests/KEPT-99', $message->content['cta_url']);
+      }
+      else {
+        $this->assertArrayNotHasKey('cta_url', $message->content);
+        $this->assertArrayNotHasKey('cta_label', $message->content);
+      }
+    }
+  }
+
+  /**
    * Selects jurisdiction mode from the referenced group.
    */
   public function testBuildResolvesJurisdictionModeFromNode(): void {
@@ -346,10 +389,10 @@ final class NotificationTextBuilderTest extends UnitTestCase {
    * No toUrl() stub on purpose: the builder must derive the CTA from the
    * branding package, never from the node's canonical (backend) URL.
    */
-  private function buildPlainNode(?bool $published = TRUE): NodeInterface&MockObject {
+  private function buildPlainNode(?bool $published = TRUE, string $requestId = '42'): NodeInterface&MockObject {
     $requestIdField = $this->createMock(FieldItemListInterface::class);
     $requestIdField->method('isEmpty')->willReturn(FALSE);
-    $requestIdField->method('getString')->willReturn('42');
+    $requestIdField->method('getString')->willReturn($requestId);
 
     $node = $this->createMock(NodeInterface::class);
     if ($published !== NULL) {

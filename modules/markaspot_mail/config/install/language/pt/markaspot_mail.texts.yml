@@ -32,3 +32,14 @@ status_not_responsible:
     - 'Em caso de emergência urgente ou perigo imediato, contacte diretamente os serviços de emergência locais.'
   cta_label: 'Ver o seu {{ citizen_term_singular }}'
   preheader: 'Este {{ citizen_term_singular }} não é da nossa competência.'
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] está duplicada'
+  headline: 'O problema já foi comunicado'
+  intro: '{{ citizen_term_singular_title }} descreve o mesmo problema que uma {{ citizen_term_singular }} existente. O tratamento continuará nessa {{ citizen_term_singular }}.'
+  cta_label: 'Ver a {{ citizen_term_singular }} mantida'
+  preheader: 'O problema já foi comunicado'
+  status_note: 'Encerrada como duplicado da {{ citizen_term_singular }} #@request_id. O tratamento continua nessa {{ citizen_term_singular }}.'
+  private_status_note: 'Encerrada como duplicado de uma {{ citizen_term_singular }} existente. O tratamento continua nessa {{ citizen_term_singular }}.'
+  body_blocks:
+    - '[node:latest_status_note]'

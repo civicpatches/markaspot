@@ -32,3 +32,14 @@ status_not_responsible:
     - 'في حالة الطوارئ العاجلة أو الخطر المباشر، يرجى الاتصال مباشرة بخدمات الطوارئ المحلية.'
   cta_label: 'عرض بلاغك'
   preheader: 'هذا البلاغ خارج نطاق اختصاصنا.'
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] مكرر'
+  headline: 'سبق الإ{{ citizen_term_singular }} عن هذه المشكلة'
+  intro: 'يصف {{ citizen_term_singular_title }} المشكلة نفسها الواردة في {{ citizen_term_singular }} موجود. ستستمر المعالجة ضمن ذلك {{ citizen_term_singular }}.'
+  cta_label: 'عرض {{ citizen_term_singular }} الذي ستستمر معالجته'
+  preheader: 'سبق الإ{{ citizen_term_singular }} عن هذه المشكلة'
+  status_note: 'أُغلق لكونه نسخة مكررة من {{ citizen_term_singular }} #@request_id. تستمر المعالجة ضمن ذلك {{ citizen_term_singular }}.'
+  private_status_note: 'أُغلق لكونه نسخة مكررة من {{ citizen_term_singular }} موجود. تستمر المعالجة ضمن ذلك {{ citizen_term_singular }}.'
+  body_blocks:
+    - '[node:latest_status_note]'

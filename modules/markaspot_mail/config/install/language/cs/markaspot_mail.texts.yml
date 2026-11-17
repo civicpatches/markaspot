@@ -32,3 +32,14 @@ status_not_responsible:
     - 'V případě naléhavé nouze nebo bezprostředního nebezpečí kontaktujte přímo místní tísňové služby.'
   cta_label: 'Zobrazit hlášení'
   preheader: 'Toto hlášení nespadá do naší působnosti.'
+
+status_duplicate:
+  subject: '{{ citizen_term_singular_title }} #[node:request_id] je duplicitní'
+  headline: 'Tento problém již byl nahlášen'
+  intro: '{{ citizen_term_singular_title }} popisuje stejný problém jako již existující {{ citizen_term_singular }}. Řešení bude pokračovat u něj.'
+  cta_label: 'Zobrazit ponechané {{ citizen_term_singular }}'
+  preheader: 'Tento problém již byl nahlášen'
+  status_note: 'Uzavřeno jako duplikát {{ citizen_term_singular }} #@request_id. Řešení pokračuje u něj.'
+  private_status_note: 'Uzavřeno jako duplikát existujícího {{ citizen_term_singular }}. Řešení pokračuje u něj.'
+  body_blocks:
+    - '[node:latest_status_note]'

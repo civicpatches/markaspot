@@ -41,6 +41,7 @@ final class MailTextsService implements MailTextsServiceInterface {
     'report_confirmation',
     'status_open',
     'status_closed',
+    'status_duplicate',
     'status_not_responsible',
     'group_assignment',
     'assignee_notification',
@@ -59,7 +60,7 @@ final class MailTextsService implements MailTextsServiceInterface {
    * the Drupal mail texts form. Rebuilding a text from SLOTS alone would
    * drop it.
    */
-  private const PRESERVED_FIELDS = ['backend_cta_label'];
+  private const PRESERVED_FIELDS = ['backend_cta_label', 'status_note', 'private_status_note'];
 
   private const KEY_PATTERN = '/^[a-z0-9_]{3,64}$/';
 

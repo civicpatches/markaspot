@@ -112,8 +112,10 @@ final class NotificationTextBuilder implements MailBuilderInterface {
       'intro' => $slots['intro'],
       'body_blocks' => $slots['body_blocks'],
     ];
-    if ($slots['cta_label'] !== '') {
-      $ctaUrl = $this->buildCitizenRequestUrl($node, $mode, $jurisdictionId, $ctx->langcode);
+    $linkNode = $notificationKey === 'status_duplicate' ? ($ctx->params['duplicate_kept'] ?? NULL) : $node;
+    if ($slots['cta_label'] !== '' && $linkNode instanceof NodeInterface
+      && ($notificationKey !== 'status_duplicate' || $linkNode->isPublished())) {
+      $ctaUrl = $this->buildCitizenRequestUrl($linkNode, $mode, $jurisdictionId, $ctx->langcode);
       if ($ctaUrl !== '') {
         $content['cta_label'] = $slots['cta_label'];
         $content['cta_url'] = $ctaUrl;

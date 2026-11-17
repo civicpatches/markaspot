@@ -8,6 +8,7 @@ use Drupal\Core\Action\Attribute\Action;
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
+use Drupal\markaspot_mail\Service\DuplicateNotification;
 use Drupal\node\NodeInterface;
 use Drupal\taxonomy\TermInterface;
 
@@ -34,6 +35,13 @@ final class SendTermNotificationMail extends NotificationMailActionBase {
    */
   public function execute($entity = NULL): void {
     if (!$entity instanceof NodeInterface || !$entity->hasField('field_status')) {
+      return;
+    }
+
+    // Keep ECA's recipient and consent gates; replace this save's mail key.
+    $kept = DuplicateNotification::keptReport($entity);
+    if ($kept !== NULL) {
+      $this->sendNotification($entity, 'status_duplicate', ['duplicate_kept' => $kept]);
       return;
     }
 
