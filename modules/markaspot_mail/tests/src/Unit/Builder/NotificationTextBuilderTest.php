@@ -237,8 +237,7 @@ final class NotificationTextBuilderTest extends UnitTestCase {
   public function testDuplicateLinkUsesPublishedKeptReport(): void {
     $closed = $this->buildPlainNode();
     foreach ([TRUE, FALSE] as $published) {
-      $kept = $this->buildPlainNode(requestId: 'KEPT-99');
-      $kept->method('isPublished')->willReturn($published);
+      $kept = $this->buildPlainNode(published: $published, requestId: 'KEPT-99');
       $resolver = $this->createMock(MailTextResolver::class);
       $slots = [
         'subject' => 'Duplicate report',
