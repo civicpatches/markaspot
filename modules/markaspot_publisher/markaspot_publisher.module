@@ -5,7 +5,12 @@
  * Contains markaspot_publisher.module.
  */
 
+use Drupal\Core\Database\Query\AlterableInterface;
+use Drupal\Core\Database\Query\SelectInterface;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\markaspot_publisher\UnpublishHold;
+use Drupal\node\NodeInterface;
 
 /**
  * Implements hook_help().
@@ -59,4 +64,70 @@ function markaspot_publisher_cron() {
     $count++;
   }
   \Drupal::logger('markaspot_publisher')->notice('Enqueued @count nodes for publishing.', ['@count' => $count]);
+}
+
+/**
+ * Returns the unpublish hold service.
+ */
+function markaspot_publisher_unpublish_holds(): UnpublishHold {
+  return \Drupal::service('markaspot_publisher.unpublish_hold');
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_update() for nodes.
+ */
+function markaspot_publisher_node_update(NodeInterface $node): void {
+  if ($node->bundle() !== 'service_request' || !$node->isDefaultRevision()) {
+    return;
+  }
+
+  $was_published = $node->getOriginal()?->getUntranslated()->isPublished();
+  $published = $node->getUntranslated()->isPublished();
+  if ($was_published === TRUE && !$published) {
+    markaspot_publisher_unpublish_holds()->hold((int) $node->id());
+  }
+  elseif ($was_published === FALSE && $published && empty($node->markaspotPublisherSave)) {
+    markaspot_publisher_unpublish_holds()->release((int) $node->id());
+  }
+}
+
+/**
+ * Implements hook_markaspot_report_anonymized().
+ */
+function markaspot_publisher_markaspot_report_anonymized(EntityInterface $entity): void {
+  if (!$entity instanceof NodeInterface || $entity->bundle() !== 'service_request' || !$entity->isDefaultRevision()) {
+    return;
+  }
+  if (!$entity->getUntranslated()->isPublished()) {
+    // Withdrawal can leave a never-published report unpublished (0 to 0).
+    markaspot_publisher_unpublish_holds()->hold((int) $entity->id());
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_delete() for nodes.
+ */
+function markaspot_publisher_node_delete(NodeInterface $node): void {
+  if ($node->bundle() === 'service_request') {
+    markaspot_publisher_unpublish_holds()->release((int) $node->id());
+  }
+}
+
+/**
+ * Implements hook_query_markaspot_publisher_candidates_alter().
+ */
+function markaspot_publisher_query_markaspot_publisher_candidates_alter(AlterableInterface $query): void {
+  if ($query instanceof SelectInterface) {
+    $held = markaspot_publisher_unpublish_holds()->heldIds();
+    if ($held !== []) {
+      $query->condition('base_table.nid', $held, 'NOT IN');
+    }
+  }
+}
+
+/**
+ * Implements hook_markaspot_publisher_hold_alter().
+ */
+function markaspot_publisher_markaspot_publisher_hold_alter(bool &$held, NodeInterface $node): void {
+  $held = $held || markaspot_publisher_unpublish_holds()->isHeld((int) $node->id());
 }

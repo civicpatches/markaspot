@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_publisher\Kernel;
 
+use Drupal\markaspot_moderation\Service\PublicationHold;
 use Drupal\node\NodeInterface;
 use Drupal\service_request\RevisionLog;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -87,7 +88,7 @@ final class ModerationPublicationKernelTest extends PublisherKernelTest {
   }
 
   /**
-   * Explicit republication releases the historical moderation decision.
+   * A fresh unpublish holds the report after republication cleared moderation.
    */
   public function testExplicitPublicationReleasesHold(): void {
     $report = $this->report(31, ['status' => 1]);
@@ -96,10 +97,11 @@ final class ModerationPublicationKernelTest extends PublisherKernelTest {
     $report->setPublished()->save();
     $report->setUnpublished()->save();
     $this->age($report);
+    $this->assertSame([], $this->container->get(PublicationHold::class)->heldIds([(int) $report->id()]));
     $candidates = $this->container->get('markaspot_publisher.publisher')->load();
-    $this->assertArrayHasKey($report->id(), $candidates);
+    $this->assertArrayNotHasKey($report->id(), $candidates);
     $this->worker()->processItem(['nid' => $report->id()]);
-    $this->assertTrue($this->reload($report)->isPublished());
+    $this->assertFalse($this->reload($report)->isPublished());
   }
 
   /**

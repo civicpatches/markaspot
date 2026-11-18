@@ -90,7 +90,8 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
     $this->logger->notice('Starting processing for node ID: @nid', ['@nid' => $nid]);
 
     // Load the node by ID.
-    $node = $this->entityTypeManager->getStorage('node')->loadUnchanged($nid);
+    $storage = $this->entityTypeManager->getStorage('node');
+    $node = $storage->loadUnchanged($nid);
     if (!$node) {
       $this->logger->warning('Node with ID @nid not found.', ['@nid' => $nid]);
       return;
@@ -119,7 +120,13 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
         return;
       }
 
-      // Optional modules may veto publication without becoming dependencies.
+      // Recheck the current revision before passing it to the hold hooks.
+      $node = $storage->loadUnchanged($nid);
+      if (!$node || $node->isPublished() || !isset($publishable_statuses[$node->get('field_status')->target_id])) {
+        $this->logger->notice('Node ID @nid is no longer eligible for publication. Skipping.', ['@nid' => $nid]);
+        return;
+      }
+
       $held = FALSE;
       $this->moduleHandler->alter('markaspot_publisher_hold', $held, $node);
       if ($held) {
@@ -129,7 +136,14 @@ class PublisherQueueWorker extends QueueWorkerBase implements ContainerFactoryPl
 
       // Publish the node without changing field_status.
       $node->setPublished();
-      $node->save();
+      // A hold placed during this save may only be released by another path.
+      $node->markaspotPublisherSave = TRUE;
+      try {
+        $node->save();
+      }
+      finally {
+        unset($node->markaspotPublisherSave);
+      }
       $this->logger->notice('Node ID @nid published successfully.', ['@nid' => $nid]);
     }
     catch (\Exception $e) {
