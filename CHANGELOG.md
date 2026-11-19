@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.9.255](https://github.com/civicpatches/markaspot/compare/11.9.254...11.9.255) (2026-11-19)
+
+### Bug Fixes
+
+* keep reports unpublished by a person out of automatic publication ([b37a57a](https://github.com/civicpatches/markaspot/commit/b37a57a6f3ea8ac99f28f6ac4dc72e57a41b6cb2))
+* **vision:** report vision without markaspot_ai as passing info while the hourly analysis limit is on ([0c38667](https://github.com/civicpatches/markaspot/commit/0c3866770c0fbf47afeb47fbd5e62e130f06122a))
+
 ## [11.9.254](https://github.com/civicpatches/markaspot/compare/11.9.253...11.9.254) (2026-11-17)
 
 ### Features
