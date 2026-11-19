@@ -593,6 +593,11 @@ final class PiiNameScreeningKernelTest extends KernelTestBase {
     $prepared->set('field_status', $terms['status']);
     $prepared->set('field_category', $terms['category']);
     $prepared->save();
+    // The setup stands for a report waiting for automatic publication. The
+    // published-to-unpublished save above reads as a person taking it
+    // offline, which the publisher holds for good; lift that hold so only
+    // the screening hold under test decides.
+    $this->container->get('markaspot_publisher.unpublish_hold')->release((int) $node->id());
     $past = $this->container->get('datetime.time')->getRequestTime() - 40 * 86400;
     $this->container->get('database')->update('node_field_data')
       ->fields(['created' => $past, 'changed' => $past])
