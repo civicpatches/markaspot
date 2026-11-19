@@ -57,8 +57,16 @@ final class VisionUsageAccountingCheck extends HealthCheckPluginBase {
    * {@inheritdoc}
    */
   public function run(array $context = []): HealthCheckResult {
+    // Vision without markaspot_ai is a supported setup as long as the hourly
+    // per-visitor analysis limit is on: then it is a passing info row, so the
+    // fact stays visible without failing rollout gates. With that limit
+    // switched off, or with a half-installed markaspot_ai below, it warns.
     if (!$this->moduleHandler->moduleExists('markaspot_ai')) {
-      return $this->failWithSeverity('warning', 1, 'Vision is enabled without markaspot_ai. Analysis continues without usage accounting or daily token limits.');
+      $limit = $this->citizenRateLimit();
+      if ($limit === 0) {
+        return $this->failWithSeverity('warning', 1, 'Vision runs without markaspot_ai and with the hourly analysis limit switched off (rate_limit_max = 0): usage is neither booked nor limited.');
+      }
+      return $this->pass(sprintf('Vision runs without markaspot_ai: usage is not booked and there is no daily token limit. Analysis from the report form is limited to %d requests per visitor and hour; imported images (Open311, mail) are not limited.', $limit));
     }
     if (!$this->accountingAvailable) {
       return $this->failWithSeverity('warning', 1, 'Vision is enabled but markaspot_ai accounting services are unavailable. Analysis continues without usage accounting or daily token limits.');
@@ -71,6 +79,20 @@ final class VisionUsageAccountingCheck extends HealthCheckPluginBase {
       return $this->pass('Vision usage is booked, no vision daily limit configured.');
     }
     return $this->pass(sprintf('Vision usage is booked, vision daily limit: %d tokens.', $limit));
+  }
+
+  /**
+   * Resolves the citizen analysis limit like ImageProcessingController.
+   */
+  private function citizenRateLimit(): int {
+    $configured = $this->configFactory->get('markaspot_vision.settings')->get('rate_limit_max');
+    if (is_int($configured) && $configured >= 0) {
+      return $configured;
+    }
+    if (is_string($configured) && ctype_digit($configured)) {
+      return (int) $configured;
+    }
+    return 10;
   }
 
 }

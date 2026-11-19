@@ -29,7 +29,7 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
     $modules->method('moduleExists')->willReturnCallback(static fn ($name) => $name === 'markaspot_vision');
     $container = new ContainerBuilder();
     $container->set('module_handler', $modules);
-    $container->set('config.factory', $this->getConfigFactoryStub([]));
+    $container->set('config.factory', $this->getConfigFactoryStub(['markaspot_vision.settings' => []]));
     $container->set('string_translation', $this->getStringTranslationStub());
     \Drupal::setContainer($container);
     $manager = new HealthCheckPluginManager(new \ArrayObject([
@@ -40,8 +40,8 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
     $plugin = $manager->createInstance('vision_usage_accounting');
     self::assertInstanceOf(VisionUsageAccountingCheck::class, $plugin);
     $result = $plugin->run();
-    self::assertSame('warning', $result->severity);
-    self::assertFalse($result->passed);
+    self::assertSame('info', $result->severity);
+    self::assertTrue($result->passed);
     self::assertStringContainsString('without markaspot_ai', $result->message);
   }
 
@@ -49,7 +49,7 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
    * Optional services and configuration determine warning versus info.
    */
   #[DataProvider('accountingStates')]
-  public function testAccountingState(bool $installed, bool $tracker, bool $client, ?bool $enabled, string $severity, string $message, ?int $dailyLimit = 1000): void {
+  public function testAccountingState(bool $installed, bool $tracker, bool $client, ?bool $enabled, string $severity, string $message, ?int $dailyLimit = 1000, mixed $citizenLimit = NULL): void {
     $container = new ContainerBuilder();
     $modules = $this->createMock(ModuleHandlerInterface::class);
     $modules->method('moduleExists')->with('markaspot_ai')->willReturn($installed);
@@ -58,6 +58,7 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
       'markaspot_ai.settings' => ['token_tracking' => [
         'enabled' => $enabled, 'daily_limit' => 1, 'vision_daily_limit' => $dailyLimit,
       ]],
+      'markaspot_vision.settings' => ['rate_limit_max' => $citizenLimit],
     ]));
     if ($tracker) {
       $container->set('markaspot_ai.token_tracking', new \stdClass());
@@ -80,7 +81,14 @@ final class VisionUsageAccountingCheckTest extends UnitTestCase {
    */
   public static function accountingStates(): array {
     return [
-      'module missing' => [FALSE, FALSE, FALSE, NULL, 'warning', 'without markaspot_ai'],
+      'module missing, default limit' => [
+        FALSE, FALSE, FALSE, NULL, 'info',
+        'limited to 10 requests per visitor and hour; imported images',
+      ],
+      'module missing, own limit' => [FALSE, FALSE, FALSE, NULL, 'info', 'limited to 25 requests', 1000, '25'],
+      'module missing, limit off' => [
+        FALSE, FALSE, FALSE, NULL, 'warning', 'hourly analysis limit switched off', 1000, 0,
+      ],
       'tracker missing' => [TRUE, FALSE, TRUE, TRUE, 'warning', 'services are unavailable'],
       'client missing' => [TRUE, TRUE, FALSE, TRUE, 'warning', 'services are unavailable'],
       'tracking disabled' => [TRUE, TRUE, TRUE, FALSE, 'warning', 'disabled or unset'],
