@@ -1,5 +1,11 @@
 # Changelog
 
+## [11.9.256](https://github.com/civicpatches/markaspot/compare/11.9.255...11.9.256) (2026-11-22)
+
+### Bug Fixes
+
+* **fastmap:** keep the owner's tenant admin roles when provisioning saves the acceptance time ([89e15ea](https://github.com/civicpatches/markaspot/commit/89e15eaa76c3ec179a8bbca1aa82dcd048e0d7bd))
+
 ## [11.9.255](https://github.com/civicpatches/markaspot/compare/11.9.254...11.9.255) (2026-11-19)
 
 ### Bug Fixes
