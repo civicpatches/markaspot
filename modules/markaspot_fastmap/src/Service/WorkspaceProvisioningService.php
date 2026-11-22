@@ -1501,6 +1501,11 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         if ($acceptance !== NULL) {
           $lifecycle->writeAcceptance($group, $acceptance, (int) $user->id());
           $group->save();
+          // Reload: adding the membership granted the tenant_admin role on a
+          // separately loaded account (markaspot_group). Saving the object
+          // from step 5 would drop that role again, and the role sync would
+          // then also remove the workspace's tenant admin role.
+          $user = $this->entityTypeManager->getStorage('user')->loadUnchanged($user->id());
           if ($user->hasField('field_tos_accepted_at')) {
             $user->set('field_tos_accepted_at', $acceptance['accepted_at']);
             $user->save();

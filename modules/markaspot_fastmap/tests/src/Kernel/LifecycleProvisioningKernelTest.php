@@ -197,6 +197,12 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->assertSame('parents@example.test', $owner->getEmail());
     $this->assertSame(1799990000, (int) $owner->get('field_tos_accepted_at')->value);
     $this->assertNotFalse($group->getMember($owner), 'The record names a member of the workspace.');
+    // Saving the acceptance time must not drop the roles the membership
+    // granted: the owner stays tenant admin of the workspace (found in a
+    // browser acceptance: a stale account object removed both roles).
+    $this->assertTrue($owner->hasRole('tenant_admin'), 'The owner keeps the tenant_admin role.');
+    $roles = array_keys($group->getMember($owner)->getRoles());
+    $this->assertContains($group->bundle() . '-tenant_admin', $roles, 'The owner keeps the tenant admin role of the workspace.');
   }
 
   /**
@@ -298,6 +304,13 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->assertSame('2026-11-20', $secondRecord['acceptance']['terms']);
     $this->assertSame($first['user_id'], $secondRecord['acceptance']['uid']);
     $this->assertSame(1799995000, (int) $this->reloadUser($first['user_id'])->get('field_tos_accepted_at')->value);
+    // The reused account is tenant admin of both workspaces.
+    $owner = $this->reloadUser($first['user_id']);
+    $this->assertTrue($owner->hasRole('tenant_admin'));
+    foreach ([$first['group_id'], $second['group_id']] as $groupId) {
+      $group = $this->reloadGroup($groupId);
+      $this->assertContains($group->bundle() . '-tenant_admin', array_keys($group->getMember($owner)->getRoles()));
+    }
   }
 
   /**
