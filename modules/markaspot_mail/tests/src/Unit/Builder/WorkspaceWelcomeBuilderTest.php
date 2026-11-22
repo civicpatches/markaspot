@@ -124,6 +124,41 @@ final class WorkspaceWelcomeBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Old model (no lifecycle param): "now active", no next step.
+   */
+  public function testOldModelKeepsTheActiveTexts(): void {
+    $msg = $this->buildBuilder()->build($this->buildContext([
+      'workspace_name' => 'Demo',
+      'workspace_url' => 'https://demo.civicspot.io',
+    ]));
+    $this->assertNotNull($msg);
+    $this->assertSame('Your Demo workspace is now active', $msg->content['preheader']);
+    $this->assertSame('Workspace "Demo" is now active.', $msg->content['intro']);
+    $this->assertSame('Try it out: create your first test report directly on the map.', $msg->content['body_blocks'][0]);
+    $this->assertCount(4, $msg->content['body_blocks']);
+  }
+
+  /**
+   * Lifecycle model: ready, and the next step is the operator and opening.
+   */
+  public function testLifecycleNamesTheNextStep(): void {
+    $msg = $this->buildBuilder()->build($this->buildContext([
+      'workspace_name' => 'Demo',
+      'workspace_url' => 'https://demo.civicspot.io',
+      'lifecycle' => TRUE,
+    ]));
+    $this->assertNotNull($msg);
+    $this->assertSame('Your Demo workspace is ready', $msg->content['preheader']);
+    $this->assertSame('Your workspace is ready', $msg->content['headline']);
+    $this->assertSame('Workspace "Demo" is ready.', $msg->content['intro']);
+    $this->assertSame('Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it.', $msg->content['body_blocks'][0]);
+    $this->assertCount(5, $msg->content['body_blocks']);
+    foreach ([$msg->content['preheader'], $msg->content['intro'], ...$msg->content['body_blocks']] as $text) {
+      $this->assertStringNotContainsString('active', $text);
+    }
+  }
+
+  /**
    * Escapes visible dashboard and login URLs before rendering raw mail HTML.
    */
   public function testBuildEscapesVisibleDashboardAndLoginLinks(): void {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_mail\Mail\Builder;
 
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\markaspot_mail\Enum\MailType;
 use Drupal\markaspot_mail\Mail\MailBuilderInterface;
 use Drupal\markaspot_mail\Mail\MailContext;
@@ -59,6 +60,7 @@ final class NotificationTextBuilder implements MailBuilderInterface {
     private readonly MailBrandingService $branding,
     private readonly CitizenWordingResolver $citizenWordingResolver,
     private readonly LoggerInterface $logger,
+    private readonly ?ModuleHandlerInterface $moduleHandler = NULL,
   ) {}
 
   /**
@@ -92,6 +94,16 @@ final class NotificationTextBuilder implements MailBuilderInterface {
     }
 
     $slots = $this->textResolver->resolve(self::CONFIG_NAME, $notificationKey, $ctx->langcode);
+    // Other modules may add text that depends on runtime state (see
+    // markaspot_mail.api.php), before wording placeholders and tokens.
+    if ($this->moduleHandler !== NULL) {
+      $alterContext = [
+        'notification_key' => $notificationKey,
+        'node' => $node,
+        'langcode' => $ctx->langcode,
+      ];
+      $this->moduleHandler->alter('markaspot_mail_notification_slots', $slots, $alterContext);
+    }
     $slots = $this->replaceRuntimeWording(
       $slots,
       $this->resolveJurisdictionGroupFromNode($node),

@@ -15,14 +15,14 @@ use Drupal\Tests\UnitTestCase;
 use Psr\Log\LoggerInterface;
 
 /**
- *
+ * Tests the workspace verification mail builder.
  */
 #[CoversClass(\Drupal\markaspot_mail\Mail\Builder\WorkspaceVerificationBuilder::class)]
 #[Group('markaspot_mail')]
 final class WorkspaceVerificationBuilderTest extends UnitTestCase {
 
   /**
-   *
+   * The builder reports the workspace verification mail type.
    */
   public function testGetTypeReturnsFastmapWorkspaceVerification(): void {
     $this->assertSame(
@@ -32,7 +32,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Only the fastmap workspace_verification key is supported.
    */
   public function testSupportsOnlyWorkspaceVerificationKey(): void {
     $builder = $this->buildBuilder();
@@ -43,7 +43,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Without a workspace name nothing is rendered.
    */
   public function testBuildReturnsNullWhenWorkspaceNameMissing(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -57,7 +57,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Without a verification link nothing is rendered.
    */
   public function testBuildReturnsNullWhenVerifyUrlMissing(): void {
     $logger = $this->createMock(LoggerInterface::class);
@@ -71,7 +71,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * A platform mail with the button and the cleanup window.
    */
   public function testBuildProducesPlatformMailWithCtaAndCleanupReference(): void {
     $builder = $this->buildBuilder();
@@ -105,7 +105,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Without a site name the subject names CivicSpot.
    */
   public function testBuildUsesDefaultSiteNameWhenMissing(): void {
     $builder = $this->buildBuilder();
@@ -119,7 +119,7 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
   }
 
   /**
-   *
+   * The configured subject template gets its placeholders.
    */
   public function testBuildAppliesConfigSubjectTemplateViaPlaceholders(): void {
     $textResolver = $this->createMock(MailTextResolver::class);
@@ -139,6 +139,53 @@ final class WorkspaceVerificationBuilderTest extends UnitTestCase {
 
     $this->assertNotNull($msg);
     $this->assertSame('CUSTOM @site: activate MyDemo now', $msg->subject);
+  }
+
+  /**
+   * Old model (no lifecycle param): the activation texts, unchanged.
+   */
+  public function testOldModelKeepsTheActivationTexts(): void {
+    foreach ([[], ['lifecycle' => FALSE], ['lifecycle' => 'yes']] as $extra) {
+      $msg = $this->buildBuilder()->build($this->buildContext($extra + [
+        'workspace_name' => 'Demo',
+        'site_name' => 'CivicSpot',
+        'verify_url' => 'https://civicspot.io/verify?t=1',
+      ]));
+      $this->assertNotNull($msg);
+      $this->assertSame('Activate your workspace', $msg->content['headline']);
+      $this->assertSame('Click to activate your Demo workspace', $msg->content['preheader']);
+      $this->assertSame('Welcome to CivicSpot! Your workspace "Demo" is ready to activate.', $msg->content['intro']);
+      $this->assertSame('Click the button below to verify your email and unlock the workspace.', $msg->content['body_blocks'][0]);
+    }
+  }
+
+  /**
+   * Lifecycle model: confirm the address; nothing is "activated".
+   */
+  public function testLifecycleAsksToConfirmTheAddress(): void {
+    $msg = $this->buildBuilder()->build($this->buildContext([
+      'workspace_name' => 'Demo',
+      'site_name' => 'CivicSpot',
+      'verify_url' => 'https://civicspot.io/verify?t=1',
+      'cleanup_days' => '7',
+      'lifecycle' => TRUE,
+    ]));
+    $this->assertNotNull($msg);
+    $this->assertSame('Confirm your email address', $msg->content['headline']);
+    $this->assertSame('Confirm your email address for Demo', $msg->content['preheader']);
+    $this->assertSame('Welcome to CivicSpot! Confirm your email address to set up your workspace "Demo".', $msg->content['intro']);
+    $this->assertSame('Click the button below to confirm your email address.', $msg->content['body_blocks'][0]);
+    $this->assertCount(3, $msg->content['body_blocks']);
+    $this->assertSame('Verify email', $msg->content['cta_label']);
+    $texts = [
+      $msg->content['headline'],
+      $msg->content['intro'],
+      $msg->content['preheader'],
+      ...$msg->content['body_blocks'],
+    ];
+    foreach ($texts as $text) {
+      $this->assertStringNotContainsStringIgnoringCase('activat', $text);
+    }
   }
 
   /**

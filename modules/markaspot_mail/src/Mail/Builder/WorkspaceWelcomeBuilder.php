@@ -34,6 +34,9 @@ use Psr\Log\LoggerInterface;
  *     contribution presets)
  *   - wording_plural (string, used only with suggestion, entry, or
  *     contribution presets)
+ *   - lifecycle (bool): the workspace carries a lifecycle record. The mail
+ *     says the workspace is ready and names the next step (operator, open
+ *     the map) instead of calling it active. Absent, the old texts.
  *
  * Always platform mode: the recipient is a workspace owner on the
  * CivicSpot SaaS, not a citizen of any single jur group.
@@ -141,18 +144,37 @@ final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
         '@name' => $workspaceName,
       ], ['langcode' => $langcode]);
 
+    // Lifecycle model: the workspace is ready, but the map takes reports
+    // only after the operator has been named and the map opened.
+    $lifecycle = ($ctx->params['lifecycle'] ?? FALSE) === TRUE;
+    $bodyBlocks = [];
+    if ($lifecycle) {
+      $preheader = (string) $this->t('Your @name workspace is ready', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $intro = (string) $this->t('Workspace "@name" is ready.', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $bodyBlocks[] = (string) $this->t('Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it.', [], ['langcode' => $langcode]);
+    }
+    else {
+      $preheader = (string) $this->t('Your @name workspace is now active', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $intro = (string) $this->t('Workspace "@name" is now active.', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+    }
+
     return new MailMessage(
       subject: $subject,
       variant: 'card_transactional',
       content: [
-        'preheader' => (string) $this->t('Your @name workspace is now active', [
-          '@name' => $workspaceName,
-        ], ['langcode' => $langcode]),
+        'preheader' => $preheader,
         'headline' => (string) $this->t('Your workspace is ready', [], ['langcode' => $langcode]),
-        'intro' => (string) $this->t('Workspace "@name" is now active.', [
-          '@name' => $workspaceName,
-        ], ['langcode' => $langcode]),
+        'intro' => $intro,
         'body_blocks' => [
+          ...$bodyBlocks,
           $testReportBlock,
           $demoReportsBlock,
           // Anchor text deliberately repeats the URL: body_blocks render

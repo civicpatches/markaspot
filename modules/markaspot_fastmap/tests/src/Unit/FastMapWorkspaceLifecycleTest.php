@@ -98,6 +98,13 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
   private array|false $pendingRow = FALSE;
 
   /**
+   * Mails sent: [module, key, to, langcode, params] per mail.
+   *
+   * @var array<int, array>
+   */
+  private array $mails = [];
+
+  /**
    * The provisioning mock.
    */
   private WorkspaceProvisioningServiceInterface&MockObject $provisioning;
@@ -116,6 +123,7 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
       'service_key' => 'test-service-key-123',
       'verify_base_url' => 'https://example.com',
       'cleanup_days' => 7,
+      'workspace_base_url' => 'https://maps.example.com',
       'lifecycle_enabled' => $this->switch,
       default => NULL,
     });
@@ -183,7 +191,10 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
       : $this->createMock(EntityStorageInterface::class));
 
     $mailManager = $this->createMock(MailManagerInterface::class);
-    $mailManager->method('mail')->willReturn(['result' => TRUE]);
+    $mailManager->method('mail')->willReturnCallback(function (string $module, string $key, string $to, string $langcode, array $params): array {
+      $this->mails[] = [$module, $key, $to, $langcode, $params];
+      return ['result' => TRUE];
+    });
 
     $lock = $this->createMock(LockBackendInterface::class);
     $lock->method('acquire')->willReturn(TRUE);
@@ -294,6 +305,7 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
       $this->assertSame(202, $status);
       $data = json_decode($this->inserted['workspace_data'], TRUE);
       $this->assertArrayNotHasKey('acceptance', $data);
+      $this->assertArrayNotHasKey('lifecycle', $this->lastMail('workspace_verification')[4], 'the old verification texts');
 
       // And a signup without it is accepted exactly as before.
       $this->inserted = NULL;
@@ -361,6 +373,7 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
       'langcode' => 'de-ls',
       'accepted_at' => self::REQUEST_TIME,
     ], $data['acceptance']);
+    $this->assertTrue($this->lastMail('workspace_verification')[4]['lifecycle'], 'the verification mail asks to confirm the address');
   }
 
   /**
@@ -369,6 +382,8 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
    * @covers ::verifyWorkspace
    */
   public function testVerifyCarriesAcceptanceToProvisioning(): void {
+    // The welcome mail builds its link with the module's URL helper.
+    require_once dirname(__DIR__, 3) . '/markaspot_fastmap.module';
     $this->switch = TRUE;
     $acceptance = $this->acceptance() + ['accepted_at' => self::REQUEST_TIME];
     $this->pendingRow = $this->pendingRow(['acceptance' => $acceptance]);
@@ -381,11 +396,22 @@ class FastMapWorkspaceLifecycleTest extends UnitTestCase {
         'url' => '/test-ws',
         'categories' => 1,
         'user_id' => 7,
+        'lifecycle' => TRUE,
       ]);
 
     $response = $this->controller()->verifyWorkspace(self::TOKEN);
 
     $this->assertSame(201, $response->getStatusCode());
+    $this->assertTrue($this->lastMail('workspace_welcome')[4]['lifecycle'], 'the welcome mail names the next step');
+  }
+
+  /**
+   * The last mail sent with a key.
+   */
+  private function lastMail(string $key): array {
+    $mails = array_values(array_filter($this->mails, static fn(array $mail): bool => $mail[1] === $key));
+    $this->assertNotEmpty($mails, "A $key mail was sent.");
+    return end($mails);
   }
 
   /**

@@ -17,6 +17,7 @@ use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
@@ -196,12 +197,12 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $owner = $this->reloadUser($result['user_id']);
     $this->assertSame('parents@example.test', $owner->getEmail());
     $this->assertSame(1799990000, (int) $owner->get('field_tos_accepted_at')->value);
-    $this->assertNotFalse($group->getMember($owner), 'The record names a member of the workspace.');
+    $this->assertNotSame([], $group->getRelationshipsByEntity($owner, 'group_membership'), 'The record names a member of the workspace.');
     // Saving the acceptance time must not drop the roles the membership
     // granted: the owner stays tenant admin of the workspace (found in a
     // browser acceptance: a stale account object removed both roles).
     $this->assertTrue($owner->hasRole('tenant_admin'), 'The owner keeps the tenant_admin role.');
-    $roles = array_keys($group->getMember($owner)->getRoles());
+    $roles = $this->membershipRoles($group, $owner);
     $this->assertContains($group->bundle() . '-tenant_admin', $roles, 'The owner keeps the tenant admin role of the workspace.');
   }
 
@@ -309,7 +310,7 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->assertTrue($owner->hasRole('tenant_admin'));
     foreach ([$first['group_id'], $second['group_id']] as $groupId) {
       $group = $this->reloadGroup($groupId);
-      $this->assertContains($group->bundle() . '-tenant_admin', array_keys($group->getMember($owner)->getRoles()));
+      $this->assertContains($group->bundle() . '-tenant_admin', $this->membershipRoles($group, $owner));
     }
   }
 
@@ -341,6 +342,150 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->assertSame(0, $this->countGroups());
     $this->assertSame([], $this->container->get('entity_type.manager')->getStorage('user')->loadByProperties(['mail' => 'parents@example.test']));
     $this->assertSame(0, (int) \Drupal::database()->select('group__' . WorkspaceLifecycle::FIELD)->countQuery()->execute()->fetchField());
+  }
+
+  /**
+   * A new owner account speaks the accepted language; nothing else changes.
+   */
+  public function testNewOwnerGetsTheAcceptanceLanguage(): void {
+    ConfigurableLanguage::createFromLangcode('de')->save();
+
+    // Switch off: today's account, whatever the signup carries.
+    $this->setSwitch(FALSE);
+    $old = $this->provision('oldtown', ['acceptance' => self::ACCEPTANCE, 'email' => 'old@example.test']);
+    $this->assertNotSame('de', $this->reloadUser($old['user_id'])->getPreferredLangcode(FALSE));
+
+    $this->setSwitch(TRUE);
+    $result = $this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE]);
+    $owner = $this->reloadUser($result['user_id']);
+    $this->assertSame('de', $owner->getPreferredLangcode(FALSE));
+
+    // An existing account keeps its language.
+    $later = ['langcode' => 'en'] + self::ACCEPTANCE;
+    $second = $this->provision('riverside', ['acceptance' => $later]);
+    $this->assertSame($result['user_id'], $second['user_id']);
+    $this->assertSame('de', $this->reloadUser($second['user_id'])->getPreferredLangcode(FALSE));
+
+    // A language the site does not have leaves the default.
+    $unknown = ['langcode' => 'fi'] + self::ACCEPTANCE;
+    $third = $this->provision('hillside', ['acceptance' => $unknown, 'email' => 'other@example.test']);
+    $this->assertSame($this->reloadUser($old['user_id'])->getPreferredLangcode(FALSE), $this->reloadUser($third['user_id'])->getPreferredLangcode(FALSE));
+  }
+
+  /**
+   * Lifecycle model: the examples lie in the first map view.
+   *
+   * At zoom 15 around 50.83, 6.9 a fixed spiral of at most 30 % of a tile
+   * (about 230 m); the switch off keeps the random spot in the boundary box.
+   */
+  public function testExamplesLieInTheInitialView(): void {
+    $this->setSwitch(TRUE);
+    $categories = ['Dangerous crossing', 'Missing sign', 'Parked cars', 'Broken light'];
+    $first = $this->examplePositions($this->provision('lindenhof', [
+      'acceptance' => self::ACCEPTANCE,
+      'categories' => $categories,
+    ]));
+    $this->assertCount(4, $first);
+    foreach ($first as [$lat, $lng]) {
+      $this->assertLessThan(240.0, $this->metres(50.83, 6.9, $lat, $lng), 'within the first view');
+    }
+    $this->assertCount(4, array_unique(array_map('serialize', $first)), 'distinct spots');
+    $second = $this->examplePositions($this->provision('riverside', [
+      'acceptance' => self::ACCEPTANCE,
+      'categories' => $categories,
+    ]));
+    $this->assertSame($first, $second, 'the same picture for the same center');
+
+    $this->setSwitch(FALSE);
+    $old = $this->examplePositions($this->provision('oldtown', ['categories' => $categories]));
+    $this->assertCount(4, $old);
+    foreach ($old as [$lat, $lng]) {
+      $this->assertNotContains([$lat, $lng], $first, 'today\'s random placement');
+      $this->assertGreaterThanOrEqual(50.8, $lat);
+      $this->assertLessThanOrEqual(51.1, $lat);
+      $this->assertGreaterThanOrEqual(6.8, $lng);
+      $this->assertLessThanOrEqual(7.1, $lng);
+    }
+  }
+
+  /**
+   * Lifecycle model: the start page does not invite reports before opening.
+   */
+  public function testStartPageWaitsForTheOpening(): void {
+    $this->setSwitch(TRUE);
+    $de = $this->startPageBody($this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE, 'language' => 'de']));
+    $this->assertStringContainsString('Sobald die Karte für neue', $de);
+    $this->assertStringNotContainsString('selbst etwas Neues zu erfassen', $de);
+    $en = $this->startPageBody($this->provision('riverside', ['acceptance' => self::ACCEPTANCE]));
+    $this->assertStringContainsString('As soon as the map is open for new', $en);
+    $this->assertStringNotContainsString('add something new', $en);
+    // A language without a lifecycle text: the welcome paragraph only.
+    $fr = $this->startPageBody($this->provision('hillside', ['acceptance' => self::ACCEPTANCE, 'language' => 'fr']));
+    $this->assertStringStartsWith('<p>Bienvenue sur <strong>Map hillside</strong>', $fr);
+    $this->assertSame(1, substr_count($fr, '<p>'));
+
+    // Old model: today's text.
+    $this->setSwitch(FALSE);
+    $old = $this->startPageBody($this->provision('oldtown', ['language' => 'de', 'email' => 'old@example.test']));
+    $this->assertStringContainsString('selbst etwas Neues zu erfassen', $old);
+  }
+
+  /**
+   * The body of a workspace's start page.
+   */
+  private function startPageBody(array $result): string {
+    $pages = $this->container->get('entity_type.manager')->getStorage('node')->loadByProperties([
+      'type' => 'page',
+      'field_jurisdiction' => $result['group_id'],
+    ]);
+    $this->assertCount(1, $pages);
+    return (string) reset($pages)->get('body')->value;
+  }
+
+  /**
+   * The example positions of a workspace, sorted by node ID.
+   *
+   * @return array<int, array{float, float}>
+   *   [lat, lng] per example.
+   */
+  private function examplePositions(array $result): array {
+    $nodes = $this->container->get('entity_type.manager')->getStorage('node')->loadByProperties([
+      'type' => 'service_request',
+      'field_jurisdiction' => $result['group_id'],
+    ]);
+    ksort($nodes);
+    return array_values(array_map(static fn(NodeInterface $node): array => [
+      round((float) $node->get('field_geolocation')->lat, 6),
+      round((float) $node->get('field_geolocation')->lng, 6),
+    ], $nodes));
+  }
+
+  /**
+   * Distance between two points in metres (equirectangular).
+   */
+  private function metres(float $lat1, float $lng1, float $lat2, float $lng2): float {
+    $x = deg2rad($lng2 - $lng1) * cos(deg2rad(($lat1 + $lat2) / 2));
+    $y = deg2rad($lat2 - $lat1);
+    return sqrt($x * $x + $y * $y) * 6371000.0;
+  }
+
+  /**
+   * The group role IDs of an account's membership in a group.
+   *
+   * Read from the membership relationship's group_roles field, without the
+   * deprecated membership wrapper.
+   *
+   * @return string[]
+   *   Group role IDs.
+   */
+  private function membershipRoles(GroupInterface $group, UserInterface $account): array {
+    $roles = [];
+    foreach ($group->getRelationshipsByEntity($account, 'group_membership') as $relationship) {
+      foreach ($relationship->get('group_roles') as $item) {
+        $roles[] = (string) $item->target_id;
+      }
+    }
+    return $roles;
   }
 
   /**

@@ -323,3 +323,31 @@ msgstr "Eingehende Meldungen im Dashboard verwalten:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Sie können sich jederzeit anmelden:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Bestätigen Sie Ihre E-Mail-Adresse für @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "E-Mail-Adresse bestätigen"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Willkommen bei @site! Bitte bestätigen Sie Ihre E-Mail-Adresse. Dann können Sie Ihren Arbeits-Bereich \"@name\" einrichten."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Klicken Sie auf den Button unten. So bestätigen Sie Ihre E-Mail-Adresse."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Ihr Arbeits-Bereich @name ist bereit"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Der Arbeits-Bereich \"@name\" ist bereit."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it."
+msgstr "Nächster Schritt: Öffnen Sie die Einstellungen in Ihrem Dashboard. Tragen Sie dort ein, wer die Karte betreibt. Dann öffnen Sie die Karte. Vorher kann nur Ihr Team die Karte nutzen."

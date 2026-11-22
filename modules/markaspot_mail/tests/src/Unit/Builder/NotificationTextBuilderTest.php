@@ -9,6 +9,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Language\LanguageInterface;
@@ -95,6 +96,46 @@ final class NotificationTextBuilderTest extends UnitTestCase {
       to: 'citizen@example.com',
     );
     $this->assertNull($builder->build($ctx));
+  }
+
+  /**
+   * Text added by the slots alter hook gets the wording and the tokens.
+   */
+  public function testSlotsAlterRunsBeforeWordingAndTokens(): void {
+    $node = $this->buildPlainNode();
+    $slots = [
+      'subject' => 'Your report has been received',
+      'headline' => 'We received your report',
+      'intro' => 'Received.',
+      'body_blocks' => ['Category: Pothole'],
+      'cta_label' => '',
+      'preheader' => 'Received.',
+    ];
+    $textResolver = $this->createMock(MailTextResolver::class);
+    $textResolver->method('resolve')->willReturn($slots);
+    $textResolver->expects($this->once())->method('replaceTokens')
+      ->willReturnCallback(function (array $altered): array {
+        $this->assertSame(['Category: Pothole', 'New reports are approved first.'], $altered['body_blocks'], 'the added block reaches the token step with its wording replaced');
+        return $altered;
+      });
+    $moduleHandler = $this->createMock(ModuleHandlerInterface::class);
+    $moduleHandler->expects($this->once())->method('alter')
+      ->with('markaspot_mail_notification_slots', $this->anything(), $this->anything())
+      ->willReturnCallback(function (string $type, array &$data, array &$context) use ($node): void {
+        $this->assertSame(['notification_key' => 'report_confirmation', 'node' => $node, 'langcode' => 'en'], $context);
+        $data['body_blocks'][] = 'New {{ citizen_term_plural }} are approved first.';
+      });
+
+    $builder = $this->buildBuilder(textResolver: $textResolver, moduleHandler: $moduleHandler);
+    $msg = $builder->build(new MailContext(
+      module: 'markaspot_mail',
+      key: 'notification_report_confirmation',
+      langcode: 'en',
+      params: ['node' => $node, 'notification_key' => 'report_confirmation'],
+      to: 'citizen@example.com',
+    ));
+    $this->assertNotNull($msg);
+    $this->assertSame(['Category: Pothole', 'New reports are approved first.'], $msg->content['body_blocks']);
   }
 
   /**
@@ -508,6 +549,7 @@ final class NotificationTextBuilderTest extends UnitTestCase {
     ?LoggerInterface $logger = NULL,
     ?MailBrandingService $branding = NULL,
     ?CitizenWordingResolver $citizenWordingResolver = NULL,
+    ?ModuleHandlerInterface $moduleHandler = NULL,
   ): NotificationTextBuilder {
     if ($textResolver === NULL) {
       $textResolver = $this->createMock(MailTextResolver::class);
@@ -533,6 +575,7 @@ final class NotificationTextBuilderTest extends UnitTestCase {
       $branding,
       $citizenWordingResolver ?? new CitizenWordingResolver(),
       $logger ?? $this->createMock(LoggerInterface::class),
+      $moduleHandler,
     );
   }
 

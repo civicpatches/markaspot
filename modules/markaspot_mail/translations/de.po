@@ -265,3 +265,31 @@ msgstr "Datenschutz"
 #: templates/mail-layout.html.twig
 msgid "This e-mail was sent automatically by @name via the Mark-a-Spot platform."
 msgstr "Diese E-Mail wurde automatisch von @name über die Mark-a-Spot-Plattform versendet."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Bestätigen Sie Ihre E-Mail-Adresse für @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "E-Mail-Adresse bestätigen"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Willkommen bei @site! Bestätigen Sie Ihre E-Mail-Adresse, um Ihren Arbeitsbereich „@name“ einzurichten."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Klicken Sie auf die Schaltfläche unten, um Ihre E-Mail-Adresse zu bestätigen."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Ihr Arbeitsbereich @name ist bereit"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Der Arbeitsbereich „@name“ ist bereit."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it."
+msgstr "Nächster Schritt: Tragen Sie in den Einstellungen Ihres Dashboards den Betreiber der Karte ein und öffnen Sie die Karte. Bis dahin kann nur Ihr Team sie nutzen."

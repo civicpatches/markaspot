@@ -25,6 +25,7 @@ use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\language\Entity\ConfigurableLanguage;
+use Drupal\markaspot_fastmap\Hook\CitizenMailHooks;
 use Drupal\markaspot_fastmap\Service\WaitingReportsNotifier;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_nuxt\Service\ReviewBeforePublish;
@@ -602,6 +603,52 @@ final class WaitingReportsMailKernelTest extends KernelTestBase {
     $this->assertSame(2, $calls);
     $this->assertSame([$open], $this->pendingIds(), 'still due');
     $this->assertNull($this->kv(WaitingReportsNotifier::MAILED_COLLECTION)->get((string) $open), 'the stamp is taken back');
+  }
+
+  /**
+   * The citizen's confirmation of a held report names the approval.
+   *
+   * Only for a report held in an open workspace with a record, only in the
+   * confirmation and only in a language with a sentence.
+   */
+  public function testConfirmationNamesTheApproval(): void {
+    $alter = function (NodeInterface $node, string $langcode, string $key = 'report_confirmation'): array {
+      $slots = [
+        'subject' => 'S',
+        'headline' => 'H',
+        'intro' => 'I',
+        'body_blocks' => ['Category: X'],
+        'cta_label' => '',
+        'preheader' => 'P',
+      ];
+      $context = ['notification_key' => $key, 'node' => $node, 'langcode' => $langcode];
+      $this->container->get('module_handler')->alter('markaspot_mail_notification_slots', $slots, $context);
+      return $slots['body_blocks'];
+    };
+
+    $held = $this->createAs(new AnonymousUserSession(), 'open');
+    $this->assertTrue($this->review()->isHeld($held));
+    $this->assertSame(['Category: X', CitizenMailHooks::APPROVAL_NOTICE['de']], $alter($held, 'de'));
+    $this->assertSame(['Category: X', CitizenMailHooks::APPROVAL_NOTICE['en']], $alter($held, 'en'));
+    $this->assertSame(['Category: X', CitizenMailHooks::APPROVAL_NOTICE['de-ls']], $alter($held, 'de-ls'));
+    $this->assertSame(['Category: X'], $alter($held, 'fr'), 'no English sentence in a French mail');
+    $this->assertSame(['Category: X'], $alter($held, 'de', 'status_open'), 'only the confirmation');
+
+    // A workspace without a record (old model) with approval on: unchanged.
+    $legacy = $this->createAs(new AnonymousUserSession(), 'legacy');
+    $this->assertTrue($this->review()->isHeld($legacy));
+    $this->assertSame(['Category: X'], $alter($legacy, 'de'));
+
+    // The team's test report in a map that is not open: never published.
+    $test = $this->createAs($this->accounts['closed operator'], 'closed', TRUE);
+    $this->assertFalse($test->isPublished());
+    $this->assertSame(['Category: X'], $alter($test, 'de'));
+
+    // Approval off: published at once, nothing to add.
+    $this->setFlag('open', FALSE);
+    $published = $this->createAs(new AnonymousUserSession(), 'open');
+    $this->assertTrue($published->isPublished());
+    $this->assertSame(['Category: X'], $alter($published, 'de'));
   }
 
   /**

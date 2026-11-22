@@ -29,6 +29,10 @@ use Psr\Log\LoggerInterface;
  * Optional params:
  *   - site_name (string, defaults to "CivicSpot")
  *   - cleanup_days (int|string, defaults to 7)
+ *   - lifecycle (bool): the signup carries an acceptance (lifecycle model).
+ *     The mail asks to confirm the address; the workspace is not "activated"
+ *     by the click but is set up and opened later by its operator. Absent,
+ *     the texts are those of the old model.
  *
  * Always platform mode: the workspace doesn't have a jurisdiction yet
  * (that's precisely what the verification step unlocks), so there is no
@@ -93,20 +97,39 @@ final class WorkspaceVerificationBuilder implements MailBuilderInterface {
         '@name' => $workspaceName,
       ], ['langcode' => $langcode]);
 
+    $lifecycle = ($ctx->params['lifecycle'] ?? FALSE) === TRUE;
+    if ($lifecycle) {
+      $preheader = (string) $this->t('Confirm your email address for @name', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $headline = (string) $this->t('Confirm your email address', [], ['langcode' => $langcode]);
+      $intro = (string) $this->t('Welcome to @site! Confirm your email address to set up your workspace "@name".', [
+        '@site' => $siteName,
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $action = (string) $this->t('Click the button below to confirm your email address.', [], ['langcode' => $langcode]);
+    }
+    else {
+      $preheader = (string) $this->t('Click to activate your @name workspace', [
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $headline = (string) $this->t('Activate your workspace', [], ['langcode' => $langcode]);
+      $intro = (string) $this->t('Welcome to @site! Your workspace "@name" is ready to activate.', [
+        '@site' => $siteName,
+        '@name' => $workspaceName,
+      ], ['langcode' => $langcode]);
+      $action = (string) $this->t('Click the button below to verify your email and unlock the workspace.', [], ['langcode' => $langcode]);
+    }
+
     return new MailMessage(
       subject: $subject,
       variant: 'card_transactional',
       content: [
-        'preheader' => (string) $this->t('Click to activate your @name workspace', [
-          '@name' => $workspaceName,
-        ], ['langcode' => $langcode]),
-        'headline' => (string) $this->t('Activate your workspace', [], ['langcode' => $langcode]),
-        'intro' => (string) $this->t('Welcome to @site! Your workspace "@name" is ready to activate.', [
-          '@site' => $siteName,
-          '@name' => $workspaceName,
-        ], ['langcode' => $langcode]),
+        'preheader' => $preheader,
+        'headline' => $headline,
+        'intro' => $intro,
         'body_blocks' => [
-          (string) $this->t('Click the button below to verify your email and unlock the workspace.', [], ['langcode' => $langcode]),
+          $action,
           (string) $this->t('Unverified workspaces are automatically removed after @days days.', [
             '@days' => $cleanupDays,
           ], ['langcode' => $langcode]),

@@ -1118,6 +1118,7 @@ class FastMapWorkspaceControllerTest extends UnitTestCase {
     $this->assertSame('entry', $mailArgs[4]['wording_preset'] ?? NULL);
     $this->assertSame('entry', $mailArgs[4]['wording_singular'] ?? NULL);
     $this->assertSame('entries', $mailArgs[4]['wording_plural'] ?? NULL);
+    $this->assertArrayNotHasKey('lifecycle', $mailArgs[4], 'old model: the old welcome texts');
     // A login_token should be present when provisioning succeeds.
     $this->assertArrayHasKey('login_token', $data);
     $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $data['login_token']);

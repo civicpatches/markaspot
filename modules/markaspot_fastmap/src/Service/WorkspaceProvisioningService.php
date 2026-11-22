@@ -1489,8 +1489,9 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         $this->attachPlaceholderSignet($group, $slug, $template);
         $group->save();
 
-        // 5. Create tenant admin user.
-        $user = $this->createTenantAdmin($email, $name, $slug);
+        // 5. Create tenant admin user. Lifecycle model: a new account speaks
+        // the language the texts were accepted in.
+        $user = $this->createTenantAdmin($email, $name, $slug, $acceptance !== NULL ? $this->installedLangcode($acceptance['langcode'] ?? NULL) : NULL);
 
         // 6. Add user as group member with admin role.
         $this->addGroupMembership($group, $user);
@@ -1519,7 +1520,9 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         $this->addApiUserMembership($group);
 
         // 8. Create demo service requests.
-        $this->createDemoRequests($data, $group, $categoryTermIds, $groupId, $defaultLang, $demoSkippedStatusIds);
+        // Lifecycle model: the examples lie in the first map view, so the
+        // new operator sees them next to the "examples" notice.
+        $this->createDemoRequests($data, $group, $categoryTermIds, $groupId, $defaultLang, $demoSkippedStatusIds, $acceptance !== NULL);
 
         // 8a. Lifecycle model: every later report waits for the operator's
         // approval by default; the operator can switch it off. Set after the
@@ -1538,7 +1541,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
 
         // 9. Create welcome start page.
         try {
-          $this->createStartPage($group, $name, $defaultLang, $startPageContent, $startPageTranslations, $availableLanguages);
+          $this->createStartPage($group, $name, $defaultLang, $startPageContent, $startPageTranslations, $availableLanguages, $acceptance !== NULL);
         }
         catch (\Exception $e) {
           $this->logger->error('Failed to create start page for @name: @msg', [
@@ -1559,6 +1562,8 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
           // It is safe, curated vocabulary only and is not exposed as an API
           // field or used for Open311 identifiers.
           'wording' => $this->resolveCitizenWording($group, $defaultLang),
+          // Whether the workspace carries a lifecycle record (new model).
+          'lifecycle' => $acceptance !== NULL,
         ];
 
         unset($transaction);
@@ -2369,8 +2374,18 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
 
   /**
    * Creates or retrieves the tenant admin user.
+   *
+   * @param string $email
+   *   The owner's address.
+   * @param string $workspaceName
+   *   The workspace name, for the log.
+   * @param string $slug
+   *   The workspace slug, for the account name.
+   * @param string|null $langcode
+   *   An installed language for a new account (preferred_langcode), or NULL
+   *   for the default. An existing account keeps its language.
    */
-  private function createTenantAdmin(string $email, string $workspaceName, string $slug): UserInterface {
+  private function createTenantAdmin(string $email, string $workspaceName, string $slug, ?string $langcode = NULL): UserInterface {
     $userStorage = $this->entityTypeManager->getStorage('user');
 
     // Check if user already exists.
@@ -2391,11 +2406,15 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
     }
 
     // The name is the label colleagues see; it never carries the address.
-    $user = $userStorage->create([
+    $values = [
       'name' => (new WorkspaceAccountName($this->entityTypeManager))->forOwner($slug),
       'mail' => $email,
       'status' => 1,
-    ]);
+    ];
+    if ($langcode !== NULL) {
+      $values['preferred_langcode'] = $langcode;
+    }
+    $user = $userStorage->create($values);
     $user->save();
 
     $this->logger->info('Created tenant admin @email for workspace @name', [
@@ -2404,6 +2423,15 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
     ]);
 
     return $user;
+  }
+
+  /**
+   * Returns a langcode when it names an installed language, else NULL.
+   */
+  private function installedLangcode(mixed $langcode): ?string {
+    return is_string($langcode) && $langcode !== '' && $this->languageManager->getLanguage($langcode) !== NULL
+      ? $langcode
+      : NULL;
   }
 
   /**
@@ -2631,6 +2659,39 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
   ];
 
   /**
+   * Start page texts of the lifecycle model.
+   *
+   * The map of a new workspace takes no reports until its operator opens it,
+   * and the page stays after the opening: the texts invite reporting for
+   * when the map is open. Languages without an entry here get the first
+   * paragraph of START_PAGE_TEMPLATES, the welcome without the invitation.
+   */
+  private const LIFECYCLE_START_PAGE_TEMPLATES = [
+    'en' => [
+      'title' => 'Welcome to %name',
+      'body' => '<p>Welcome to <strong>%name</strong>, your citizen participation platform.</p>'
+        . '<p>Use the map to browse %term_plural. '
+        . 'As soon as the map is open for new %term_plural, select a category, pin the location, and describe the issue. '
+        . 'Your participation helps make %name better for everyone.</p>',
+    ],
+    'de' => [
+      'title' => 'Willkommen bei %name',
+      'body' => '<p>Willkommen bei <strong>%name</strong>, Ihrer Plattform für Bürgeranliegen.</p>'
+        . '<p>Auf der Karte sehen Sie vorhandene %term_plural. '
+        . 'Sobald die Karte für neue %term_plural geöffnet ist, wählen Sie eine Kategorie, markieren den Standort und beschreiben das Anliegen. '
+        . 'Damit helfen Sie, %name für alle zu verbessern.</p>',
+    ],
+    'de-ls' => [
+      'title' => 'Willkommen bei %name',
+      'body' => '<p>Willkommen bei <strong>%name</strong>. Hier können Sie sich beteiligen.</p>'
+        . '<p>Schauen Sie auf der Karte, was schon als %term_plural eingetragen ist. '
+        . 'Bald können Sie auch selbst etwas eintragen. '
+        . 'Dann wählen Sie ein Thema, zeigen den Ort und beschreiben das Problem. '
+        . 'Damit helfen Sie, %name für alle besser zu machen.</p>',
+    ],
+  ];
+
+  /**
    * Renders a static welcome-page template with the workspace terminology.
    *
    * The static fallback deliberately uses only a plural placeholder. It avoids
@@ -2638,11 +2699,20 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
    * supported onboarding language. AI-authored start-page content remains
    * tenant content and is never rewritten.
    *
+   * With $lifecycle, the texts of LIFECYCLE_START_PAGE_TEMPLATES.
+   *
    * @return array{title: string, body: string}
    *   The rendered fallback title and HTML body.
    */
-  private function renderStartPageTemplate(GroupInterface $group, string $name, string $lang): array {
+  private function renderStartPageTemplate(GroupInterface $group, string $name, string $lang, bool $lifecycle = FALSE): array {
     $template = self::START_PAGE_TEMPLATES[$lang] ?? self::START_PAGE_TEMPLATES['en'];
+    if ($lifecycle) {
+      $template = self::LIFECYCLE_START_PAGE_TEMPLATES[$lang] ?? [
+        'title' => $template['title'],
+        // The welcome paragraph only.
+        'body' => substr($template['body'], 0, (int) strpos($template['body'], '</p>') + 4),
+      ];
+    }
     $wording = $this->resolveCitizenWording($group, $lang);
     $replacements = [
       '%name' => $name,
@@ -2673,8 +2743,11 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
    *   ['de' => ['title' => '...', 'body' => '...']].
    * @param array $availableLanguages
    *   All workspace language codes, used for template fallback.
+   * @param bool $lifecycle
+   *   TRUE for a workspace with a lifecycle record: the static texts do not
+   *   invite reporting before the map is open.
    */
-  private function createStartPage(GroupInterface $group, string $name, string $defaultLang, ?array $startPageContent = NULL, array $startPageTranslations = [], array $availableLanguages = []): void {
+  private function createStartPage(GroupInterface $group, string $name, string $defaultLang, ?array $startPageContent = NULL, array $startPageTranslations = [], array $availableLanguages = [], bool $lifecycle = FALSE): void {
     $nodeStorage = $this->entityTypeManager->getStorage('node');
     $groupId = (int) $group->id();
     $publicationState = [
@@ -2689,7 +2762,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
       $body = mb_substr($startPageContent['body'], 0, 2000);
     }
     else {
-      $rendered = $this->renderStartPageTemplate($group, $name, $defaultLang);
+      $rendered = $this->renderStartPageTemplate($group, $name, $defaultLang, $lifecycle);
       $title = $rendered['title'];
       $body = $rendered['body'];
     }
@@ -2736,7 +2809,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         continue;
       }
       if (isset(self::START_PAGE_TEMPLATES[$lang]) && $node->isTranslatable()) {
-        $rendered = $this->renderStartPageTemplate($group, $name, $lang);
+        $rendered = $this->renderStartPageTemplate($group, $name, $lang, $lifecycle);
         $fallbackTitle = $rendered['title'];
         $fallbackBody = $rendered['body'];
         $nodeTranslation = $node->addTranslation($lang, [
@@ -2784,8 +2857,12 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
    *   The workspace default language code.
    * @param int[] $skippedStatusIds
    *   Status term IDs to avoid (see self::DEMO_SKIPPED_STATUS_KEYS).
+   * @param bool $placeInView
+   *   TRUE to place the examples around the map center, inside the initial
+   *   view (examplePositionInView()); FALSE for random points in the
+   *   boundary's bounding box.
    */
-  private function createDemoRequests(array $data, GroupInterface $group, array $categoryTermIds, int $groupId, string $lang, array $skippedStatusIds = []): void {
+  private function createDemoRequests(array $data, GroupInterface $group, array $categoryTermIds, int $groupId, string $lang, array $skippedStatusIds = [], bool $placeInView = FALSE): void {
     if (empty($categoryTermIds)) {
       return;
     }
@@ -2847,8 +2924,10 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         $mapping = self::DEMO_STATUS_MAPPINGS[$i] ?? 'initial';
         $statusTid = $statusMap[$mapping] ?? $statusMap['initial'] ?? NULL;
 
-        // Generate a random coordinate within the bounding box.
-        [$lat, $lng] = $this->randomCoordinateInBbox($bbox);
+        // Generate a random coordinate within the bounding box, or, in the
+        // lifecycle model, a fixed one in the initial view.
+        $inView = $placeInView ? $this->examplePositionInView($group, $i, $demoCount, $boundary) : NULL;
+        [$lat, $lng] = $inView ?? $this->randomCoordinateInBbox($bbox);
 
         $values = [
           'type' => 'service_request',
@@ -3322,6 +3401,91 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
       }
     }
     return $result;
+  }
+
+  /**
+   * Returns a fixed spot for an example inside the initial map view.
+   *
+   * The examples sit on a sunflower spiral around the stored map center
+   * (map.center, map.zoomInitial of field_nuxt_config), at most 30 % of a
+   * map tile away: inside the first view on a phone at that zoom, and never
+   * more than a kilometre. Deterministic, so the operator finds the same
+   * picture every time.
+   *
+   * @param \Drupal\group\Entity\GroupInterface $group
+   *   The provisioned group.
+   * @param int $index
+   *   The example's index, from 0.
+   * @param int $count
+   *   The number of examples.
+   * @param array|null $boundary
+   *   The boundary geometry, or NULL.
+   *
+   * @return array{float, float}|null
+   *   [lat, lng], or NULL without a stored center or when the spot lies
+   *   outside the boundary (the caller keeps the random placement).
+   */
+  private function examplePositionInView(GroupInterface $group, int $index, int $count, ?array $boundary): ?array {
+    $config = $group->hasField('field_nuxt_config') && !$group->get('field_nuxt_config')->isEmpty()
+      ? json_decode((string) $group->get('field_nuxt_config')->value, TRUE)
+      : NULL;
+    $center = is_array($config) ? ($config['map']['center'] ?? NULL) : NULL;
+    if (!is_array($center) || !isset($center[0], $center[1]) || !is_numeric($center[0]) || !is_numeric($center[1])) {
+      return NULL;
+    }
+    [$centerLng, $centerLat] = [(float) $center[0], (float) $center[1]];
+    if (($centerLat === 0.0 && $centerLng === 0.0) || abs($centerLat) >= 85.0) {
+      return NULL;
+    }
+    $zoom = $config['map']['zoomInitial'] ?? $config['map']['zoomLevel'] ?? 13;
+    $zoom = is_numeric($zoom) ? max(1.0, min(20.0, (float) $zoom)) : 13.0;
+
+    $cosLat = cos(deg2rad($centerLat));
+    // Width of a 256 px tile at this zoom and latitude, in metres.
+    $tileMetres = 40075016.686 * $cosLat / (2 ** $zoom);
+    $radius = min(0.3 * $tileMetres, 1000.0);
+    $count = max(1, $count);
+    $distance = $radius * sqrt(($index + 0.5) / $count);
+    // The golden angle spreads the spots evenly.
+    $angle = $index * 2.399963229728653;
+    $lat = round($centerLat + $distance * sin($angle) / 111320.0, 6);
+    $lng = round($centerLng + $distance * cos($angle) / (111320.0 * $cosLat), 6);
+
+    return $this->pointInGeometry($boundary, $lat, $lng) ? [$lat, $lng] : NULL;
+  }
+
+  /**
+   * Whether a point lies in a Polygon or MultiPolygon (outer rings only).
+   *
+   * TRUE without a geometry.
+   */
+  private function pointInGeometry(?array $geometry, float $lat, float $lng): bool {
+    if ($geometry === NULL || !is_array($geometry['coordinates'] ?? NULL)) {
+      return TRUE;
+    }
+    $polygons = ($geometry['type'] ?? '') === 'MultiPolygon' ? $geometry['coordinates'] : [$geometry['coordinates']];
+    foreach ($polygons as $polygon) {
+      $ring = is_array($polygon) ? ($polygon[0] ?? NULL) : NULL;
+      if (!is_array($ring) || count($ring) < 3) {
+        continue;
+      }
+      $inside = FALSE;
+      $points = array_values($ring);
+      for ($i = 0, $j = count($points) - 1; $i < count($points); $j = $i++) {
+        if (!isset($points[$i][0], $points[$i][1], $points[$j][0], $points[$j][1])) {
+          continue;
+        }
+        [$xi, $yi] = [(float) $points[$i][0], (float) $points[$i][1]];
+        [$xj, $yj] = [(float) $points[$j][0], (float) $points[$j][1]];
+        if (($yi > $lat) !== ($yj > $lat) && $lng < ($xj - $xi) * ($lat - $yi) / ($yj - $yi) + $xi) {
+          $inside = !$inside;
+        }
+      }
+      if ($inside) {
+        return TRUE;
+      }
+    }
+    return FALSE;
   }
 
   /**

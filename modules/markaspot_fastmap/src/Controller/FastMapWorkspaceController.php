@@ -578,7 +578,7 @@ class FastMapWorkspaceController extends ControllerBase {
     $language = $workspaceData['language'] ?: 'en';
 
     // Send verification email. If it fails, roll back the pending row.
-    $sent = $this->sendVerificationEmail($email, $verifyUrl, $name, $slug, $language, $cleanupDays);
+    $sent = $this->sendVerificationEmail($email, $verifyUrl, $name, $slug, $language, $cleanupDays, $acceptance !== NULL);
 
     if (!$sent) {
       $this->database->delete('markaspot_fastmap_pending')
@@ -793,7 +793,8 @@ class FastMapWorkspaceController extends ControllerBase {
         (string) (($workspaceData['language'] ?? '') ?: 'en'),
         $result['name'],
         $result['slug'],
-        is_array($result['wording'] ?? NULL) ? $result['wording'] : []
+        is_array($result['wording'] ?? NULL) ? $result['wording'] : [],
+        ($result['lifecycle'] ?? FALSE) === TRUE
       );
 
       // Generate a short-lived one-time login token so the user is
@@ -1381,8 +1382,11 @@ class FastMapWorkspaceController extends ControllerBase {
 
   /**
    * Sends a verification email for workspace creation.
+   *
+   * With $lifecycle (the signup carries an acceptance) the mail asks to
+   * confirm the address instead of activating the workspace.
    */
-  private function sendVerificationEmail(string $email, string $verifyUrl, string $name, string $slug, string $langcode, int $cleanupDays): bool {
+  private function sendVerificationEmail(string $email, string $verifyUrl, string $name, string $slug, string $langcode, int $cleanupDays, bool $lifecycle = FALSE): bool {
     $config = $this->config('markaspot_fastmap.settings');
     $from = $config->get('mail_from') ?: NULL;
     $siteName = $this->config('system.site')->get('name') ?: 'FastMap';
@@ -1394,6 +1398,9 @@ class FastMapWorkspaceController extends ControllerBase {
       'site_name' => $siteName,
       'cleanup_days' => (string) $cleanupDays,
     ];
+    if ($lifecycle) {
+      $params['lifecycle'] = TRUE;
+    }
 
     try {
       $result = $this->mailManager->mail(
@@ -1424,7 +1431,7 @@ class FastMapWorkspaceController extends ControllerBase {
    * mail plugin cannot escape into the outer catch block, which would
    * otherwise tear down the workspace that was just successfully created.
    */
-  private function sendWelcomeEmail(string $email, string $langcode, string $name, string $slug, array $wording = []): void {
+  private function sendWelcomeEmail(string $email, string $langcode, string $name, string $slug, array $wording = [], bool $lifecycle = FALSE): void {
     try {
       $baseUrl = (string) $this->config('markaspot_fastmap.settings')->get('workspace_base_url');
       $workspaceUrl = _markaspot_fastmap_build_workspace_url($slug, $baseUrl);
@@ -1447,6 +1454,10 @@ class FastMapWorkspaceController extends ControllerBase {
         'wording_singular' => is_string($wording['singular'] ?? NULL) ? $wording['singular'] : '',
         'wording_plural' => is_string($wording['plural'] ?? NULL) ? $wording['plural'] : '',
       ];
+      // New model: the workspace is ready, the map opens later.
+      if ($lifecycle) {
+        $params['lifecycle'] = TRUE;
+      }
 
       $result = $this->mailManager->mail('markaspot_fastmap', 'workspace_welcome', $email, $langcode, $params);
       if (empty($result['result'])) {

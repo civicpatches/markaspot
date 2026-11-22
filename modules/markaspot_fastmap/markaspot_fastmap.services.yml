@@ -82,6 +82,13 @@ services:
       - { name: needs_destruction }
   # Autowiring alias for the hook class.
   Drupal\markaspot_fastmap\Service\WaitingReportsNotifier: '@markaspot_fastmap.waiting_reports_notifier'
+  Drupal\markaspot_fastmap\Hook\CitizenMailHooks:
+    class: Drupal\markaspot_fastmap\Hook\CitizenMailHooks
+    arguments:
+      - '@markaspot_fastmap.workspace_lifecycle_gate'
+      - '@markaspot_fastmap.workspace_lifecycle'
+      - '@markaspot_nuxt.review_before_publish'
+    public: true
 
   markaspot_fastmap.vision_purpose_rules:
     class: Drupal\markaspot_fastmap\Service\VisionPurposeRules
