@@ -1,5 +1,11 @@
 # Changelog
 
+## [11.9.257](https://github.com/civicpatches/markaspot/compare/11.9.256...11.9.257) (2026-11-22)
+
+### Bug Fixes
+
+* **fastmap:** align the Free signup mails, start page and defaults with the new model ([c302e8b](https://github.com/civicpatches/markaspot/commit/c302e8b262ebd5aa1dadef806ae141c9dc7128e9))
+
 ## [11.9.256](https://github.com/civicpatches/markaspot/compare/11.9.255...11.9.256) (2026-11-22)
 
 ### Bug Fixes
