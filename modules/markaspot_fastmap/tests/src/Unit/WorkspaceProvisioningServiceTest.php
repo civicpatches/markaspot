@@ -474,6 +474,10 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
     $this->userStorage->method('loadByProperties')
       ->willReturnCallback(static fn(array $values): array => $tenantAdminExists && isset($values['mail']) ? [$user] : []);
     $this->userStorage->method('create')->willReturn($user);
+    // Provisioning reloads the account before it stores the acceptance time.
+    $this->userStorage->method('loadUnchanged')->willReturnCallback(
+      static fn($id): ?UserInterface => (int) $id === (int) $user->id() ? $user : NULL,
+    );
 
     // Relationship storage: no existing membership.
     $this->relationshipStorage->method('loadByProperties')->willReturn([]);
