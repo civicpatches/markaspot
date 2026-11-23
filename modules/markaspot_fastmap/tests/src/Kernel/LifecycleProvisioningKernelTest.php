@@ -409,15 +409,15 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
   }
 
   /**
-   * Lifecycle model: the start page does not invite reports before opening.
+   * Lifecycle model: the start page is true before and after the opening.
    */
-  public function testStartPageWaitsForTheOpening(): void {
+  public function testStartPageFitsBothMapStates(): void {
     $this->setSwitch(TRUE);
     $de = $this->startPageBody($this->provision('lindenhof', ['acceptance' => self::ACCEPTANCE, 'language' => 'de']));
-    $this->assertStringContainsString('Sobald die Karte für neue', $de);
+    $this->assertStringContainsString('Solange die Karte noch keine neuen', $de);
     $this->assertStringNotContainsString('selbst etwas Neues zu erfassen', $de);
     $en = $this->startPageBody($this->provision('riverside', ['acceptance' => self::ACCEPTANCE]));
-    $this->assertStringContainsString('As soon as the map is open for new', $en);
+    $this->assertStringContainsString('If the map is not taking new', $en);
     $this->assertStringNotContainsString('add something new', $en);
     // A language without a lifecycle text: the welcome paragraph only.
     $fr = $this->startPageBody($this->provision('hillside', ['acceptance' => self::ACCEPTANCE, 'language' => 'fr']));

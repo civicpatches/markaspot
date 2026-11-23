@@ -2662,31 +2662,35 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
    * Start page texts of the lifecycle model.
    *
    * The map of a new workspace takes no reports until its operator opens it,
-   * and the page stays after the opening: the texts invite reporting for
-   * when the map is open. Languages without an entry here get the first
-   * paragraph of START_PAGE_TEMPLATES, the welcome without the invitation.
+   * and the page is created once and stays after the opening. The texts are
+   * therefore true in both states: they say how to report and that the map
+   * shows a notice while it takes no reports yet. Languages without an entry
+   * here get the first paragraph of START_PAGE_TEMPLATES, the welcome
+   * without the invitation.
    */
   private const LIFECYCLE_START_PAGE_TEMPLATES = [
     'en' => [
       'title' => 'Welcome to %name',
       'body' => '<p>Welcome to <strong>%name</strong>, your citizen participation platform.</p>'
         . '<p>Use the map to browse %term_plural. '
-        . 'As soon as the map is open for new %term_plural, select a category, pin the location, and describe the issue. '
+        . 'To report something, select a category, pin the location, and describe the issue. '
+        . 'If the map is not taking new %term_plural yet, a notice on the map tells you. '
         . 'Your participation helps make %name better for everyone.</p>',
     ],
     'de' => [
       'title' => 'Willkommen bei %name',
       'body' => '<p>Willkommen bei <strong>%name</strong>, Ihrer Plattform für Bürgeranliegen.</p>'
         . '<p>Auf der Karte sehen Sie vorhandene %term_plural. '
-        . 'Sobald die Karte für neue %term_plural geöffnet ist, wählen Sie eine Kategorie, markieren den Standort und beschreiben das Anliegen. '
+        . 'Um etwas zu melden, wählen Sie eine Kategorie, markieren den Standort und beschreiben das Anliegen. '
+        . 'Solange die Karte noch keine neuen %term_plural annimmt, steht das auf der Karte. '
         . 'Damit helfen Sie, %name für alle zu verbessern.</p>',
     ],
     'de-ls' => [
       'title' => 'Willkommen bei %name',
       'body' => '<p>Willkommen bei <strong>%name</strong>. Hier können Sie sich beteiligen.</p>'
         . '<p>Schauen Sie auf der Karte, was schon als %term_plural eingetragen ist. '
-        . 'Bald können Sie auch selbst etwas eintragen. '
-        . 'Dann wählen Sie ein Thema, zeigen den Ort und beschreiben das Problem. '
+        . 'So tragen Sie selbst etwas ein: Sie wählen ein Thema, zeigen den Ort und beschreiben das Problem. '
+        . 'Manchmal geht das noch nicht. Dann steht das auf der Karte. '
         . 'Damit helfen Sie, %name für alle besser zu machen.</p>',
     ],
   ];
@@ -2744,8 +2748,8 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
    * @param array $availableLanguages
    *   All workspace language codes, used for template fallback.
    * @param bool $lifecycle
-   *   TRUE for a workspace with a lifecycle record: the static texts do not
-   *   invite reporting before the map is open.
+   *   TRUE for a workspace with a lifecycle record: the static texts fit a
+   *   map that is not open yet as well as an open one.
    */
   private function createStartPage(GroupInterface $group, string $name, string $defaultLang, ?array $startPageContent = NULL, array $startPageTranslations = [], array $availableLanguages = [], bool $lifecycle = FALSE): void {
     $nodeStorage = $this->entityTypeManager->getStorage('node');
