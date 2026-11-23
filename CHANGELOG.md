@@ -1,5 +1,11 @@
 # Changelog
 
+## [11.9.258](https://github.com/civicpatches/markaspot/compare/11.9.257...11.9.258) (2026-11-23)
+
+### Bug Fixes
+
+* **fastmap:** welcome page text fits a map before and after opening ([c98dbf9](https://github.com/civicpatches/markaspot/commit/c98dbf9d5ad2c24ed5fe93eb6d47946e0814f4ab))
+
 ## [11.9.257](https://github.com/civicpatches/markaspot/compare/11.9.256...11.9.257) (2026-11-22)
 
 ### Bug Fixes
