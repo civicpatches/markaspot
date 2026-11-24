@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.9.259](https://github.com/civicpatches/markaspot/compare/11.9.258...11.9.259) (2026-11-24)
+
+### Bug Fixes
+
+* defer automatic workspace opening to owner login ([39f412b](https://github.com/civicpatches/markaspot/commit/39f412b3563fab142bc57f918852bd11d6419fe7))
+* open verified workspaces and localize transactional mail ([c99c0c2](https://github.com/civicpatches/markaspot/commit/c99c0c29112a66ffb1d6ec55d9903ae3ff8653ed))
+* retain pending operator support notifications ([a261749](https://github.com/civicpatches/markaspot/commit/a261749debb25516a81e9dd7e4b443a163b74334))
+
 ## [11.9.258](https://github.com/civicpatches/markaspot/compare/11.9.257...11.9.258) (2026-11-23)
 
 ### Bug Fixes
