@@ -323,3 +323,51 @@ msgstr "Hallitse saapuvia ilmoituksia hallintapaneelissa:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Kirjaudu sisään milloin tahansa:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Vahvista sähköpostiosoitteesi työtilaa @name varten"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Vahvista sähköpostiosoitteesi"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Tervetuloa @site-palveluun! Vahvista sähköpostiosoitteesi, jotta työtilasi ”@name” voidaan luoda."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Vahvista sähköpostiosoitteesi napsauttamalla alla olevaa painiketta."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Työtilasi on valmis"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Avaa työtilasi"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Työtilasi \"@name\" on valmis"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Työtilasi \"@name\" on valmis."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Työtilasi \"@name\" on nyt aktiivinen"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Työtilasi \"@name\" on nyt aktiivinen."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Kokeile heti: luo ensimmäinen testi-ilmoituksesi suoraan kartalla."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Muutama esimerkki-ilmoitus on jo valmiina. Voit muokata tai poistaa niitä milloin tahansa."

@@ -30,10 +30,7 @@ final class WorkspaceLifecycleHooks {
   ) {}
 
   /**
-   * Keeps an open map's opening and complete operator data.
-   *
-   * A refusal rolls the save back; the settings endpoint answers it with the
-   * exception's status and its "operator_incomplete:" message.
+   * Preserves the lifecycle record when settings are saved.
    */
   #[Hook('group_presave')]
   public function groupPresave(GroupInterface $group): void {

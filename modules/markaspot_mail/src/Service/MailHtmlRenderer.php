@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_mail\Service;
 
+use Drupal\Core\Render\Markup;
 use Drupal\Core\Render\RendererInterface;
 use Psr\Log\LoggerInterface;
 
@@ -28,6 +29,7 @@ class MailHtmlRenderer {
     private readonly RendererInterface $renderer,
     private readonly MailBrandingService $branding,
     private readonly LoggerInterface $logger,
+    private readonly ?MailStringTranslator $mailStrings = NULL,
   ) {}
 
   /**
@@ -46,11 +48,13 @@ class MailHtmlRenderer {
    *   derived deterministically from $content and $branding. Builders
    *   that care about exact wording / line-breaking in the text/plain
    *   part pass a string; anything else defers to the default derivation.
+   * @param bool $localizeFooter
+   *   Whether the mail can use the shipped footer translations.
    *
    * @return array
    *   ['html' => string, 'plain' => string]
    */
-  public function render(string $variant, array $branding, array $content, string $langcode, ?string $plainTextOverride = NULL): array {
+  public function render(string $variant, array $branding, array $content, string $langcode, ?string $plainTextOverride = NULL, bool $localizeFooter = FALSE): array {
     $variant = in_array($variant, ['hero_code', 'card_transactional'], TRUE)
       ? $variant
       : 'card_transactional';
@@ -82,6 +86,19 @@ class MailHtmlRenderer {
       $this->logger->debug('Jurisdiction logo is SVG; mobile mail clients may not render it: @url', [
         '@url' => $this->branding->redactUrlForLog($logoUrl),
       ]);
+    }
+
+    if ($localizeFooter && $this->mailStrings?->usesShippedTranslations()) {
+      $branding['footer_labels'] = [
+        'legal' => $this->mailStrings->translate('Legal notice', [], $langcode),
+        'privacy' => $this->mailStrings->translate('Privacy', [], $langcode),
+        'docs' => $this->mailStrings->translate('Docs', [], $langcode),
+        'impressum' => $this->mailStrings->translate('Impressum', [], $langcode),
+        'datenschutz' => $this->mailStrings->translate('Datenschutz', [], $langcode),
+        'attribution' => Markup::create($this->mailStrings->translate('This e-mail was sent automatically by @name via the Mark-a-Spot platform.', [
+          '@name' => $branding['tenant_display_name'] ?? '',
+        ], $langcode)),
+      ];
     }
 
     $build = [
@@ -191,10 +208,10 @@ class MailHtmlRenderer {
       $lines[] = $branding['support_email'];
     }
     if (!empty($branding['legal_notice_url'])) {
-      $lines[] = 'Impressum: ' . $branding['legal_notice_url'];
+      $lines[] = ($branding['footer_labels']['legal'] ?? 'Impressum') . ': ' . $branding['legal_notice_url'];
     }
     if (!empty($branding['privacy_url'])) {
-      $lines[] = 'Privacy: ' . $branding['privacy_url'];
+      $lines[] = ($branding['footer_labels']['privacy'] ?? 'Privacy') . ': ' . $branding['privacy_url'];
     }
 
     $text = implode("\n", $lines);

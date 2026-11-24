@@ -323,3 +323,51 @@ msgstr "Beheer inkomende meldingen in je dashboard:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Je kunt je op elk moment aanmelden:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Bevestig je e-mailadres voor @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Bevestig je e-mailadres"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Welkom bij @site! Bevestig je e-mailadres om je werkruimte ‘@name’ in te stellen."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Klik op de knop hieronder om je e-mailadres te bevestigen."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Je werkruimte is klaar"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Open je werkruimte"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Je werkruimte \"@name\" is klaar"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Je werkruimte \"@name\" is klaar."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Je werkruimte \"@name\" is nu actief"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Je werkruimte \"@name\" is nu actief."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Probeer het meteen uit: maak je eerste testmelding direct op de kaart."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Er staan al een paar voorbeeldmeldingen klaar. Je kunt ze op elk moment bewerken of verwijderen."

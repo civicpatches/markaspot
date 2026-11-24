@@ -6,9 +6,11 @@ namespace Drupal\Tests\markaspot_mail\Unit\Service;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\language\Config\LanguageConfigOverride;
 use Drupal\language\ConfigurableLanguageManagerInterface;
+use Drupal\markaspot_mail\Service\MailStringTranslator;
 use Drupal\markaspot_mail\Service\MailTextResolver;
 use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -22,7 +24,7 @@ use PHPUnit\Framework\Attributes\Group;
 final class MailTextResolverTest extends UnitTestCase {
 
   /**
-   *
+   * A stored language override wins for its field.
    */
   public function testResolveFieldPrefersLanguageOverride(): void {
     $resolver = $this->buildResolver(
@@ -33,7 +35,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Missing override fields use active config for notification templates.
    */
   public function testResolveFieldFallsBackToDefaultWhenOverrideMissingField(): void {
     // Override present for the top-level key, but the specific field is
@@ -47,7 +49,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Missing scalar slots resolve to the empty string.
    */
   public function testResolveFieldReturnsEmptyStringWhenNeitherSourceHasIt(): void {
     $resolver = $this->buildResolver(override: [], default: []);
@@ -55,7 +57,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * An explicit empty notification override suppresses the default.
    */
   public function testResolveFieldTreatsExplicitEmptyOverrideAsAuthoritative(): void {
     // A field present in the override, even as an explicit empty string,
@@ -69,7 +71,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Resolves all notification slots using per-field fallback.
    */
   public function testResolveReturnsAllSixSlotsWithPerFieldFallback(): void {
     $resolver = $this->buildResolver(
@@ -94,7 +96,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Missing body blocks resolve to an empty list.
    */
   public function testResolveReturnsEmptyListForMissingBodyBlocks(): void {
     $resolver = $this->buildResolver(override: [], default: ['subject' => 'EN subject']);
@@ -103,7 +105,7 @@ final class MailTextResolverTest extends UnitTestCase {
   }
 
   /**
-   *
+   * Replaces tokens independently in scalar slots and body blocks.
    */
   public function testReplaceTokensReplacesScalarSlotsAndEachBodyBlock(): void {
     $resolver = $this->buildResolver(override: [], default: []);
@@ -129,6 +131,38 @@ final class MailTextResolverTest extends UnitTestCase {
     $this->assertSame(['Block one #42-2026', 'Block two'], $replaced['body_blocks']);
     $this->assertSame('View #42-2026', $replaced['cta_label']);
     $this->assertSame('', $replaced['preheader']);
+  }
+
+  /**
+   * Localizes the stock note only in receipts composed without Locale.
+   */
+  public function testConfirmationLocalizesOnlyDefaultStatusNote(): void {
+    $token = $this->createMock(Token::class);
+    $token->method('replace')->willReturnCallback(static function (string $template, array $data, array $options): string {
+      $replacements = ['[node:initial_status_note]' => $data['note']];
+      if (isset($options['callback'])) {
+        $options['callback']($replacements);
+      }
+      return strtr($template, $replacements);
+    });
+    $slots = $this->emptySlots();
+    $slots['body_blocks'] = ['[node:initial_status_note]'];
+    $stock = 'The service request has been created.';
+    foreach ([FALSE, TRUE] as $locale) {
+      $modules = $this->createMock(ModuleHandlerInterface::class);
+      $modules->method('moduleExists')->with('locale')->willReturn($locale);
+      $translator = new MailStringTranslator($modules, $this->getStringTranslationStub());
+      $resolver = $this->buildResolverWithToken($token, $translator);
+      $this->assertSame(
+        [$locale ? $stock : 'Die Meldung wurde erstellt.'],
+        $resolver->replaceTokens($slots, ['note' => $stock], 'de', TRUE)['body_blocks'],
+      );
+      $this->assertSame([$stock], $resolver->replaceTokens($slots, ['note' => $stock], 'de')['body_blocks']);
+      $this->assertSame(
+        ['Team note'],
+        $resolver->replaceTokens($slots, ['note' => 'Team note'], 'de', TRUE)['body_blocks'],
+      );
+    }
   }
 
   /**
@@ -301,7 +335,7 @@ final class MailTextResolverTest extends UnitTestCase {
   /**
    * Builds a resolver with an empty override/default and a fixed token mock.
    */
-  private function buildResolverWithToken(Token $token): MailTextResolver {
+  private function buildResolverWithToken(Token $token, ?MailStringTranslator $translator = NULL): MailTextResolver {
     $config = $this->createMock(ImmutableConfig::class);
     $config->method('get')->willReturn([]);
     $configFactory = $this->createMock(ConfigFactoryInterface::class);
@@ -312,7 +346,7 @@ final class MailTextResolverTest extends UnitTestCase {
     $languageManager = $this->createMock(ConfigurableLanguageManagerInterface::class);
     $languageManager->method('getLanguageConfigOverride')->willReturn($languageOverride);
 
-    return new MailTextResolver($configFactory, $languageManager, $token);
+    return new MailTextResolver($configFactory, $languageManager, $token, $translator);
   }
 
 }

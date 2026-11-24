@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_fastmap\Unit;
 
+use Drupal\Core\Field\FieldDefinitionInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Component\Datetime\TimeInterface;
@@ -418,6 +419,14 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $setGroupFields[$name] = $value;
         return $group;
       });
+    $group->method('getRevisionId')->willReturn($groupId);
+    $group->method('get')->willReturnCallback(function (string $name) use (&$setGroupFields): FieldItemListInterface {
+      $field = $this->createMock(FieldItemListInterface::class);
+      $value = $setGroupFields[$name] ?? NULL;
+      $field->method('isEmpty')->willReturn($value === NULL);
+      $field->method('__get')->with('value')->willReturn($value);
+      return $field;
+    });
     $group->method('save')->willReturn(1);
 
     $membership = $this->createMock(GroupRelationshipInterface::class);
@@ -444,13 +453,17 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($currentId);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(($values['vid'] ?? '') === 'service_category');
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $term->method('addTranslation')->willReturnCallback(function (string $language, array $fields) use ($values, &$savedCategoryTranslations) {
           $translation = $this->createMock(TermInterface::class);
           $translation->expects($this->once())->method('save')->willReturnCallback(function () use ($values, $language, $fields, &$savedCategoryTranslations) {
-            $savedCategoryTranslations[] = ['category' => $values['name'], 'language' => $language, 'name' => $fields['name']];
+            $savedCategoryTranslations[] = [
+              'category' => $values['name'],
+              'language' => $language,
+              'name' => $fields['name'],
+            ];
             return 1;
           });
           return $translation;
@@ -1322,7 +1335,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
   public function testUntranslatableCategoryNameFailsBeforeTermSave(): void {
     $term = $this->createMock(TermInterface::class);
     $term->method('isTranslatable')->willReturn(TRUE);
-    $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+    $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
     $nameDefinition->method('isTranslatable')->willReturn(FALSE);
     $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
     $term->expects($this->never())->method('save');
@@ -2377,7 +2390,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($currentId);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(($values['vid'] ?? '') === 'service_category');
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $translation = $this->createMock(TermInterface::class);
@@ -2844,7 +2857,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($currentId);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(TRUE);
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
 
@@ -2946,7 +2959,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($currentId);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(TRUE);
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $term->method('addTranslation')
@@ -3042,7 +3055,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($termIdCounter);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(TRUE);
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $term->method('addTranslation')
@@ -3126,7 +3139,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn(1);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(($values['vid'] ?? '') === 'service_category');
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $translation = $this->createMock(TermInterface::class);
@@ -3228,7 +3241,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn(1);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(($values['vid'] ?? '') === 'service_category');
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $translation = $this->createMock(TermInterface::class);
@@ -3875,7 +3888,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn($currentId);
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(TRUE);
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $term->method('addTranslation')
@@ -3996,7 +4009,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         $term->method('id')->willReturn(count($captured));
         $term->method('save')->willReturn(1);
         $term->method('isTranslatable')->willReturn(($values['vid'] ?? '') === 'service_category');
-        $nameDefinition = $this->createMock(\Drupal\Core\Field\FieldDefinitionInterface::class);
+        $nameDefinition = $this->createMock(FieldDefinitionInterface::class);
         $nameDefinition->method('isTranslatable')->willReturn(TRUE);
         $term->method('getFieldDefinition')->with('name')->willReturn($nameDefinition);
         $translation = $this->createMock(TermInterface::class);
@@ -4159,7 +4172,7 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         'accepted_at' => 1699990000,
         'uid' => 10,
       ],
-      'opening' => NULL,
+      'opening' => ['opened_at' => 1700000000, 'uid' => 10, 'revision_id' => 42, 'operator' => NULL],
     ], json_decode($setGroupFields['field_lifecycle_record'], TRUE));
     $this->assertArrayNotHasKey('field_lifecycle_record', $created, 'Written after the account exists, not in the create payload.');
     $this->assertSame(['field_tos_accepted_at' => 1699990000], $userFields);

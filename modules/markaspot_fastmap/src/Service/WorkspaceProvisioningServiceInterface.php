@@ -19,7 +19,8 @@ interface WorkspaceProvisioningServiceInterface {
    *
    * @return array
    *   Result with group_id, slug, name, url, categories count, user_id and
-   *   the curated citizen-wording data used by the welcome-mail flow.
+   *   the internal mail data: curated citizen wording and the opening event
+   *   for support, if provisioned under the lifecycle model.
    *
    * @throws \Drupal\markaspot_fastmap\Service\AcceptanceRequiredException
    *   While the lifecycle switch is on and the acceptance is missing or

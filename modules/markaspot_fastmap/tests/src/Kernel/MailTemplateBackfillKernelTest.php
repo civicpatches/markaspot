@@ -122,6 +122,22 @@ final class MailTemplateBackfillKernelTest extends KernelTestBase {
   }
 
   /**
+   * Welcome templates fall back per field before using English config.
+   */
+  public function testWelcomeTemplatePrecedence(): void {
+    $de = $this->container->get('language_manager')->getLanguageConfigOverride('de', 'markaspot_fastmap.mail');
+    $de->set('workspace_welcome', ['subject' => 'Eigener Betreff'])->save();
+    $shipped = $this->shipped('language/de/markaspot_fastmap.mail.yml')['workspace_welcome'];
+    $this->assertSame(['subject' => 'Eigener Betreff', 'body' => $shipped['body']], _markaspot_fastmap_mail_template('workspace_welcome', 'de'));
+    $de->clear('workspace_welcome')->save();
+    $this->assertSame($shipped, _markaspot_fastmap_mail_template('workspace_welcome', 'de'));
+    $this->assertSame('Edited welcome', _markaspot_fastmap_mail_template('workspace_welcome', 'en')['subject']);
+    $this->assertSame('Edited welcome', _markaspot_fastmap_mail_template('workspace_welcome', 'zu')['subject']);
+    $this->config('markaspot_fastmap.mail')->clear('workspace_welcome')->save();
+    $this->assertSame($this->shipped('markaspot_fastmap.mail.yml')['workspace_welcome'], _markaspot_fastmap_mail_template('workspace_welcome', 'en'));
+  }
+
+  /**
    * Every key of the shipped file has a schema entry.
    */
   public function testSchemaCoversShippedKeys(): void {

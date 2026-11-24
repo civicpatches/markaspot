@@ -16,7 +16,6 @@ use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Site\Settings;
 use Drupal\group\Entity\GroupInterface;
-use Drupal\markaspot_fastmap\Service\OperatorIncompleteException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\Tests\UnitTestCase;
@@ -325,13 +324,6 @@ class WorkspaceOpeningTest extends UnitTestCase {
     // Without the confirmation.
     $this->assertSame(['status' => WorkspaceOpening::CONFIRMATION_REQUIRED], $this->service($closed)->open($closed, $account, FALSE));
 
-    // Incomplete operator data, checked on the stored state.
-    $incomplete = $this->recordWorkspace(self::NOT_OPEN, ['postal_code' => ''] + OperatorDetailsTest::ORGANISATION, NULL, $saves);
-    $this->assertSame(
-      ['status' => WorkspaceOpening::OPERATOR_INCOMPLETE, 'missing' => ['postal_code', 'email']],
-      $this->service($incomplete)->open($closed, $account, TRUE),
-    );
-
     // Another request holds the lock.
     $this->assertSame(['status' => WorkspaceOpening::BUSY], $this->service($closed, FALSE)->open($closed, $account, TRUE));
 
@@ -382,7 +374,7 @@ class WorkspaceOpeningTest extends UnitTestCase {
   }
 
   /**
-   * An open map keeps its opening and its complete operator data.
+   * Operator details can be saved or removed without changing the opening.
    *
    * @covers ::enforceOnSave
    */
@@ -390,18 +382,10 @@ class WorkspaceOpeningTest extends UnitTestCase {
     $open = json_encode(['opening' => $this->openingSection()] + json_decode(self::NOT_OPEN, TRUE));
     $original = $this->recordWorkspace($open, OperatorDetailsTest::ORGANISATION, 'op@example.org');
 
-    // Emptying the street: refused, the missing parts named.
     $saving = $this->recordWorkspace($open, ['address_line1' => ''] + OperatorDetailsTest::ORGANISATION, 'op@example.org');
     $saving->method('getOriginal')->willReturn($original);
-    try {
-      $this->service()->enforceOnSave($saving);
-      $this->fail('Emptying the street of an open map was not refused.');
-    }
-    catch (OperatorIncompleteException $e) {
-      $this->assertSame(422, $e->getStatusCode());
-      $this->assertSame(['address_line1'], $e->missing);
-      $this->assertStringStartsWith('operator_incomplete:', $e->getMessage());
-    }
+    $this->service()->enforceOnSave($saving);
+    $this->assertSame($open, $saving->get(WorkspaceLifecycle::FIELD)->value);
 
     // Switching from the organisation to a complete person: allowed.
     $person = $this->recordWorkspace($open, ['organization' => '', 'given_name' => 'Jane', 'family_name' => 'Doe'] + OperatorDetailsTest::ORGANISATION, 'op@example.org');
@@ -431,8 +415,8 @@ class WorkspaceOpeningTest extends UnitTestCase {
     new Settings(['markaspot_operating_mode' => 'self_hosted']);
     $this->service()->enforceOnSave($emptiedOpen);
     new Settings(['markaspot_operating_mode' => 'saas']);
-    $this->expectException(OperatorIncompleteException::class);
     $this->service()->enforceOnSave($emptiedOpen);
+    $this->assertSame($open, $emptiedOpen->get(WorkspaceLifecycle::FIELD)->value);
   }
 
   /**

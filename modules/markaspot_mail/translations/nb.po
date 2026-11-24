@@ -323,3 +323,51 @@ msgstr "Administrer innkommende meldinger i kontrollpanelet:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Logg inn når som helst:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Bekreft e-postadressen din for @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Bekreft e-postadressen din"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Velkommen til @site! Bekreft e-postadressen din for å sette opp arbeidsområdet ditt «@name»."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Klikk på knappen nedenfor for å bekrefte e-postadressen din."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Arbeidsområdet ditt er klart"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Åpne arbeidsområdet ditt"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Arbeidsområdet ditt \"@name\" er klart"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Arbeidsområdet ditt \"@name\" er klart."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Arbeidsområdet ditt \"@name\" er nå aktivt"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Arbeidsområdet ditt \"@name\" er nå aktivt."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Prøv det ut: opprett din første testmelding direkte på kartet."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Noen demomeldinger er allerede lagt inn. Du kan redigere eller slette dem når som helst."

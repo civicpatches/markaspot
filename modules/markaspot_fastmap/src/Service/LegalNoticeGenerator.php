@@ -7,6 +7,9 @@ namespace Drupal\markaspot_fastmap\Service;
 use CommerceGuys\Addressing\Country\CountryRepositoryInterface;
 use CommerceGuys\Addressing\Exception\UnknownCountryException;
 use Drupal\Component\Utility\Html;
+use Drupal\Component\Utility\UrlHelper;
+use Drupal\Component\Utility\Xss;
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
@@ -60,6 +63,8 @@ final class LegalNoticeGenerator {
     private readonly ModuleHandlerInterface $moduleHandler,
     private readonly LoggerInterface $logger,
     private readonly ?CountryRepositoryInterface $countryRepository = NULL,
+    private readonly ?WorkspaceLifecycle $lifecycle = NULL,
+    private readonly ?ConfigFactoryInterface $configFactory = NULL,
   ) {}
 
   /**
@@ -77,11 +82,46 @@ final class LegalNoticeGenerator {
    *   incomplete Impressum visually.
    */
   public function generateForGroup(GroupInterface $group, string $langcode): string {
+    if ($this->lifecycle?->hasValidRecord($group) && OperatorDetails::snapshot($group) === NULL) {
+      return $this->platformNotice()['html'];
+    }
     $resolvedLangcode = $this->resolveTemplateLangcode($langcode);
     $context = $this->buildContext($group, $resolvedLangcode);
     $templateName = sprintf('@markaspot_fastmap/legal-notice/%s.html.twig', $resolvedLangcode);
 
     return (string) $this->twig->load($templateName)->render($context);
+  }
+
+  /**
+   * Returns the platform provider's notice for maps without an operator.
+   *
+   * @return array{source: string, url: string, html: string}
+   *   The provider notice and its external URL.
+   */
+  public function platformNotice(): array {
+    $configured = trim((string) $this->configFactory?->get('markaspot_mail.settings')->get('platform.legal_notice_url'));
+    $url = UrlHelper::isValid($configured, TRUE) && preg_match('#^https?://#i', $configured)
+      ? $configured
+      : 'https://www.civicpatches.de/impressum';
+    return [
+      'source' => 'platform',
+      'url' => $url,
+      'html' => '<p><a href="' . Html::escape($url) . '">Civic Patches</a></p>',
+    ];
+  }
+
+  /**
+   * Returns the notice for an open map with complete operator data.
+   *
+   * @return array{source: string, html: string}
+   *   The stored notice or a generated notice if none is stored.
+   */
+  public function operatorNotice(GroupInterface $group): array {
+    $html = $group->hasField('field_legal_notice') ? (string) $group->get('field_legal_notice')->value : '';
+    return [
+      'source' => 'operator',
+      'html' => $html !== '' ? Xss::filterAdmin($html) : $this->generateForGroup($group, $group->language()->getId()),
+    ];
   }
 
   /**

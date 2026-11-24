@@ -137,12 +137,17 @@ final class MailAlterHook {
       $plainText = $msg->plainText !== NULL
         ? $this->branding->normalizeMailUrls($msg->plainText)
         : NULL;
+      $signupKeys = ['workspace_verification', 'workspace_welcome'];
+      $localizeFooter = ($module === 'markaspot_fastmap' && in_array($key, $signupKeys, TRUE))
+        || ($module === 'markaspot_passwordless' && $key === 'verification_code')
+        || ($module === 'markaspot_mail' && ($ctx->params['notification_key'] ?? substr($key, strlen('notification_'))) === 'report_confirmation');
       $rendered = $this->renderer->render(
         $msg->variant,
         $brandingPackage,
         $content,
         $langcode,
         $plainText,
+        $localizeFooter,
       );
     }
     catch (\Throwable $e) {

@@ -16,17 +16,20 @@ use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningServiceInterface;
 use Drupal\markaspot_fastmap\Validation\CategoryTranslations;
 use Drupal\markaspot_fastmap\Validation\WorkspaceBoundary;
 use Drupal\markaspot_fastmap\Validation\WorkspaceBoundaryException;
 use Drupal\markaspot_fastmap\Validation\WorkspaceClaim;
+use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Plugin\Validation\Constraint\ProjectPromptConstraint;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
-use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
+use Drupal\user\UserInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -197,6 +200,11 @@ class FastMapWorkspaceController extends ControllerBase {
   protected ?WorkspaceLifecycle $lifecycle = NULL;
 
   /**
+   * Sends the support notification for a verified workspace.
+   */
+  protected ?WorkspaceOpening $opening = NULL;
+
+  /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container): static {
@@ -215,6 +223,9 @@ class FastMapWorkspaceController extends ControllerBase {
     }
     if ($container->has('entity.repository')) {
       $instance->entityRepository = $container->get('entity.repository');
+    }
+    if ($container->has('markaspot_fastmap.workspace_opening')) {
+      $instance->opening = $container->get('markaspot_fastmap.workspace_opening');
     }
     if ($container->has('markaspot_fastmap.workspace_lifecycle')) {
       $instance->lifecycle = $container->get('markaspot_fastmap.workspace_lifecycle');
@@ -815,33 +826,32 @@ class FastMapWorkspaceController extends ControllerBase {
         ]);
       }
 
-      // Redirect to workspace dashboard or return JSON.
+      // Redirect to the workspace dashboard or return JSON.
       $baseUrl = $config->get('workspace_base_url');
       if ($baseUrl && !$wantsJsonResponse) {
-        // Clean up verified rows older than 24 hours.
-        $this->cleanupVerified();
-        return $this->buildWorkspaceRedirectResponse($result['slug'], (int) $result['group_id'], $loginToken);
+        $response = $this->buildWorkspaceRedirectResponse($result['slug'], $provisionedGroupId, $loginToken);
+      }
+      else {
+        $data = [
+          'id' => $result['group_id'],
+          'slug' => $result['slug'],
+          'name' => $result['name'],
+          'url' => $result['url'],
+          'categories' => $result['categories'],
+          'status' => 'provisioned',
+        ];
+        if (!empty($workspaceData['selected_tier'])) {
+          $data['selected_tier'] = $workspaceData['selected_tier'];
+        }
+        if ($loginToken) {
+          $data['login_token'] = $loginToken;
+        }
+        $response = $this->sensitiveJsonResponse($data, 201);
       }
 
-      $response = [
-        'id' => $result['group_id'],
-        'slug' => $result['slug'],
-        'name' => $result['name'],
-        'url' => $result['url'],
-        'categories' => $result['categories'],
-        'status' => 'provisioned',
-      ];
-      if (!empty($workspaceData['selected_tier'])) {
-        $response['selected_tier'] = $workspaceData['selected_tier'];
-      }
-      if ($loginToken) {
-        $response['login_token'] = $loginToken;
-      }
-
-      // Clean up verified rows older than 24 hours.
       $this->cleanupVerified();
-
-      return $this->sensitiveJsonResponse($response, 201);
+      $this->notifySupportOfOpening($provisionedGroupId, (int) $result['user_id'], $result['opening'] ?? NULL);
+      return $response;
     }
     catch (\Throwable $e) {
       if ($provisionedGroupId !== NULL) {
@@ -861,6 +871,28 @@ class FastMapWorkspaceController extends ControllerBase {
     }
     finally {
       $this->lock->release($tokenLockName);
+    }
+  }
+
+  /**
+   * Sends support mail after the pending token has been consumed.
+   */
+  private function notifySupportOfOpening(int $groupId, int $uid, ?array $opening): void {
+    if ($this->opening === NULL || $opening === NULL) {
+      return;
+    }
+    try {
+      $group = $this->entityTypeManager()->getStorage('group')->load($groupId);
+      $owner = $this->entityTypeManager()->getStorage('user')->load($uid);
+      if ($group instanceof GroupInterface && $owner instanceof UserInterface) {
+        $this->opening->sendSupportMail($group, $opening, $owner);
+      }
+    }
+    catch (\Throwable $e) {
+      $this->fastmapLogger->error('Could not notify support for workspace @id: @message', [
+        '@id' => (string) $groupId,
+        '@message' => $e->getMessage(),
+      ]);
     }
   }
 

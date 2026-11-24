@@ -6,12 +6,12 @@ namespace Drupal\markaspot_mail\Mail\Builder;
 
 use Drupal\Component\Utility\Html;
 use Drupal\Component\Utility\UrlHelper;
-use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\markaspot_mail\Enum\MailType;
 use Drupal\markaspot_mail\Mail\MailBuilderInterface;
 use Drupal\markaspot_mail\Mail\MailContext;
 use Drupal\markaspot_mail\Mail\MailMessage;
 use Drupal\markaspot_mail\Service\MailTextResolver;
+use Drupal\markaspot_mail\Service\MailStringTranslator;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -35,8 +35,7 @@ use Psr\Log\LoggerInterface;
  *   - wording_plural (string, used only with suggestion, entry, or
  *     contribution presets)
  *   - lifecycle (bool): the workspace carries a lifecycle record. The mail
- *     says the workspace is ready and names the next step (operator, open
- *     the map) instead of calling it active. Absent, the old texts.
+ *     says the workspace is ready instead of calling it active.
  *
  * Always platform mode: the recipient is a workspace owner on the
  * CivicSpot SaaS, not a citizen of any single jur group.
@@ -48,11 +47,12 @@ use Psr\Log\LoggerInterface;
  */
 final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
 
-  use StringTranslationTrait;
+  use MailStringTranslationTrait;
 
   public function __construct(
     private readonly MailTextResolver $textResolver,
     private readonly LoggerInterface $logger,
+    private readonly ?MailStringTranslator $mailStrings = NULL,
   ) {}
 
   /**
@@ -114,22 +114,22 @@ final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
     }
 
     $testReportBlock = $customWording === NULL
-      ? (string) $this->t('Try it out: create your first test report directly on the map.', [], ['langcode' => $langcode])
-      : (string) $this->t('Try it out: create your first test @wording_singular directly on the map.', [
+      ? $this->translateMail('Try it out: create your first test report directly on the map.', [], $langcode)
+      : $this->translateMail('Try it out: create your first test @wording_singular directly on the map.', [
         '@wording_singular' => $wordingSingular,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     $demoReportsBlock = $customWording === NULL
-      ? (string) $this->t('A few demo reports are already in place. Edit or delete them anytime.', [], ['langcode' => $langcode])
-      : (string) $this->t('A few demo @wording_plural are already in place. Edit or delete them anytime.', [
+      ? $this->translateMail('A few demo reports are already in place. Edit or delete them anytime.', [], $langcode)
+      : $this->translateMail('A few demo @wording_plural are already in place. Edit or delete them anytime.', [
         '@wording_plural' => $wordingPlural,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     $dashboardReportsLabel = $customWording === NULL
-      ? (string) $this->t('Manage incoming reports in your dashboard:', [], ['langcode' => $langcode])
-      : (string) $this->t('Manage incoming @wording_plural in your dashboard:', [
+      ? $this->translateMail('Manage incoming reports in your dashboard:', [], $langcode)
+      : $this->translateMail('Manage incoming @wording_plural in your dashboard:', [
         '@wording_plural' => $wordingPlural,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     $dashboardReportsBlock = $dashboardReportsLabel . ' ' . $this->visibleLink($dashboardUrl);
-    $loginBlock = (string) $this->t('Log in anytime:', [], ['langcode' => $langcode]);
+    $loginBlock = $this->translateMail('Log in anytime:', [], $langcode);
     $loginBlock .= ' ' . $this->visibleLink($loginUrl);
 
     $replacements = [
@@ -139,31 +139,27 @@ final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
     ];
 
     $subject = $this->resolveFromConfig('subject', $replacements, $langcode)
-      ?: (string) $this->t('Your @site workspace "@name" is ready', [
+      ?: $this->translateMail('Your @site workspace "@name" is ready', [
         '@site' => $siteName,
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
 
-    // Lifecycle model: the workspace is ready, but the map takes reports
-    // only after the operator has been named and the map opened.
     $lifecycle = ($ctx->params['lifecycle'] ?? FALSE) === TRUE;
-    $bodyBlocks = [];
     if ($lifecycle) {
-      $preheader = (string) $this->t('Your @name workspace is ready', [
+      $preheader = $this->translateMail('Your @name workspace is ready', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $intro = (string) $this->t('Workspace "@name" is ready.', [
+      ], $langcode);
+      $intro = $this->translateMail('Workspace "@name" is ready.', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $bodyBlocks[] = (string) $this->t('Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it.', [], ['langcode' => $langcode]);
+      ], $langcode);
     }
     else {
-      $preheader = (string) $this->t('Your @name workspace is now active', [
+      $preheader = $this->translateMail('Your @name workspace is now active', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $intro = (string) $this->t('Workspace "@name" is now active.', [
+      ], $langcode);
+      $intro = $this->translateMail('Workspace "@name" is now active.', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     }
 
     return new MailMessage(
@@ -171,10 +167,9 @@ final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
       variant: 'card_transactional',
       content: [
         'preheader' => $preheader,
-        'headline' => (string) $this->t('Your workspace is ready', [], ['langcode' => $langcode]),
+        'headline' => $this->translateMail('Your workspace is ready', [], $langcode),
         'intro' => $intro,
         'body_blocks' => [
-          ...$bodyBlocks,
           $testReportBlock,
           $demoReportsBlock,
           // Anchor text deliberately repeats the URL: body_blocks render
@@ -184,7 +179,7 @@ final class WorkspaceWelcomeBuilder implements MailBuilderInterface {
           $dashboardReportsBlock,
           $loginBlock,
         ],
-        'cta_label' => (string) $this->t('Open your workspace', [], ['langcode' => $langcode]),
+        'cta_label' => $this->translateMail('Open your workspace', [], $langcode),
         'cta_url' => $workspaceUrl,
       ],
       mode: 'platform',

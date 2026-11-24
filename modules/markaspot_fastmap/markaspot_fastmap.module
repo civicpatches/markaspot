@@ -406,15 +406,18 @@ function _markaspot_fastmap_build_workspace_url(string $slug, string $baseUrl): 
  *   2. Active markaspot_fastmap.mail config (admin default-language edit).
  *   3. Shipped config/install/markaspot_fastmap.mail.yml (module default).
  *
- * Steps 1+2 are merged with '+' (override wins per top-level key present),
- * then subject/body are individually backfilled from the shipped YAML if
- * still empty after that merge.
+ * Signup mails try their shipped translation before active config.
+ * The other mails merge steps 1 and 2 first, with the override winning.
+ * They then backfill empty fields from the shipped YAML.
  *
  * @return array{subject: string, body: string}
  *   Both keys always present; empty string when even the shipped YAML has
  *   no usable value for that field.
  */
 function _markaspot_fastmap_mail_template(string $key, string $langcode): array {
+  if (in_array($key, ['workspace_verification', 'workspace_welcome'], TRUE)) {
+    return \Drupal::service('markaspot_fastmap.workspace_mail_templates')->resolve($key, $langcode);
+  }
   $override = \Drupal::languageManager()
     ->getLanguageConfigOverride($langcode, 'markaspot_fastmap.mail')
     ->get($key);
@@ -450,17 +453,8 @@ function _markaspot_fastmap_mail_template(string $key, string $langcode): array 
  * every locale miss within the same request.
  */
 function _markaspot_fastmap_shipped_mail_template(string $key, string $langcode = 'en'): array {
-  $shipped = &drupal_static(__FUNCTION__, []);
-  $langcode = preg_match('/^[a-z]{2}(-[a-z]{2})?$/', $langcode) ? $langcode : 'en';
-  if (!isset($shipped[$langcode])) {
-    $path = \Drupal::service('extension.list.module')->getPath('markaspot_fastmap')
-      . ($langcode === 'en' ? '' : '/config/install/language/' . $langcode)
-      . ($langcode === 'en' ? '/config/install/markaspot_fastmap.mail.yml' : '/markaspot_fastmap.mail.yml');
-    $decoded = is_file($path) ? Yaml::decode(file_get_contents($path)) : NULL;
-    $shipped[$langcode] = is_array($decoded) ? $decoded : [];
-  }
-
-  $template = $shipped[$langcode][$key] ?? [];
+  $shipped = \Drupal::service('markaspot_fastmap.workspace_mail_templates')->shipped($langcode);
+  $template = $shipped[$key] ?? [];
   return is_array($template) ? $template : [];
 }
 
@@ -1198,25 +1192,37 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
         if (!$open) {
           $cache_metadata?->mergeCacheMaxAge(WorkspaceLifecycleGate::NOT_OPEN_SETTINGS_MAX_AGE);
         }
-        // Before opening, the operator details are a draft only the
-        // workspace's admins see (dashboard settings): no operator block,
-        // which also carries the address, the e-mail and the generated legal
-        // notice. Once open, the imprint names the operator: the organisation
-        // or the person from the address, never the map name the response
-        // puts there. A child jurisdiction without operator data of its own
-        // names the operator of the workspace that carries the record.
-        $operatorName = OperatorDetails::name($group) ?? OperatorDetails::name($workspace);
-        if (!$open) {
+        /** @var \Drupal\markaspot_fastmap\Service\LegalNoticeGenerator $generator */
+        $generator = \Drupal::service('markaspot_fastmap.legal_notice_generator');
+        // Draft details remain private. Use one complete operator record
+        // rather than combining a child jurisdiction's fields with its root.
+        $operatorGroup = $group;
+        $operator = $open ? OperatorDetails::snapshot($group) : NULL;
+        if ($open && $operator === NULL && $group !== $workspace) {
+          $operatorGroup = $workspace;
+          $operator = OperatorDetails::snapshot($workspace);
+        }
+        $settings['hasOperator'] = $operator !== NULL;
+        if ($operator === NULL) {
           unset($settings['operator']);
+          $settings['legalNotice'] = $generator->platformNotice();
+          $cache_metadata?->addCacheableDependency(\Drupal::config('markaspot_mail.settings'));
         }
-        elseif ($operatorName !== NULL) {
-          $settings['operator']['name'] = $operatorName;
-        }
-        elseif (isset($settings['operator']) && is_array($settings['operator'])) {
-          unset($settings['operator']['name']);
-          if ($settings['operator'] === []) {
-            unset($settings['operator']);
+        else {
+          if ($operatorGroup !== $group) {
+            $langcode = $group->language()->getId();
+            if ($operatorGroup->hasTranslation($langcode)) {
+              $operatorGroup = $operatorGroup->getTranslation($langcode);
+            }
+            $settings['operator'] = [
+              'email' => $operator['email'],
+              'address' => array_diff_key($operator, array_flip(['email', 'given_name', 'family_name'])),
+            ];
           }
+          $notice = $generator->operatorNotice($operatorGroup);
+          $settings['operator']['name'] = OperatorDetails::name($operatorGroup);
+          $settings['operator']['legalNotice'] = $notice['html'];
+          $settings['legalNotice'] = $notice;
         }
       }
     }
@@ -1267,8 +1273,8 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
  *
  * Adds the lifecycle object to the dashboard's general settings, only for a
  * workspace with a valid lifecycle record: the acceptance, the open state
- * and the operator parts still missing for opening. For such a workspace the
- * address also carries the person name halves. The route has already
+ * and the operator parts still missing for the legal notice. The address
+ * also carries the person name halves. The route has already
  * checked that the caller administers this workspace. The public settings
  * response never carries the lifecycle object.
  */
@@ -1281,6 +1287,12 @@ function markaspot_fastmap_markaspot_nuxt_tenant_general_settings_alter(array &$
   $summary = $lifecycle->dashboardSummary($group);
   if ($summary !== NULL) {
     $data['lifecycle'] = $summary;
+    $data['hasOperator'] = $summary['hasOperator'];
+    /** @var \Drupal\markaspot_fastmap\Service\LegalNoticeGenerator $generator */
+    $generator = \Drupal::service('markaspot_fastmap.legal_notice_generator');
+    $data['legalNotice'] = $summary['open'] && $summary['hasOperator']
+      ? $generator->operatorNotice($group)
+      : $generator->platformNotice();
     // The operator may be a person: the form needs both name halves.
     if (is_array($data['field_jurisdiction_address'] ?? NULL)) {
       $data['field_jurisdiction_address'] += OperatorDetails::personName($group);

@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace Drupal\markaspot_mail\Mail\Builder;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
-use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\language\ConfigurableLanguageManagerInterface;
 use Drupal\markaspot_mail\Enum\MailType;
 use Drupal\markaspot_mail\Mail\MailBuilderInterface;
 use Drupal\markaspot_mail\Mail\MailContext;
 use Drupal\markaspot_mail\Mail\MailMessage;
+use Drupal\markaspot_mail\Service\MailStringTranslator;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -44,12 +44,13 @@ use Psr\Log\LoggerInterface;
  */
 final class PasswordlessOtpBuilder implements MailBuilderInterface {
 
-  use StringTranslationTrait;
+  use MailStringTranslationTrait;
 
   public function __construct(
     private readonly ConfigFactoryInterface $configFactory,
     private readonly ConfigurableLanguageManagerInterface $languageManager,
     private readonly LoggerInterface $logger,
+    private readonly ?MailStringTranslator $mailStrings = NULL,
   ) {}
 
   /**
@@ -104,33 +105,33 @@ final class PasswordlessOtpBuilder implements MailBuilderInterface {
     // plainText keep @code; header/preview-bound slots do not.
     $subjectReplacements = array_diff_key($replacements, ['@code' => TRUE]);
     $subject = $this->resolveFromConfig('subject', $subjectReplacements, $langcode)
-      ?: (string) $this->t('@platform_name: Your verification code', [
+      ?: $this->translateMail('@platform_name: Your verification code', [
         '@platform_name' => $platformName,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
 
     $preheader = $this->resolvePreheaderFromConfig($subjectReplacements, $langcode)
       ?: $this->deriveLegacyBodyPreview($replacements, $langcode)
       ?: $this->resolvePreheaderFromBaseConfig($subjectReplacements)
-      ?: (string) $this->t('Your verification code expires in @minutes minutes.', [
+      ?: $this->translateMail('Your verification code expires in @minutes minutes.', [
         '@minutes' => $expiresIn,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     $headline = $this->resolveFromConfig('headline', $replacements, $langcode, FALSE)
       ?: $this->deriveHeadlineFromSubject($subjectReplacements, $langcode)
       ?: $this->resolveFromConfig('headline', $replacements, $langcode)
-      ?: (string) $this->t('Verify your account', [], ['langcode' => $langcode]);
+      ?: $this->translateMail('Verify your account', [], $langcode);
     $subtext = $this->resolveFromConfig('subtext', $replacements, $langcode, FALSE)
       ?: $this->deriveLegacyBodySubtext($replacements, $langcode)
       ?: $this->resolveFromConfig('subtext', $replacements, $langcode)
-      ?: (string) $this->t('Enter this code in the next @minutes minutes. If you did not request this, you can ignore this email.', [
+      ?: $this->translateMail('Enter this code in the next @minutes minutes. If you did not request this, you can ignore this email.', [
         '@minutes' => $expiresIn,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
     $plainText = $this->resolveFromConfig('plain_text', $replacements, $langcode, FALSE)
       ?: $this->resolveFromConfig('body', $replacements, $langcode, FALSE)
       ?: $this->resolveFromConfig('plain_text', $replacements, $langcode)
-      ?: (string) $this->t("Your verification code: @code\n\nIt expires in @minutes minutes.", [
+      ?: $this->translateMail("Your verification code: @code\n\nIt expires in @minutes minutes.", [
         '@code' => $code,
         '@minutes' => $expiresIn,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
 
     return new MailMessage(
       subject: $subject,

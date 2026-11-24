@@ -323,3 +323,51 @@ msgstr "إدارة البلاغات الواردة في لوحة التحكم:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "سجّل الدخول في أي وقت:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "أكّد عنوان بريدك الإلكتروني لـ @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "تأكيد عنوان بريدك الإلكتروني"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "مرحبًا بك في @site! أكّد عنوان بريدك الإلكتروني لإعداد مساحة العمل «@name»."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "انقر على الزر أدناه لتأكيد عنوان بريدك الإلكتروني."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "مساحة العمل جاهزة"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "افتح مساحة العمل"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "مساحة العمل \"@name\" جاهزة الآن"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "مساحة العمل \"@name\" جاهزة الآن."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "مساحة العمل الخاصة بك \"@name\" أصبحت الآن نشطة"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "مساحة العمل الخاصة بك \"@name\" أصبحت الآن نشطة."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "جرّبها الآن: أنشئ أول بلاغ تجريبي مباشرة على الخريطة."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "توجد بالفعل بعض البلاغات التجريبية. يمكنك تعديلها أو حذفها في أي وقت."

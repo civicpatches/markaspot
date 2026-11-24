@@ -349,5 +349,25 @@ msgid "Workspace \"@name\" is ready."
 msgstr "Der Arbeits-Bereich \"@name\" ist bereit."
 
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
-msgid "Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it."
-msgstr "Nächster Schritt: Öffnen Sie die Einstellungen in Ihrem Dashboard. Tragen Sie dort ein, wer die Karte betreibt. Dann öffnen Sie die Karte. Vorher kann nur Ihr Team die Karte nutzen."
+msgid "Your workspace is ready"
+msgstr "Ihr Arbeitsbereich ist bereit"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Arbeitsbereich öffnen"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Ihr Workspace \"@name\" ist jetzt aktiv"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Ihr Workspace \"@name\" ist jetzt aktiv."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Probieren Sie ihn gleich aus: Erstellen Sie direkt auf der Karte Ihre erste Testmeldung."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Ein paar Demo-Meldungen sind bereits angelegt. Sie können sie jederzeit bearbeiten oder löschen."

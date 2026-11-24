@@ -343,12 +343,11 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
   }
 
   /**
-   * Refusals: incomplete, unconfirmed, wrong account, no record.
+   * Refusals: unconfirmed, wrong account, no record.
    */
   public function testOpenRefusals(): void {
     $owner = $this->accounts['owner'];
     $cases = [
-      'incomplete operator data' => ['incomplete', $owner, ['confirmed' => TRUE], 422, 'operator_incomplete'],
       'no confirmation' => ['mine', $owner, [], 422, 'confirmation_required'],
       'confirmation not TRUE' => ['mine', $owner, ['confirmed' => 'yes'], 422, 'confirmation_required'],
       'member without the admin role' => ['mine', $this->accounts['helper'], ['confirmed' => TRUE], 403, NULL],
@@ -368,8 +367,6 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
       }
       $this->assertFalse($this->gate()->openState($this->workspace($key)) === TRUE, "$label: not open");
     }
-    $body = json_decode((string) $this->open('incomplete', $owner, ['confirmed' => TRUE])->getContent(), TRUE);
-    $this->assertSame(['postal_code'], $body['missing']);
     $this->assertSame([], $this->openingMails(), 'No mail.');
 
     // A platform administrator may open any map with a record.
@@ -427,14 +424,12 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
     $this->assertSame('Tree Friends', $this->publicSettings('mine')['body']['operator']['name']);
 
-    // Emptying the street is refused; nothing is stored.
+    // Removing an operator part makes the provider notice public again.
     $response = $this->patchGeneral('mine', $owner, ['field_jurisdiction_address' => ['address_line1' => ''] + self::PERSON]);
-    $this->assertSame(422, $response->getStatusCode(), (string) $response->getContent());
-    $this->assertStringStartsWith('operator_incomplete:', json_decode((string) $response->getContent(), TRUE)['error']);
-    $this->assertStringContainsString('address_line1', json_decode((string) $response->getContent(), TRUE)['error']);
-    $this->assertSame('Main street 1', $this->workspace('mine')->get('field_jurisdiction_address')->first()->get('address_line1')->getValue());
-    // So is emptying the contact e-mail.
-    $this->assertSame(422, $this->patchGeneral('mine', $owner, ['field_jurisdiction_e_mail' => ''])->getStatusCode());
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $this->assertSame(200, $this->patchGeneral('mine', $owner, ['field_jurisdiction_e_mail' => ''])->getStatusCode());
+    $this->assertSame('platform', $this->publicSettings('mine')['body']['legalNotice']['source']);
+    $this->assertCount(1, $this->openingMails());
     // Name halves are validated like the other address parts.
     $this->assertSame(422, $this->patchGeneral('mine', $owner, ['field_jurisdiction_address' => ['given_name' => '<b>Jane</b>'] + self::PERSON])->getStatusCode());
 
@@ -447,6 +442,37 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     // Before opening, emptying the street is allowed (the map is not open).
     $response = $this->patchGeneral('incomplete', $owner, ['field_jurisdiction_address' => ['address_line1' => ''] + self::PERSON]);
     $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+  }
+
+  /**
+   * The provider notice is served until an open map has an operator.
+   */
+  public function testProviderNoticeOnOpenMapWithoutOperator(): void {
+    $owner = $this->accounts['owner'];
+    $response = $this->open('incomplete', $owner, ['confirmed' => TRUE]);
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $public = $this->publicSettings('incomplete')['body'];
+    $this->assertTrue($public['jurisdiction']['open']);
+    $this->assertFalse($public['hasOperator']);
+    $this->assertArrayNotHasKey('operator', $public);
+    $this->assertSame('platform', $public['legalNotice']['source']);
+    $this->assertSame('https://www.civicpatches.de/impressum', $public['legalNotice']['url']);
+    $generator = $this->container->get('markaspot_fastmap.legal_notice_generator');
+    $this->assertSame($public['legalNotice']['html'], $generator->generateForGroup($this->workspace('incomplete'), 'en'));
+
+    $response = $this->patchGeneral('incomplete', $owner, [
+      'field_jurisdiction_address' => self::PERSON,
+      'field_jurisdiction_e_mail' => 'operator@example.test',
+    ]);
+    $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $dashboard = json_decode((string) $response->getContent(), TRUE);
+    $this->assertTrue($dashboard['hasOperator']);
+    $this->assertTrue($dashboard['lifecycle']['open']);
+    $public = $this->publicSettings('incomplete')['body'];
+    $this->assertTrue($public['hasOperator']);
+    $this->assertSame('operator', $public['legalNotice']['source']);
+    $this->assertStringContainsString('Jane Doe', $public['legalNotice']['html']);
+    $this->assertCount(1, $this->openingMails());
   }
 
   /**
@@ -654,6 +680,7 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     // New details: the update hook generates the notice again, as before.
     $response = $this->patchGeneral('other', $this->accounts['foreign admin'], [
       'field_jurisdiction_address' => ['organization' => 'Real Org'] + self::PERSON,
+      'field_jurisdiction_e_mail' => 'operator@example.test',
     ]);
     $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
     $this->assertStringContainsString('Real Org', (string) $this->workspace('other')->get('field_legal_notice')->value);

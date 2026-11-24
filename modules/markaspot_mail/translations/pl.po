@@ -323,3 +323,51 @@ msgstr "Zarządzaj przychodzącymi zgłoszeniami w swoim panelu:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Zaloguj się w dowolnym momencie:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Potwierdź adres e-mail dla przestrzeni @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Potwierdź swój adres e-mail"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Witamy w @site! Potwierdź swój adres e-mail, aby skonfigurować przestrzeń roboczą „@name”."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Kliknij poniższy przycisk, aby potwierdzić swój adres e-mail."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Twoja przestrzeń robocza jest gotowa"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Otwórz przestrzeń roboczą"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Twoja przestrzeń robocza \"@name\" jest gotowa"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Twoja przestrzeń robocza \"@name\" jest gotowa."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Twoja przestrzeń robocza \"@name\" jest teraz aktywna"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Twoja przestrzeń robocza \"@name\" jest teraz aktywna."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Wypróbuj ją: utwórz swoje pierwsze testowe zgłoszenie bezpośrednio na mapie."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Kilka przykładowych zgłoszeń jest już dostępnych. Możesz je edytować lub usunąć w dowolnym momencie."

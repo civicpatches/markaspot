@@ -109,7 +109,7 @@ final class NotificationTextBuilder implements MailBuilderInterface {
       $this->resolveJurisdictionGroupFromNode($node),
       $ctx->langcode,
     );
-    $slots = $this->textResolver->replaceTokens($slots, ['node' => $node], $ctx->langcode);
+    $slots = $this->textResolver->replaceTokens($slots, ['node' => $node], $ctx->langcode, $notificationKey === 'report_confirmation');
     if ($notificationKey === 'status_duplicate' && trim($slots['subject']) === '') {
       $slots = $this->replaceRuntimeWording(
         $this->textResolver->resolveShippedDuplicate($ctx->langcode),

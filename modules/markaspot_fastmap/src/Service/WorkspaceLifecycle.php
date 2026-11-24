@@ -350,7 +350,7 @@ final class WorkspaceLifecycle {
    * Whether a value is a well-formed opening section.
    *
    * Exactly the known keys: a positive time and revision id, an account id
-   * (0 after a scrub) and a complete operator snapshot.
+   * (0 after a scrub) and an optional operator snapshot.
    */
   public static function isValidOpening(mixed $opening): bool {
     return is_array($opening)
@@ -358,7 +358,7 @@ final class WorkspaceLifecycle {
       && is_int($opening['opened_at']) && $opening['opened_at'] > 0
       && is_int($opening['uid']) && $opening['uid'] >= 0
       && is_int($opening['revision_id']) && $opening['revision_id'] > 0
-      && self::isValidOperatorSnapshot($opening['operator']);
+      && ($opening['operator'] === NULL || self::isValidOperatorSnapshot($opening['operator']));
   }
 
   /**
@@ -399,10 +399,10 @@ final class WorkspaceLifecycle {
    *   The workspace carrying a valid record that is not open.
    * @param int $uid
    *   The account that opens the map.
-   * @param array $operator
-   *   The operator snapshot (OperatorDetails::snapshot()).
+   * @param array|null $operator
+   *   The operator snapshot (OperatorDetails::snapshot()), if complete.
    * @param int $revisionId
-   *   The group revision whose operator data were confirmed.
+   *   The group revision immediately before opening.
    *
    * @return array
    *   The opening section as written.
@@ -412,7 +412,7 @@ final class WorkspaceLifecycle {
    * @throws \InvalidArgumentException
    *   When the account, revision or snapshot is invalid.
    */
-  public function writeOpening(FieldableEntityInterface $group, int $uid, array $operator, int $revisionId): array {
+  public function writeOpening(FieldableEntityInterface $group, int $uid, ?array $operator, int $revisionId): array {
     $record = $this->read($group);
     if ($record === NULL) {
       throw new \LogicException('The workspace has no valid lifecycle record.');
@@ -427,7 +427,7 @@ final class WorkspaceLifecycle {
       'operator' => $operator,
     ];
     if ($uid <= 0 || !self::isValidOpening($opening)) {
-      throw new \InvalidArgumentException('An opening needs an account, a revision and complete operator data.');
+      throw new \InvalidArgumentException('An opening needs an account and a revision. Any operator snapshot must be complete.');
     }
     $record['opening'] = $opening;
     self::markOwnWrite($group);
@@ -520,7 +520,7 @@ final class WorkspaceLifecycle {
   /**
    * Builds the lifecycle object for the workspace's administrators.
    *
-   * The settings summary plus the operator parts still missing for opening
+   * The settings summary plus the operator parts still missing for the notice
    * (empty when complete).
    *
    * @return array|null
@@ -531,7 +531,11 @@ final class WorkspaceLifecycle {
     if ($summary === NULL) {
       return NULL;
     }
-    return $summary + ['operator_missing' => OperatorDetails::missing($group)];
+    $missing = OperatorDetails::missing($group);
+    return $summary + [
+      'hasOperator' => $missing === [],
+      'operator_missing' => $missing,
+    ];
   }
 
   /**
@@ -558,8 +562,8 @@ final class WorkspaceLifecycle {
       if (!self::isValidOpening($opening)) {
         return NULL;
       }
-      $operator = [];
-      foreach ($opening['operator'] as $key => $value) {
+      $operator = $opening['operator'] === NULL ? NULL : [];
+      foreach ($opening['operator'] ?? [] as $key => $value) {
         $operator[$key] = self::SCRUBBED_OPERATOR[$key] ?? $value;
       }
       $opening = [

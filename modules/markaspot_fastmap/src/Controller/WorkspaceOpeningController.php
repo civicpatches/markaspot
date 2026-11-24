@@ -73,13 +73,8 @@ class WorkspaceOpeningController extends ControllerBase {
         'lifecycle' => $this->lifecycle->dashboardSummary($result['group']),
       ]),
       WorkspaceOpening::CONFIRMATION_REQUIRED => $this->json([
-        'error' => 'Confirm the operator details to open the map.',
+        'error' => 'Confirm that you want to open the map.',
         'code' => WorkspaceOpening::CONFIRMATION_REQUIRED,
-      ], 422),
-      WorkspaceOpening::OPERATOR_INCOMPLETE => $this->json([
-        'error' => 'The operator details are incomplete.',
-        'code' => WorkspaceOpening::OPERATOR_INCOMPLETE,
-        'missing' => $result['missing'],
       ], 422),
       WorkspaceOpening::BLOCKED => $this->json([
         'error' => 'This map is blocked. Contact support.',

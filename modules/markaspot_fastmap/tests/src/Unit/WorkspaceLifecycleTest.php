@@ -558,6 +558,14 @@ class WorkspaceLifecycleTest extends UnitTestCase {
       }
     }
 
+    $withoutOperator = $this->opening(['operator' => NULL]);
+    $record = ['opening' => $withoutOperator] + WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
+    $scrubbed = WorkspaceLifecycle::scrub($record);
+    $this->assertTrue(WorkspaceLifecycle::isScrubbed($scrubbed));
+    $this->assertNull($scrubbed['opening']['operator']);
+    $this->assertSame(0, $scrubbed['opening']['uid']);
+    $this->assertTrue($lifecycle->isOpen($this->group(json_encode($scrubbed))));
+
     // Partly scrubbed is not scrubbed: a real value left, or a real account.
     $clean = WorkspaceLifecycle::scrub(['opening' => $this->opening()] + WorkspaceLifecycle::buildRecord($this->acceptance(), 7));
     $left = $clean;

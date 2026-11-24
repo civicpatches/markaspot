@@ -324,3 +324,51 @@ msgstr "Aktualizace: @wording_singular_title"
 #: markaspot_mail.module
 msgid "There is an update: @wording_singular_title. Please check the platform for details."
 msgstr "K dispozici je aktualizace: @wording_singular_title. Podrobnosti najdete na platformě."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Potvrďte svou e-mailovou adresu pro @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Potvrďte svou e-mailovou adresu"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Vítejte v @site! Potvrďte svou e-mailovou adresu, abychom mohli nastavit váš pracovní prostor „@name“."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Kliknutím na tlačítko níže potvrďte svou e-mailovou adresu."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Váš pracovní prostor je připraven"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Otevřít pracovní prostor"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Váš pracovní prostor \"@name\" je připraven"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Váš pracovní prostor \"@name\" je připraven."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Váš pracovní prostor \"@name\" je nyní aktivní"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Váš pracovní prostor \"@name\" je nyní aktivní."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Vyzkoušejte ho: vytvořte si první testovací hlášení přímo na mapě."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Několik ukázkových hlášení je již připraveno. Můžete je kdykoli upravit nebo smazat."

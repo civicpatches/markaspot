@@ -9,6 +9,7 @@ use Drupal\Component\Serialization\Yaml;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\language\ConfigurableLanguageManagerInterface;
+use Drupal\markaspot_fastmap\Service\WorkspaceMailTemplates;
 
 /**
  * Resolves admin-editable mail text templates with per-field fallback.
@@ -32,7 +33,8 @@ use Drupal\language\ConfigurableLanguageManagerInterface;
  * workspace_welcome — two fields each: subject + body). resolve() serves
  * the six-slot markaspot_mail.texts notification templates (subject,
  * headline, intro, body_blocks, cta_label, preheader). Both share the
- * identical merge; resolve() is not implemented in terms of repeated
+ * identical merge except for signup mails, which also try shipped
+ * translations. resolve() is not implemented in terms of repeated
  * resolveField() calls purely to avoid re-reading config twice per slot.
  */
 class MailTextResolver {
@@ -78,6 +80,8 @@ class MailTextResolver {
     private readonly ConfigFactoryInterface $configFactory,
     private readonly ConfigurableLanguageManagerInterface $languageManager,
     private readonly Token $token,
+    private readonly ?MailStringTranslator $mailStrings = NULL,
+    private readonly ?WorkspaceMailTemplates $workspaceTemplates = NULL,
   ) {}
 
   /**
@@ -97,6 +101,9 @@ class MailTextResolver {
    *   override nor the default config has it set.
    */
   public function resolveField(string $configName, string $key, string $field, string $langcode): string {
+    if ($configName === 'markaspot_fastmap.mail' && $this->workspaceTemplates !== NULL) {
+      return $this->workspaceTemplates->resolve($key, $langcode)[$field] ?? '';
+    }
     $merged = $this->mergedTemplate($configName, $key, $langcode);
     return (string) ($merged[$field] ?? '');
   }
@@ -206,12 +213,24 @@ class MailTextResolver {
    *   Token replacement data, e.g. ['node' => $node].
    * @param string $langcode
    *   The langcode to replace tokens for.
+   * @param bool $reportConfirmation
+   *   Whether to localize the default status note in a citizen receipt.
    *
    * @return array{subject: string, headline: string, intro: string, body_blocks: list<string>, cta_label: string, preheader: string}
    *   The same slot shape with tokens replaced.
    */
-  public function replaceTokens(array $slots, array $tokenData, string $langcode): array {
+  public function replaceTokens(array $slots, array $tokenData, string $langcode, bool $reportConfirmation = FALSE): array {
     $options = ['langcode' => $langcode, 'clear' => TRUE];
+    if ($reportConfirmation && $this->mailStrings?->usesShippedTranslations()) {
+      $options['callback'] = function (array &$replacements) use ($langcode): void {
+        $source = 'The service request has been created.';
+        foreach (['[node:initial_status_note]', '[node:latest_status_note]'] as $token) {
+          if ((string) ($replacements[$token] ?? '') === $source) {
+            $replacements[$token] = $this->mailStrings->translate($source, [], $langcode, 'service_request');
+          }
+        }
+      };
+    }
 
     foreach (self::NOTIFICATION_SLOTS as $slot) {
       if ($slot === 'body_blocks') {

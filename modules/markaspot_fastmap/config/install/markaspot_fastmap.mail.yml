@@ -67,12 +67,12 @@ workspace_opened_support:
     Opened: @opened_at
     Opened by (account e-mail): @opened_by
 
-    Operator, as entered:
+    Operator details (optional):
     Name: @operator_name
     Address: @operator_address
     Contact e-mail: @operator_email
 
-    If these details are obviously false, block the workspace and write to the account e-mail above.
+    If the operator details are obviously false, block the workspace and write to the account e-mail above.
 workspace_reports_waiting:
   subject: 'Reports are waiting for your approval: @workspace_name'
   body: |

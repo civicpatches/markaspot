@@ -12,8 +12,11 @@
 
 declare(strict_types=1);
 
+use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Render\BubbleableMetadata;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_mail\Token\StaffLinkTokens;
+use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
 use Drupal\node\NodeInterface;
 
 /**
@@ -72,7 +75,7 @@ function markaspot_mail_mail(string $key, array &$message, array $params): void 
   }
 
   $node = $params['node'] ?? NULL;
-  if (!$node instanceof \Drupal\node\NodeInterface) {
+  if (!$node instanceof NodeInterface) {
     return;
   }
   $notificationKey = trim((string) ($params['notification_key'] ?? substr($key, strlen('notification_'))));
@@ -87,7 +90,7 @@ function markaspot_mail_mail(string $key, array &$message, array $params): void 
   $slots = $resolver->resolve('markaspot_mail.texts', $notificationKey, $langcode);
   $jurisdiction = _markaspot_mail_runtime_wording_jurisdiction($node);
   $slots = _markaspot_mail_replace_runtime_wording_slots($slots, $jurisdiction, $langcode);
-  $slots = $resolver->replaceTokens($slots, ['node' => $node], $langcode);
+  $slots = $resolver->replaceTokens($slots, ['node' => $node], $langcode, $notificationKey === 'report_confirmation');
 
   /** @var \Drupal\markaspot_nuxt\Service\CitizenWordingResolver $wordingResolver */
   $wordingResolver = \Drupal::service('markaspot_nuxt.citizen_wording_resolver');
@@ -100,7 +103,7 @@ function markaspot_mail_mail(string $key, array &$message, array $params): void 
     $slots = $resolver->replaceTokens($slots, ['node' => $node], $langcode);
   }
   $wording = $wordingResolver->resolveMailTerms($jurisdiction, $langcode);
-  $usesCustomWording = $wording['preset'] !== \Drupal\markaspot_nuxt\Service\CitizenWordingResolver::DEFAULT_PRESET;
+  $usesCustomWording = $wording['preset'] !== CitizenWordingResolver::DEFAULT_PRESET;
 
   $message['subject'] = $slots['subject'] !== ''
     ? $slots['subject']
@@ -142,7 +145,7 @@ function markaspot_mail_mail(string $key, array &$message, array $params): void 
  * @return array{subject: string, headline: string, intro: string, body_blocks: list<string>, cta_label: string, preheader: string}
  *   Slots with deliberate runtime wording placeholders replaced.
  */
-function _markaspot_mail_replace_runtime_wording_slots(array $slots, ?\Drupal\group\Entity\GroupInterface $jurisdiction, string $langcode): array {
+function _markaspot_mail_replace_runtime_wording_slots(array $slots, ?GroupInterface $jurisdiction, string $langcode): array {
   /** @var \Drupal\markaspot_nuxt\Service\CitizenWordingResolver $wordingResolver */
   $wordingResolver = \Drupal::service('markaspot_nuxt.citizen_wording_resolver');
   foreach (['subject', 'headline', 'intro', 'cta_label', 'preheader'] as $slot) {
@@ -171,18 +174,18 @@ function _markaspot_mail_replace_runtime_wording_slots(array $slots, ?\Drupal\gr
  * ResolveJurisdictionFromNodeTrait, so it repeats its narrow validation: a
  * referenced GroupInterface with the configured jurisdiction bundle only.
  */
-function _markaspot_mail_runtime_wording_jurisdiction(\Drupal\node\NodeInterface $node): ?\Drupal\group\Entity\GroupInterface {
+function _markaspot_mail_runtime_wording_jurisdiction(NodeInterface $node): ?GroupInterface {
   if (!$node->hasField('field_jurisdiction')) {
     return NULL;
   }
   $field = $node->get('field_jurisdiction');
-  if (!$field instanceof \Drupal\Core\Field\EntityReferenceFieldItemListInterface || $field->isEmpty()) {
+  if (!$field instanceof EntityReferenceFieldItemListInterface || $field->isEmpty()) {
     return NULL;
   }
   $target = $field->referencedEntities()[0] ?? NULL;
   $configuredType = \Drupal::config('markaspot_open311.settings')->get('jurisdiction_group_type');
   $jurisdictionType = is_string($configuredType) && $configuredType !== '' ? $configuredType : 'jur';
-  if (!$target instanceof \Drupal\group\Entity\GroupInterface
+  if (!$target instanceof GroupInterface
     || $target->getEntityTypeId() !== 'group'
     || $target->bundle() !== $jurisdictionType) {
     return NULL;

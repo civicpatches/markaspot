@@ -43,8 +43,8 @@
 </head>
 <body style="margin:0; padding:0; background-color:{{ branding.background_color }}; -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;">
 
-{% set legal_label = 'Legal notice'|trans({}, {'langcode': langcode}) %}
-{% set privacy_label = 'Privacy'|trans({}, {'langcode': langcode}) %}
+{% set legal_label = branding.footer_labels.legal ?? ('Legal notice'|trans({}, {'langcode': langcode})) %}
+{% set privacy_label = branding.footer_labels.privacy ?? ('Privacy'|trans({}, {'langcode': langcode})) %}
 
 {# Preheader (hidden inbox preview snippet). #}
 {% set preheader = content.preheader|default('') %}
@@ -100,7 +100,7 @@
                 <div class="mas-muted" style="color:#475569;">{{ branding.email_footer_html }}</div>
               {% elseif branding.tenant_display_name %}
                 <div class="mas-muted" style="color:#475569;">
-                  {{ 'This e-mail was sent automatically by @name via the Mark-a-Spot platform.'|trans({'@name': branding.tenant_display_name}, {'langcode': langcode}) }}
+                  {{ branding.footer_labels.attribution ?? ('This e-mail was sent automatically by @name via the Mark-a-Spot platform.'|trans({'@name': branding.tenant_display_name}, {'langcode': langcode})) }}
                 </div>
               {% endif %}
               <div class="mas-muted" style="margin-top:8px; color:#475569;">
@@ -165,14 +165,14 @@
             <div style="margin-top:4px;">
               <a href="{{ branding.platform_footer.mas_link }}" style="color:#64748b; text-decoration:none;">mark-a-spot.com</a>
               &nbsp;&middot;&nbsp;
-              <a href="{{ branding.platform_footer.docs_link }}" style="color:#64748b; text-decoration:none;">{{ 'Docs'|trans({}, {'langcode': langcode}) }}</a>
+              <a href="{{ branding.platform_footer.docs_link }}" style="color:#64748b; text-decoration:none;">{{ branding.footer_labels.docs ?? ('Docs'|trans({}, {'langcode': langcode})) }}</a>
               &nbsp;&middot;&nbsp;
               <a href="{{ branding.platform_footer.civicspot_link }}" style="color:#64748b; text-decoration:none;">civicspot.io</a>
             </div>
             <div style="margin-top:6px;">
-              <a href="{{ branding.platform_footer.impressum_link }}" style="color:#64748b; text-decoration:underline;">{{ 'Impressum'|trans({}, {'langcode': langcode}) }}</a>
+              <a href="{{ branding.platform_footer.impressum_link }}" style="color:#64748b; text-decoration:underline;">{{ branding.footer_labels.impressum ?? ('Impressum'|trans({}, {'langcode': langcode})) }}</a>
               &nbsp;&middot;&nbsp;
-              <a href="{{ branding.platform_footer.datenschutz_link }}" style="color:#64748b; text-decoration:underline;">{{ 'Datenschutz'|trans({}, {'langcode': langcode}) }}</a>
+              <a href="{{ branding.platform_footer.datenschutz_link }}" style="color:#64748b; text-decoration:underline;">{{ branding.footer_labels.datenschutz ?? ('Datenschutz'|trans({}, {'langcode': langcode})) }}</a>
             </div>
             <div style="margin-top:6px; color:#94a3b8;">
               {{ branding.platform_footer.copyright }}

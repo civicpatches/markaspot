@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_mail\Mail\Builder;
 
-use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\markaspot_mail\Enum\MailType;
 use Drupal\markaspot_mail\Mail\MailBuilderInterface;
 use Drupal\markaspot_mail\Mail\MailContext;
 use Drupal\markaspot_mail\Mail\MailMessage;
 use Drupal\markaspot_mail\Service\MailTextResolver;
+use Drupal\markaspot_mail\Service\MailStringTranslator;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -30,9 +30,7 @@ use Psr\Log\LoggerInterface;
  *   - site_name (string, defaults to "CivicSpot")
  *   - cleanup_days (int|string, defaults to 7)
  *   - lifecycle (bool): the signup carries an acceptance (lifecycle model).
- *     The mail asks to confirm the address; the workspace is not "activated"
- *     by the click but is set up and opened later by its operator. Absent,
- *     the texts are those of the old model.
+ *     The mail asks to confirm the address before the workspace is set up.
  *
  * Always platform mode: the workspace doesn't have a jurisdiction yet
  * (that's precisely what the verification step unlocks), so there is no
@@ -45,11 +43,12 @@ use Psr\Log\LoggerInterface;
  */
 final class WorkspaceVerificationBuilder implements MailBuilderInterface {
 
-  use StringTranslationTrait;
+  use MailStringTranslationTrait;
 
   public function __construct(
     private readonly MailTextResolver $textResolver,
     private readonly LoggerInterface $logger,
+    private readonly ?MailStringTranslator $mailStrings = NULL,
   ) {}
 
   /**
@@ -92,33 +91,33 @@ final class WorkspaceVerificationBuilder implements MailBuilderInterface {
     ];
 
     $subject = $this->resolveFromConfig('subject', $replacements, $langcode)
-      ?: (string) $this->t('Activate your @site workspace "@name"', [
+      ?: $this->translateMail('Activate your @site workspace "@name"', [
         '@site' => $siteName,
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
+      ], $langcode);
 
     $lifecycle = ($ctx->params['lifecycle'] ?? FALSE) === TRUE;
     if ($lifecycle) {
-      $preheader = (string) $this->t('Confirm your email address for @name', [
+      $preheader = $this->translateMail('Confirm your email address for @name', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $headline = (string) $this->t('Confirm your email address', [], ['langcode' => $langcode]);
-      $intro = (string) $this->t('Welcome to @site! Confirm your email address to set up your workspace "@name".', [
+      ], $langcode);
+      $headline = $this->translateMail('Confirm your email address', [], $langcode);
+      $intro = $this->translateMail('Welcome to @site! Confirm your email address to set up your workspace "@name".', [
         '@site' => $siteName,
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $action = (string) $this->t('Click the button below to confirm your email address.', [], ['langcode' => $langcode]);
+      ], $langcode);
+      $action = $this->translateMail('Click the button below to confirm your email address.', [], $langcode);
     }
     else {
-      $preheader = (string) $this->t('Click to activate your @name workspace', [
+      $preheader = $this->translateMail('Click to activate your @name workspace', [
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $headline = (string) $this->t('Activate your workspace', [], ['langcode' => $langcode]);
-      $intro = (string) $this->t('Welcome to @site! Your workspace "@name" is ready to activate.', [
+      ], $langcode);
+      $headline = $this->translateMail('Activate your workspace', [], $langcode);
+      $intro = $this->translateMail('Welcome to @site! Your workspace "@name" is ready to activate.', [
         '@site' => $siteName,
         '@name' => $workspaceName,
-      ], ['langcode' => $langcode]);
-      $action = (string) $this->t('Click the button below to verify your email and unlock the workspace.', [], ['langcode' => $langcode]);
+      ], $langcode);
+      $action = $this->translateMail('Click the button below to verify your email and unlock the workspace.', [], $langcode);
     }
 
     return new MailMessage(
@@ -130,12 +129,12 @@ final class WorkspaceVerificationBuilder implements MailBuilderInterface {
         'intro' => $intro,
         'body_blocks' => [
           $action,
-          (string) $this->t('Unverified workspaces are automatically removed after @days days.', [
+          $this->translateMail('Unverified workspaces are automatically removed after @days days.', [
             '@days' => $cleanupDays,
-          ], ['langcode' => $langcode]),
-          (string) $this->t('Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address.', [], ['langcode' => $langcode]),
+          ], $langcode),
+          $this->translateMail('Open the link in the browser you signed up with to be signed in automatically. In any other browser you can sign in with a code that we send to this email address.', [], $langcode),
         ],
-        'cta_label' => (string) $this->t('Verify email', [], ['langcode' => $langcode]),
+        'cta_label' => $this->translateMail('Verify email', [], $langcode),
         'cta_url' => $verifyUrl,
       ],
       mode: 'platform',

@@ -139,9 +139,9 @@ final class WorkspaceWelcomeBuilderTest extends UnitTestCase {
   }
 
   /**
-   * Lifecycle model: ready, and the next step is the operator and opening.
+   * Lifecycle welcome copy fits a map that is already open.
    */
-  public function testLifecycleNamesTheNextStep(): void {
+  public function testLifecycleWelcomeForAnOpenMap(): void {
     $msg = $this->buildBuilder()->build($this->buildContext([
       'workspace_name' => 'Demo',
       'workspace_url' => 'https://demo.civicspot.io',
@@ -151,8 +151,8 @@ final class WorkspaceWelcomeBuilderTest extends UnitTestCase {
     $this->assertSame('Your Demo workspace is ready', $msg->content['preheader']);
     $this->assertSame('Your workspace is ready', $msg->content['headline']);
     $this->assertSame('Workspace "Demo" is ready.', $msg->content['intro']);
-    $this->assertSame('Next step: name the operator of the map in the settings of your dashboard and open the map. Until then, only your team can use it.', $msg->content['body_blocks'][0]);
-    $this->assertCount(5, $msg->content['body_blocks']);
+    $this->assertSame('Try it out: create your first test report directly on the map.', $msg->content['body_blocks'][0]);
+    $this->assertCount(4, $msg->content['body_blocks']);
     foreach ([$msg->content['preheader'], $msg->content['intro'], ...$msg->content['body_blocks']] as $text) {
       $this->assertStringNotContainsString('active', $text);
     }

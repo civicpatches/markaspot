@@ -16,12 +16,17 @@ services:
       - '@file_system'
       - '@markaspot_nuxt.public_url_validator'
 
+  markaspot_mail.string_translator:
+    class: Drupal\markaspot_mail\Service\MailStringTranslator
+    arguments: ['@module_handler', '@string_translation']
+
   markaspot_mail.renderer:
     class: Drupal\markaspot_mail\Service\MailHtmlRenderer
     arguments:
       - '@renderer'
       - '@markaspot_mail.branding'
       - '@logger.channel.markaspot_mail'
+      - '@markaspot_mail.string_translator'
 
   # Single source of truth for the override-then-default-then-empty merge
   # used by every admin-editable mail text template (markaspot_mail.texts
@@ -34,6 +39,8 @@ services:
       - '@config.factory'
       - '@language_manager'
       - '@token'
+      - '@markaspot_mail.string_translator'
+      - '@?markaspot_fastmap.workspace_mail_templates'
 
   # Single source of truth for "what does a realistic mail for this builder
   # look like". Shared by scripts/render-preview-samples.php and the
@@ -134,6 +141,7 @@ services:
     arguments:
       - '@markaspot_mail.text_resolver'
       - '@logger.channel.markaspot_mail'
+      - '@markaspot_mail.string_translator'
     tags:
       - { name: markaspot_mail.builder }
 
@@ -142,6 +150,7 @@ services:
     arguments:
       - '@markaspot_mail.text_resolver'
       - '@logger.channel.markaspot_mail'
+      - '@markaspot_mail.string_translator'
     tags:
       - { name: markaspot_mail.builder }
 
@@ -159,6 +168,7 @@ services:
       - '@config.factory'
       - '@language_manager'
       - '@logger.channel.markaspot_mail'
+      - '@markaspot_mail.string_translator'
     tags:
       - { name: markaspot_mail.builder }
 

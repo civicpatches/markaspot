@@ -42,7 +42,6 @@ class WorkspaceOpening {
   public const ALREADY_OPEN = 'already_open';
   public const NOT_APPLICABLE = 'not_applicable';
   public const CONFIRMATION_REQUIRED = 'confirmation_required';
-  public const OPERATOR_INCOMPLETE = OperatorIncompleteException::CODE;
   public const BUSY = 'busy';
   public const BLOCKED = 'workspace_blocked';
 
@@ -125,11 +124,11 @@ class WorkspaceOpening {
    * @param \Drupal\Core\Session\AccountInterface $account
    *   The acting account; the route has checked its access.
    * @param bool $confirmed
-   *   Whether the operator ticked the confirmation.
+   *   Whether the administrator confirmed opening the map.
    *
-   * @return array{status: string, missing?: string[], group?: \Drupal\group\Entity\GroupInterface}
+   * @return array{status: string, group?: \Drupal\group\Entity\GroupInterface}
    *   The outcome; "group" is the stored workspace for OPENED and
-   *   ALREADY_OPEN, "missing" the missing parts for OPERATOR_INCOMPLETE.
+   *   ALREADY_OPEN.
    */
   public function open(GroupInterface $group, AccountInterface $account, bool $confirmed): array {
     if (!$this->isRecordWorkspace($group)) {
@@ -159,18 +158,9 @@ class WorkspaceOpening {
       if ($this->lifecycle->isOpen($stored)) {
         return ['status' => self::ALREADY_OPEN, 'group' => $stored];
       }
-      $missing = OperatorDetails::missing($stored);
-      $snapshot = OperatorDetails::snapshot($stored);
-      if ($missing !== [] || $snapshot === NULL) {
-        return ['status' => self::OPERATOR_INCOMPLETE, 'missing' => $missing];
-      }
-
       $uid = (int) $account->id();
-      $opening = $this->lifecycle->writeOpening($stored, $uid, $snapshot, (int) $stored->getRevisionId());
-      $stored->setNewRevision(TRUE);
-      $stored->setRevisionUserId($uid);
-      $stored->setRevisionCreationTime($opening['opened_at']);
-      $stored->setRevisionLogMessage(self::REVISION_LOG);
+      $opening = $this->lifecycle->writeOpening($stored, $uid, OperatorDetails::snapshot($stored), (int) $stored->getRevisionId());
+      self::setOpeningRevision($stored, $opening);
       $stored->save();
       $this->logger->notice('Workspace @id opened for public reports by account @uid.', [
         '@id' => (string) $stored->id(),
@@ -186,23 +176,20 @@ class WorkspaceOpening {
   }
 
   /**
-   * Keeps the lifecycle record and an open map's operator data on every save.
+   * Records the opening on the group revision about to be saved.
+   */
+  public static function setOpeningRevision(GroupInterface $group, array $opening): void {
+    $group->setNewRevision(TRUE);
+    $group->setRevisionUserId($opening['uid']);
+    $group->setRevisionCreationTime($opening['opened_at']);
+    $group->setRevisionLogMessage(self::REVISION_LOG);
+  }
+
+  /**
+   * Preserves the stored lifecycle record on ordinary group saves.
    *
-   * Called from hook_group_presave(). For every existing workspace: only
-   * WorkspaceLifecycle changes the record (WorkspaceLifecycle::
-   * consumeOwnWrite()); any other save, such as one built from an entity
-   * loaded before an opening or a support reset, gets the stored record
-   * back. For a workspace whose stored record is open: a save that removes
-   * an operator part that was there is refused. Unrelated saves
-   * (billing, tier, branding) pass, also when the stored data were
-   * incomplete already.
-   *
-   * A save marked as syncing is exempt: it is the support path for false
-   * operator data (resetOperator(), the markaspot:workspace-reset-operator
-   * command) and for content synchronisation.
-   *
-   * @throws \Drupal\markaspot_fastmap\Service\OperatorIncompleteException
-   *   For a save that would make the operator data incomplete.
+   * Only WorkspaceLifecycle may change the record. This also protects
+   * openings and support resets against stale settings saves.
    */
   public function enforceOnSave(GroupInterface $group): void {
     // Consumed on every save, so a mark never outlives the save it was for.
@@ -228,14 +215,6 @@ class WorkspaceOpening {
       $this->logger->warning('A save of workspace @id tried to change the lifecycle record; the stored record was kept.', [
         '@id' => (string) $group->id(),
       ]);
-    }
-
-    if (!$this->lifecycle->isOpen($original)) {
-      return;
-    }
-    $after = OperatorDetails::missing($group);
-    if (OperatorDetails::removesParts(OperatorDetails::missing($original), $after)) {
-      throw new OperatorIncompleteException($after);
     }
   }
 
@@ -410,7 +389,7 @@ class WorkspaceOpening {
    */
   public function mailParams(GroupInterface $group, array $opening, AccountInterface $account): array {
     $operator = $opening['operator'];
-    $name = $operator['organization'] ?? trim($operator['given_name'] . ' ' . $operator['family_name']);
+    $name = $operator === NULL ? '(not provided)' : ($operator['organization'] ?? trim($operator['given_name'] . ' ' . $operator['family_name']));
     $slug = $group->hasField('field_slug') && !$group->get('field_slug')->isEmpty()
       ? trim((string) $group->get('field_slug')->value)
       : '';
@@ -421,8 +400,8 @@ class WorkspaceOpening {
       'workspace_id' => (string) $group->id(),
       'workspace_url' => $this->workspaceUrl($slug),
       'operator_name' => $name,
-      'operator_address' => sprintf('%s, %s %s, %s', $operator['address_line1'], $operator['postal_code'], $operator['locality'], $operator['country_code']),
-      'operator_email' => $operator['email'],
+      'operator_address' => $operator === NULL ? '(not provided)' : sprintf('%s, %s %s, %s', $operator['address_line1'], $operator['postal_code'], $operator['locality'], $operator['country_code']),
+      'operator_email' => $operator['email'] ?? '(not provided)',
       'opened_by' => (string) $account->getEmail(),
       'opened_at' => gmdate('Y-m-d H:i', $opening['opened_at']) . ' UTC',
     ]);

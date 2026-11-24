@@ -10,6 +10,11 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\Language\Language;
+use Drupal\Core\Language\LanguageManagerInterface;
+use Drupal\Core\Template\TwigEnvironment;
+use Drupal\markaspot_fastmap\Service\LegalNoticeGenerator;
+use Psr\Log\NullLogger;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
@@ -42,11 +47,21 @@ class LifecycleSettingsHookTest extends UnitTestCase {
     require_once dirname(__DIR__, 3) . '/markaspot_fastmap.module';
 
     $config = $this->createMock(ImmutableConfig::class);
+    $config->method('getCacheContexts')->willReturn([]);
+    $config->method('getCacheTags')->willReturn([]);
+    $config->method('getCacheMaxAge')->willReturn(-1);
     $factory = $this->createMock(ConfigFactoryInterface::class);
     $factory->method('get')->willReturn($config);
     $lifecycle = new WorkspaceLifecycle($factory, $this->createMock(TimeInterface::class));
     $container = new ContainerBuilder();
     $container->set('markaspot_fastmap.workspace_lifecycle', $lifecycle);
+    $container->set('config.factory', $factory);
+    $container->set('markaspot_fastmap.legal_notice_generator', new LegalNoticeGenerator(
+      $this->createMock(TwigEnvironment::class),
+      $this->createMock(LanguageManagerInterface::class),
+      $this->createMock(ModuleHandlerInterface::class),
+      new NullLogger(),
+    ));
     // The public alter asks the gate for the open state (self-hosted here:
     // no open key; WorkspaceLifecycleGateTest covers the state itself).
     new Settings(['markaspot_operating_mode' => 'self_hosted']);
@@ -89,9 +104,12 @@ class LifecycleSettingsHookTest extends UnitTestCase {
         'langcode' => 'de',
         'open' => FALSE,
         'opened_at' => NULL,
+        'hasOperator' => FALSE,
         // This double has no operator fields at all.
         'operator_missing' => ['name', 'address_line1', 'postal_code', 'locality', 'country_code', 'email'],
       ],
+      'hasOperator' => FALSE,
+      'legalNotice' => \Drupal::service('markaspot_fastmap.legal_notice_generator')->platformNotice(),
     ], $data);
     // The account reference is not part of it.
     $this->assertStringNotContainsString('4242', (string) json_encode($data));
@@ -130,7 +148,10 @@ class LifecycleSettingsHookTest extends UnitTestCase {
    * A workspace double with a record and operator data, for the alters.
    */
   private function operatorRecordWorkspace(?string $record, ?array $address, ?string $email): GroupInterface {
-    $group = $this->operatorWorkspace($address, $email, TRUE, [WorkspaceLifecycle::FIELD => $record]);
+    $group = $this->operatorWorkspace($address, $email, TRUE, [
+      WorkspaceLifecycle::FIELD => $record,
+      'field_legal_notice' => '<p>Notice</p>',
+    ]);
     $group->method('id')->willReturn(3);
     $group->method('getCacheTags')->willReturn(['group:3']);
     $group->method('getCacheContexts')->willReturn([]);
@@ -250,13 +271,19 @@ class LifecycleSettingsHookTest extends UnitTestCase {
       $settings = ['jurisdiction' => ['name' => 'Tree map'], 'operator' => $controllerOperator];
       markaspot_fastmap_markaspot_nuxt_settings_alter($settings, $this->operatorRecordWorkspace($this->openRecord(), $operatorAddress, 'op@example.org'));
       if ($expected === NULL) {
-        $this->assertArrayNotHasKey('name', $settings['operator'], $label);
+        $this->assertArrayNotHasKey('operator', $settings, $label);
+        $this->assertFalse($settings['hasOperator']);
+        $this->assertSame('platform', $settings['legalNotice']['source']);
+        $this->assertSame('https://www.civicpatches.de/impressum', $settings['legalNotice']['url']);
+        continue;
       }
       else {
         $this->assertSame($expected, $settings['operator']['name'], $label);
       }
       $this->assertStringNotContainsString('"name":"Tree map"', (string) json_encode($settings['operator']), "$label: never the map name");
       $this->assertSame('op@example.org', $settings['operator']['email'], "$label: the rest stays");
+      $this->assertTrue($settings['hasOperator']);
+      $this->assertSame(['source' => 'operator', 'html' => '<p>Notice</p>'], $settings['legalNotice']);
     }
 
     // An operator block with nothing but the map name disappears.
@@ -346,8 +373,9 @@ class LifecycleSettingsHookTest extends UnitTestCase {
       'child with its own operator' => [['organization' => 'Child Org'] + $address, 'Child Org'],
     ];
     foreach ($cases as $label => [$childAddress, $expected]) {
-      $child = $this->operatorWorkspace($childAddress, NULL);
+      $child = $this->operatorWorkspace($childAddress, $childAddress === NULL ? NULL : 'child@example.org', TRUE, ['field_legal_notice' => '<p>Child</p>']);
       $child->method('id')->willReturn(9);
+      $child->method('language')->willReturn(new Language(['id' => 'en']));
       $settings = ['jurisdiction' => [], 'operator' => ['name' => 'Child map']];
       markaspot_fastmap_markaspot_nuxt_settings_alter($settings, $child);
       $this->assertTrue($settings['jurisdiction']['open'], "$label: the root's state");

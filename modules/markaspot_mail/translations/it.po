@@ -323,3 +323,51 @@ msgstr "Gestisci le segnalazioni in arrivo dalla dashboard:"
 #: src/Mail/Builder/WorkspaceWelcomeBuilder.php
 msgid "Log in anytime:"
 msgstr "Accedi in qualsiasi momento:"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address for @name"
+msgstr "Conferma il tuo indirizzo e-mail per @name"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Confirm your email address"
+msgstr "Conferma il tuo indirizzo e-mail"
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Welcome to @site! Confirm your email address to set up your workspace \"@name\"."
+msgstr "Ti diamo il benvenuto su @site! Conferma il tuo indirizzo e-mail per configurare il tuo spazio di lavoro «@name»."
+
+#: src/Mail/Builder/WorkspaceVerificationBuilder.php
+msgid "Click the button below to confirm your email address."
+msgstr "Fai clic sul pulsante qui sotto per confermare il tuo indirizzo e-mail."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your workspace is ready"
+msgstr "Il tuo spazio di lavoro è pronto"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Open your workspace"
+msgstr "Apri il tuo spazio di lavoro"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is ready"
+msgstr "Il tuo spazio di lavoro \"@name\" è pronto"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is ready."
+msgstr "Il tuo spazio di lavoro \"@name\" è pronto."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Your @name workspace is now active"
+msgstr "Il tuo spazio di lavoro \"@name\" è ora attivo"
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Workspace \"@name\" is now active."
+msgstr "Il tuo spazio di lavoro \"@name\" è ora attivo."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "Try it out: create your first test report directly on the map."
+msgstr "Provalo subito: crea la tua prima segnalazione di prova direttamente sulla mappa."
+
+#: src/Mail/Builder/WorkspaceWelcomeBuilder.php
+msgid "A few demo reports are already in place. Edit or delete them anytime."
+msgstr "Alcune segnalazioni dimostrative sono già presenti. Puoi modificarle o eliminarle in qualsiasi momento."

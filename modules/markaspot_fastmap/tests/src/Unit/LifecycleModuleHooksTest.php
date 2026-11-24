@@ -14,19 +14,23 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\Query\QueryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Logger\LoggerChannelInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\State\StateInterface;
+use Drupal\Core\Template\TwigEnvironment;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\markaspot_fastmap\Service\LegalNoticeGenerator;
 use Drupal\markaspot_fastmap\Service\WaitingReportsNotifier;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_fastmap\Service\WorkspaceNotOpenException;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningServiceInterface;
 use Drupal\node\NodeInterface;
 use Drupal\Tests\UnitTestCase;
+use Psr\Log\NullLogger;
 
 /**
  * Tests that the module's hooks hand the lifecycle decisions to the gate.
@@ -228,6 +232,12 @@ class LifecycleModuleHooksTest extends UnitTestCase {
    * The public settings carry open only for a workspace under the model.
    */
   public function testPublicSettingsOpenKey(): void {
+    \Drupal::getContainer()->set('markaspot_fastmap.legal_notice_generator', new LegalNoticeGenerator(
+      $this->createMock(TwigEnvironment::class),
+      $this->createMock(LanguageManagerInterface::class),
+      $this->createMock(ModuleHandlerInterface::class),
+      new NullLogger(),
+    ));
     $workspace = $this->createMock(GroupInterface::class);
     $workspace->method('hasField')->willReturn(FALSE);
     $old = $this->createMock(GroupInterface::class);

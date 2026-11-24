@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Drupal\Tests\markaspot_fastmap\Kernel;
 
 use Drupal\Core\DependencyInjection\ContainerBuilder;
-use Drupal\Core\Entity\EntityStorageException;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Hook\Attribute\Hook;
 use Drupal\Core\Session\AnonymousUserSession;
@@ -18,10 +17,11 @@ use Drupal\group\Entity\GroupRole;
 use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\language\Entity\ConfigurableLanguage;
+use Drupal\markaspot_fastmap\Controller\FastMapWorkspaceController;
 use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
-use Drupal\markaspot_fastmap\Service\WorkspaceNotOpenException;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
 use Drupal\node\NodeInterface;
 use Drupal\node\Entity\NodeType;
@@ -192,7 +192,9 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
     $this->assertSame($result['user_id'], $record['acceptance']['uid']);
     $this->assertSame(['terms' => '2026-11-15', 'dpa' => '2026-11-15', 'declaration' => '1.0'], array_intersect_key($record['acceptance'], array_flip(WorkspaceLifecycle::DOCUMENTS)));
     $this->assertSame(1799990000, $record['acceptance']['accepted_at']);
-    $this->assertNull($record['opening']);
+    $this->assertSame($result['user_id'], $record['opening']['uid']);
+    $this->assertGreaterThan(0, $record['opening']['opened_at']);
+    $this->assertNull($record['opening']['operator']);
 
     $owner = $this->reloadUser($result['user_id']);
     $this->assertSame('parents@example.test', $owner->getEmail());
@@ -233,9 +235,9 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
   }
 
   /**
-   * Switch on: Free, no expiry, review on, the examples public, intake closed.
+   * Switch on: Free without expiry, public examples, open intake and review.
    */
-  public function testSwitchOnProvisionsAnUnopenedFreeWorkspace(): void {
+  public function testSwitchOnProvisionsAnOpenFreeWorkspace(): void {
     $this->setSwitch(TRUE);
     $this->setSetting('markaspot_operating_mode', 'saas');
     foreach (['lindenhof' => '', 'riverside' => 'pro'] as $slug => $selectedTier) {
@@ -245,7 +247,7 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
       $this->assertTrue($group->get('field_expiry_date')->isEmpty(), "$slug: no expiry, also with a chosen tier");
       $config = json_decode((string) $group->get('field_nuxt_config')->value, TRUE);
       $this->assertTrue($config['features']['reviewBeforePublish'], "$slug: review on");
-      $this->assertTrue($this->container->get('markaspot_fastmap.workspace_lifecycle')->isNotOpen($group), "$slug: not open");
+      $this->assertTrue($this->container->get('markaspot_fastmap.workspace_lifecycle')->isOpen($group), "$slug: open");
 
       $examples = $this->container->get('entity_type.manager')->getStorage('node')->loadByProperties([
         'type' => 'service_request',
@@ -257,20 +259,50 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
       }
     }
 
-    // A citizen report in the new workspace is refused at the save.
+    // Anonymous intake is open and the approval flag still holds the report.
     $this->setCurrentUser(new AnonymousUserSession());
-    try {
-      $this->container->get('entity_type.manager')->getStorage('node')->create([
-        'type' => 'service_request',
-        'title' => 'Citizen report',
-        'field_jurisdiction' => $result['group_id'],
-        'body' => ['value' => 'Cars park on the sidewalk.', 'format' => 'plain_text'],
-      ])->save();
-      $this->fail('A public report was stored in a workspace that is not open.');
-    }
-    catch (EntityStorageException $e) {
-      $this->assertInstanceOf(WorkspaceNotOpenException::class, $e->getPrevious());
-    }
+    $report = $this->container->get('entity_type.manager')->getStorage('node')->create([
+      'type' => 'service_request',
+      'title' => 'Citizen report',
+      'field_jurisdiction' => $result['group_id'],
+      'body' => ['value' => 'Cars park on the sidewalk.', 'format' => 'plain_text'],
+    ]);
+    $report->save();
+    $this->assertFalse($report->isPublished());
+  }
+
+  /**
+   * Verification opens once and sends one support mail.
+   */
+  public function testVerificationSendsSupportMailOnce(): void {
+    $this->setSwitch(TRUE);
+    $this->setSetting('markaspot_operating_mode', 'saas');
+    $this->installSchema('markaspot_fastmap', ['markaspot_fastmap_pending', 'markaspot_fastmap_verified']);
+    $this->config('system.mail')->set('interface.default', 'test_mail_collector')->save();
+    $this->config('markaspot_fastmap.settings')->set('support_email', 'support@example.test')->save();
+    $token = str_repeat('a', 64);
+    $database = $this->container->get('database');
+    $database->insert('markaspot_fastmap_pending')->fields([
+      'token' => $token,
+      'email' => 'parents@example.test',
+      'workspace_data' => json_encode($this->signup('verified', ['acceptance' => self::ACCEPTANCE]), JSON_THROW_ON_ERROR),
+      'created' => $this->container->get('datetime.time')->getRequestTime(),
+    ])->execute();
+
+    $controller = FastMapWorkspaceController::create($this->container);
+    $response = $controller->verifyWorkspace($token);
+    $this->assertSame(201, $response->getStatusCode(), (string) $response->getContent());
+    $group = $this->reloadGroup(json_decode((string) $response->getContent(), TRUE)['id']);
+    $this->assertTrue($this->container->get('markaspot_fastmap.workspace_lifecycle')->isOpen($group));
+
+    $this->assertSame(200, $controller->verifyWorkspace($token)->getStatusCode());
+    $group->set('field_platform_name', 'Updated map');
+    $group->save();
+    $mails = array_values(array_filter($this->container->get('state')->get('system.test_mail_collector', []), static fn(array $mail): bool => $mail['key'] === WorkspaceOpening::MAIL_KEY));
+    $this->assertCount(1, $mails);
+    $this->assertSame('support@example.test', $mails[0]['to']);
+    $this->assertSame('parents@example.test', $mails[0]['params']['opened_by']);
+    $this->assertSame('(not provided)', $mails[0]['params']['operator_name']);
   }
 
   /**
@@ -504,7 +536,14 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
    * Provisions a workspace for the same e-mail address.
    */
   private function provision(string $slug, array $extra = []): array {
-    return $this->container->get('markaspot_fastmap.workspace_provisioning')->provisionWorkspace($extra + [
+    return $this->container->get('markaspot_fastmap.workspace_provisioning')->provisionWorkspace($this->signup($slug, $extra));
+  }
+
+  /**
+   * Builds workspace data stored by a pending signup.
+   */
+  private function signup(string $slug, array $extra): array {
+    return $extra + [
       'boundary' => ['type' => 'Polygon', 'coordinates' => [[[6.8, 50.8], [7.1, 50.8], [7.1, 51.1], [6.8, 50.8]]]],
       'name' => 'Map ' . $slug,
       'slug' => $slug,
@@ -515,7 +554,7 @@ final class LifecycleProvisioningKernelTest extends KernelTestBase {
       'lng' => 6.9,
       'zoom' => 15,
       'template' => 'safe-routes',
-    ]);
+    ];
   }
 
   /**

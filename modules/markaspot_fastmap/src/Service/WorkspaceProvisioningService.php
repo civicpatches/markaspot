@@ -1529,6 +1529,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
         // examples, which the review hold would otherwise keep unpublished.
         // Read from the group, not from the config built above, so a hook
         // that wrote the config in between keeps its change.
+        $opening = NULL;
         if ($acceptance !== NULL) {
           $storedConfig = $group->hasField('field_nuxt_config')
             ? json_decode((string) $group->get('field_nuxt_config')->value, TRUE)
@@ -1536,6 +1537,8 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
           $storedConfig = is_array($storedConfig) ? $storedConfig : $nuxtConfig;
           $storedConfig['features'][ReviewBeforePublish::FLAG] = TRUE;
           $group->set('field_nuxt_config', json_encode($storedConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+          $opening = $lifecycle->writeOpening($group, (int) $user->id(), NULL, (int) $group->getRevisionId());
+          WorkspaceOpening::setOpeningRevision($group, $opening);
           $group->save();
         }
 
@@ -1564,6 +1567,7 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
           'wording' => $this->resolveCitizenWording($group, $defaultLang),
           // Whether the workspace carries a lifecycle record (new model).
           'lifecycle' => $acceptance !== NULL,
+          'opening' => $opening,
         ];
 
         unset($transaction);
@@ -2661,12 +2665,9 @@ class WorkspaceProvisioningService implements WorkspaceProvisioningServiceInterf
   /**
    * Start page texts of the lifecycle model.
    *
-   * The map of a new workspace takes no reports until its operator opens it,
-   * and the page is created once and stays after the opening. The texts are
-   * therefore true in both states: they say how to report and that the map
-   * shows a notice while it takes no reports yet. Languages without an entry
-   * here get the first paragraph of START_PAGE_TEMPLATES, the welcome
-   * without the invitation.
+   * The texts say how to report and cover maps whose intake is closed
+   * by support. Languages without an entry get the first paragraph of
+   * START_PAGE_TEMPLATES.
    */
   private const LIFECYCLE_START_PAGE_TEMPLATES = [
     'en' => [
