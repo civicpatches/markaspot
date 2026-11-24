@@ -45,6 +45,7 @@ final class WorkspaceLifecycleHooks {
   #[Hook('group_delete')]
   public function groupDelete(GroupInterface $group): void {
     $this->waitingReports->onWorkspaceDelete($group);
+    $this->opening->forgetOperatorNotification((string) $group->id());
   }
 
   /**

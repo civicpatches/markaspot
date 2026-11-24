@@ -475,6 +475,7 @@ function _markaspot_fastmap_shipped_mail_template(string $key, string $langcode 
  * static guard prevents the inner save from recursing into this hook a
  * second time. Manual overrides (sentinel <!-- manual-override -->) are
  * skipped by the generator and never get auto-regenerated.
+ * Operator changes also schedule a support mail after commit.
  */
 function markaspot_fastmap_group_update(GroupInterface $group): void {
   if ($group->bundle() !== 'jur') {
@@ -505,6 +506,28 @@ function markaspot_fastmap_group_update(GroupInterface $group): void {
   $original = $group->original ?? NULL;
   if (!$original instanceof GroupInterface) {
     return;
+  }
+
+  if (!$group->isSyncing() && $group->isDefaultRevision()) {
+    /** @var \Drupal\markaspot_fastmap\Service\WorkspaceOpening $opening */
+    $opening = \Drupal::service('markaspot_fastmap.workspace_opening');
+    try {
+      if ($opening->noteOperatorChange($group, $original)) {
+        // The mark rolls back with the save. Sending must wait for the outer
+        // transaction, which may belong to another caller.
+        \Drupal::database()->transactionManager()->addPostTransactionCallback(static function (bool $committed) use ($opening, $gid): void {
+          if ($committed) {
+            $opening->sendOperatorNotification((string) $gid);
+          }
+        });
+      }
+    }
+    catch (\Throwable $e) {
+      \Drupal::logger('markaspot_fastmap')->error('Could not note operator changes for workspace @id: @message', [
+        '@id' => $gid,
+        '@message' => $e->getMessage(),
+      ]);
+    }
   }
 
   $changed = FALSE;
@@ -539,24 +562,6 @@ function markaspot_fastmap_group_update(GroupInterface $group): void {
   }
   finally {
     unset($regenerating[$gid]);
-  }
-
-  if (!$group->isSyncing()) {
-    // Entity update runs inside the storage transaction. Send only after a
-    // successful commit, including when another caller owns the transaction.
-    \Drupal::database()->transactionManager()->addPostTransactionCallback(static function (bool $committed) use ($group, $original): void {
-      if ($committed) {
-        try {
-          \Drupal::service('markaspot_fastmap.workspace_opening')->notifyOperatorChange($group, $original);
-        }
-        catch (\Throwable $e) {
-          \Drupal::logger('markaspot_fastmap')->error('Could not notify support of operator changes for workspace @id: @message', [
-            '@id' => (string) $group->id(),
-            '@message' => $e->getMessage(),
-          ]);
-        }
-      }
-    });
   }
 }
 
@@ -1340,7 +1345,7 @@ function markaspot_fastmap_markaspot_vision_prompt_alter(array &$parts, array $c
  * 1. Enforces tier published-report limits retroactively (FIFO unpublish).
  * 2. Sends expiry reminders and deletes expired demo workspaces.
  * Plus the template demo reset, every demo_reset_interval seconds when set,
- * and hourly the due operator mails about waiting reports.
+ * and hourly the due mails about waiting reports and operator changes.
  *
  * Each task tracks its own last-run timestamp independently.
  */
@@ -1567,6 +1572,12 @@ function markaspot_fastmap_cron(): void {
       }
       catch (\Throwable $e) {
         $logger->error('Operator mails about waiting reports failed: @message', ['@message' => $e->getMessage()]);
+      }
+      try {
+        \Drupal::service('markaspot_fastmap.workspace_opening')->sendDueOperatorNotifications();
+      }
+      catch (\Throwable $e) {
+        $logger->error('Support mails about operator changes failed: @message', ['@message' => $e->getMessage()]);
       }
     }
   }

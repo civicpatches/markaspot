@@ -902,6 +902,7 @@ class MarkASpotSettingsController extends ControllerBase {
       $cache_metadata->addCacheableDependency($performance);
       $page_max_age = (int) $performance->get('cache.page.max_age');
       $response->setPublic()->setMaxAge(min($page_max_age, $cache_metadata->getCacheMaxAge()));
+      $response->setVary('Cookie', FALSE);
     }
     $response->addCacheableDependency($cache_metadata);
     return $response;

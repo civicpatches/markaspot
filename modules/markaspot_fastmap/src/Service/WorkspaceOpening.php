@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Drupal\markaspot_fastmap\Service;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Flood\FloodInterface;
+use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -36,6 +38,8 @@ class WorkspaceOpening {
   private const AUTO_OPEN_EVENT = 'markaspot_fastmap.auto_open';
   private const AUTO_OPEN_IDENTIFIER = 'platform';
   private const DAY = 86400;
+  private const OPERATOR_MAIL_EVENT = 'markaspot_fastmap.operator_changed_support';
+  private const OPERATOR_PENDING = 'markaspot_fastmap.lifecycle.operator_notification';
 
   /**
    * The revision log message of the opening. No personal data.
@@ -109,6 +113,8 @@ class WorkspaceOpening {
     private readonly ConfigFactoryInterface $configFactory,
     private readonly LoggerInterface $logger,
     private readonly FloodInterface $flood,
+    private readonly KeyValueFactoryInterface $keyValue,
+    private readonly Connection $database,
   ) {}
 
   /**
@@ -472,32 +478,118 @@ class WorkspaceOpening {
   }
 
   /**
-   * Notifies support after complete operator details change on an open map.
+   * Marks an operator change inside the group save transaction.
+   *
+   * The marker contains no operator data. A rolled-back save leaves no note.
    */
-  public function notifyOperatorChange(GroupInterface $group, GroupInterface $original): void {
-    if (!$this->isRecordWorkspace($group) || !$this->lifecycle->isOpen($group)) {
-      return;
+  public function noteOperatorChange(GroupInterface $group, GroupInterface $original): bool {
+    if (!$this->isRecordWorkspace($group) || !$this->lifecycle->isOpen($group) || self::isBlocked($group)) {
+      return FALSE;
     }
+    $group = $group->getUntranslated();
+    $original = $original->getUntranslated();
     $details = $this->operatorMailParams($group, OperatorDetails::snapshot($group));
-    if ($details === [] || $details === $this->operatorMailParams($original, OperatorDetails::snapshot($original))) {
-      return;
+    if ($details === []
+      || ($details === $this->operatorMailParams($original, OperatorDetails::snapshot($original))
+        && self::legalNoticeHashes($group) === self::legalNoticeHashes($original))) {
+      return FALSE;
     }
-    $id = (string) $group->id();
-    $event = 'markaspot_fastmap.operator_changed_support';
-    $lockName = $event . ':' . $id;
-    if (!$this->lock->acquire($lockName, self::LOCK_TIMEOUT)) {
-      return;
+    $this->keyValue->get(self::OPERATOR_PENDING)->set((string) $group->id(), TRUE);
+    return TRUE;
+  }
+
+  /**
+   * Hashes the stored notice in every language for comparison.
+   *
+   * @return array<string, string>
+   *   Notice hashes keyed by language code.
+   */
+  private static function legalNoticeHashes(GroupInterface $group): array {
+    $hashes = [];
+    if ($group->hasField(self::LEGAL_NOTICE_FIELD)) {
+      foreach (array_keys($group->getTranslationLanguages()) as $langcode) {
+        $value = (string) $group->getTranslation($langcode)->get(self::LEGAL_NOTICE_FIELD)->value;
+        if ($value !== '') {
+          $hashes[$langcode] = hash('sha256', $value);
+        }
+      }
     }
+    ksort($hashes);
+    return $hashes;
+  }
+
+  /**
+   * Sends due operator change mails from cron, visiting only pending maps.
+   */
+  public function sendDueOperatorNotifications(): void {
+    foreach (array_keys($this->keyValue->get(self::OPERATOR_PENDING)->getAll()) as $id) {
+      $this->sendOperatorNotification((string) $id);
+    }
+  }
+
+  /**
+   * Sends a pending operator change after commit or from cron.
+   *
+   * The group row serializes the decision with other sends and with saves
+   * that edit or remove the details or close the map. Failed sends keep the
+   * marker pending and do not consume a flood slot.
+   */
+  public function sendOperatorNotification(string $id): void {
     try {
-      if (!$this->flood->isAllowed($event, 1, self::DAY, $id)) {
+      if (!$this->flood->isAllowed(self::OPERATOR_MAIL_EVENT, 1, self::DAY, $id)) {
         return;
       }
-      $this->flood->register($event, self::DAY, $id);
+      $transaction = $this->database->startTransaction();
+      try {
+        $exists = $this->database->select('groups', 'g')
+          ->fields('g', ['id'])
+          ->condition('id', $id)
+          ->forUpdate()
+          ->execute()
+          ->fetchField() !== FALSE;
+
+        $pending = $this->keyValue->get(self::OPERATOR_PENDING);
+        if (!$pending->has($id) || !$this->flood->isAllowed(self::OPERATOR_MAIL_EVENT, 1, self::DAY, $id)) {
+          return;
+        }
+        $group = $exists ? $this->entityTypeManager->getStorage('group')->loadUnchanged($id) : NULL;
+        if ($group instanceof GroupInterface && $this->isRecordWorkspace($group)
+          && $this->lifecycle->isOpen($group) && !self::isBlocked($group)) {
+          $details = $this->operatorMailParams($group, OperatorDetails::snapshot($group));
+          if ($details !== []) {
+            if (!$this->sendSupport(self::OPERATOR_MAIL_KEY, $group, $this->workspaceMailParams($group) + $details)) {
+              return;
+            }
+            $this->flood->register(self::OPERATOR_MAIL_EVENT, self::DAY, $id);
+          }
+        }
+        $pending->delete($id);
+      }
+      finally {
+        $transaction->commitOrRelease();
+      }
     }
-    finally {
-      $this->lock->release($lockName);
+    catch (\Throwable $e) {
+      $this->logger->error('Could not notify support of operator changes for workspace @id: @message', [
+        '@id' => $id,
+        '@message' => $e->getMessage(),
+      ]);
     }
-    $this->sendSupport(self::OPERATOR_MAIL_KEY, $group, $this->workspaceMailParams($group) + $details);
+  }
+
+  /**
+   * Drops the operator change notification state of a deleted workspace.
+   */
+  public function forgetOperatorNotification(string $id): void {
+    try {
+      $this->keyValue->get(self::OPERATOR_PENDING)->delete($id);
+    }
+    catch (\Throwable $e) {
+      $this->logger->error('Could not drop the support mail state of deleted workspace @id: @message', [
+        '@id' => $id,
+        '@message' => $e->getMessage(),
+      ]);
+    }
   }
 
   /**

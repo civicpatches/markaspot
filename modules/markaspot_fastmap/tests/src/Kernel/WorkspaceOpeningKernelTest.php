@@ -573,22 +573,69 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
       'field_jurisdiction_address' => ['address_line2' => 'Second floor'] + self::PERSON,
     ])->getStatusCode());
-    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
-    $this->container->get('database')->update('flood')
-      ->fields(['timestamp' => 1, 'expiration' => 1])
-      ->condition('event', 'markaspot_fastmap.operator_changed_support')
-      ->execute();
     $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
       'field_jurisdiction_address' => ['address_line2' => 'Third floor'] + self::PERSON,
     ])->getStatusCode());
+    $this->runOperatorNotificationCron();
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+
+    $this->expireOperatorMailWindow();
+    $this->config('markaspot_fastmap.settings')->set('support_email', '')->save();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+    $this->config('markaspot_fastmap.settings')->set('support_email', 'support@example.org')->save();
+    $this->runOperatorNotificationCron();
     $mails = $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY);
     $this->assertCount(2, $mails);
     $this->assertStringContainsString('Third floor', $mails[1]['body']);
+    $this->assertStringNotContainsString('Second floor', $mails[1]['body']);
+    $this->expireOperatorMailWindow();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(2, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
 
+    $notice = ['field_legal_notice' => '<!-- manual-override --><p>Jane Doe, Third floor</p>'];
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, $notice)->getStatusCode());
+    $this->assertCount(3, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY), 'Changing only the notice sends a mail.');
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, $notice)->getStatusCode());
+    $this->expireOperatorMailWindow();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(3, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY), 'Saving the same notice does not send another mail.');
+
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
+      'field_jurisdiction_address' => ['address_line2' => 'Fourth floor'] + self::PERSON,
+    ])->getStatusCode());
+    $this->assertCount(4, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
+      'field_jurisdiction_address' => ['address_line2' => 'Fifth floor'] + self::PERSON,
+    ])->getStatusCode());
+    // Clear the manual notice too so the generator can remove its output.
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, ['field_legal_notice' => ''])->getStatusCode());
     $this->assertSame(200, $this->patchGeneral('incomplete', $owner, ['field_jurisdiction_e_mail' => ''])->getStatusCode());
     $this->assertTrue($this->workspace('incomplete')->get('field_legal_notice')->isEmpty());
     $this->assertSame('platform', $this->publicSettings('incomplete')['body']['legalNotice']['source']);
-    $this->assertCount(2, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+    $this->expireOperatorMailWindow();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(4, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY), 'No deferred mail after details are removed.');
+  }
+
+  /**
+   * A pending support mail is discarded if the map is blocked before cron.
+   */
+  public function testPendingOperatorMailOnBlockedMap(): void {
+    $owner = $this->accounts['owner'];
+    $this->assertSame(200, $this->open('mine', $owner, ['confirmed' => TRUE])->getStatusCode());
+    foreach (['first@example.test', 'second@example.test'] as $email) {
+      $this->assertSame(200, $this->patchGeneral('mine', $owner, ['field_jurisdiction_e_mail' => $email])->getStatusCode());
+    }
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+    $this->workspace('mine')->set('field_visibility', 'blocked')->save();
+    $this->expireOperatorMailWindow();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+
+    $this->workspace('mine')->set('field_visibility', 'public')->save();
+    $this->runOperatorNotificationCron();
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY), 'The discarded change does not reappear.');
   }
 
   /**
@@ -633,6 +680,7 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $request = Request::create('/api/mark-a-spot-settings', 'GET', ['jurisdiction' => $this->workspaces['mine']->id()]);
     $response = MarkASpotSettingsController::create($this->container)->getMarkASpotSettings($request);
     $this->assertSame(60, $response->getMaxAge());
+    $this->assertContains('Cookie', $response->getVary());
     $this->assertTrue($open['body']['jurisdiction']['open']);
     $this->assertSame('Jane Doe', $open['body']['operator']['name']);
     $this->assertSame('mine@example.org', $open['body']['operator']['email']);
@@ -956,6 +1004,29 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
    */
   private function openingMails(string $key = WorkspaceOpening::MAIL_KEY): array {
     return array_values(array_filter($this->allMails(), static fn(array $mail): bool => ($mail['key'] ?? '') === $key));
+  }
+
+  /**
+   * Ages operator notification flood events beyond the one-day window.
+   */
+  private function expireOperatorMailWindow(): void {
+    $this->container->get('database')->update('flood')
+      ->fields(['timestamp' => 1, 'expiration' => 1])
+      ->condition('event', 'markaspot_fastmap.operator_changed_support')
+      ->execute();
+  }
+
+  /**
+   * Runs the hourly mail tasks without running unrelated maintenance.
+   */
+  private function runOperatorNotificationCron(): void {
+    $state = $this->container->get('state');
+    $now = $this->container->get('datetime.time')->getRequestTime();
+    foreach (['last_limit_check', 'last_demo_cleanup', 'last_workspace_deletion_run', 'last_ai_usage_cleanup'] as $task) {
+      $state->set('markaspot_fastmap.' . $task, $now);
+    }
+    $state->set('markaspot_fastmap.last_reports_waiting_run', 0);
+    markaspot_fastmap_cron();
   }
 
   /**

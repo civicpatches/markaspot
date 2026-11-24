@@ -7,11 +7,13 @@ namespace Drupal\Tests\markaspot_fastmap\Unit;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
+use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Flood\FloodInterface;
+use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -146,6 +148,8 @@ class WorkspaceOpeningTest extends UnitTestCase {
       $factory,
       $logger,
       $this->createMock(FloodInterface::class),
+      $this->createMock(KeyValueFactoryInterface::class),
+      $this->createMock(Connection::class),
     );
   }
 
