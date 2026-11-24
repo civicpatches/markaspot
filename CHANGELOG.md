@@ -1,5 +1,11 @@
 # Changelog
 
+## [11.9.260](https://github.com/civicpatches/markaspot/compare/11.9.259...11.9.260) (2026-11-24)
+
+### Bug Fixes
+
+* backfill FastMap mail templates ([560b48d](https://github.com/civicpatches/markaspot/commit/560b48d91ed44a78b6d5d0bbd8647c314d56a871))
+
 ## [11.9.259](https://github.com/civicpatches/markaspot/compare/11.9.258...11.9.259) (2026-11-24)
 
 ### Bug Fixes
