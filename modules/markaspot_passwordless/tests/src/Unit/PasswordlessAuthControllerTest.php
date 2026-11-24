@@ -19,6 +19,7 @@ use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
 use Drupal\Core\Language\LanguageInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Session\AccountInterface;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\Core\Session\SessionConfigurationInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\group\Entity\GroupInterface;
@@ -207,6 +208,7 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     ?EntityRepositoryInterface $entityRepository = NULL,
     ?array $memberships = NULL,
     ?FrontendUrlService $frontendUrlService = NULL,
+    ?WorkspaceOpening $workspaceOpening = NULL,
   ): PasswordlessAuthController {
     $configFactory ??= $this->configFactory;
 
@@ -277,6 +279,7 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
       $this->breakGlassOtp,
       $entityRepository,
       $frontendUrlService,
+      workspaceOpening: $workspaceOpening,
     );
   }
 
@@ -1457,6 +1460,31 @@ class PasswordlessAuthControllerTest extends UnitTestCase {
     $response = $this->controller->verifyCode($request);
 
     $this->assertSame(Response::HTTP_OK, $response->getStatusCode());
+  }
+
+  /**
+   * Only a successful code login triggers opening in its own jurisdiction.
+   */
+  public function testVerifyCodeTriggersOpeningForEstablishedSession(): void {
+    $this->setResolvableJurisdiction(5);
+    $this->currentUser->method('id')->willReturn(7);
+    $this->otpService->expects($this->exactly(3))->method('verifyCode')
+      ->with('user@example.com', '123456', 5)
+      ->willReturnOnConsecutiveCalls(
+        ['success' => FALSE],
+        ['success' => TRUE, 'message' => 'OK', 'user' => ['uid' => 6]],
+        ['success' => TRUE, 'message' => 'OK', 'user' => ['uid' => 7]],
+      );
+    $opening = $this->createMock(WorkspaceOpening::class);
+    $opening->expects($this->once())->method('openAfterLogin')->with(5, $this->currentUser);
+    $controller = $this->buildController(workspaceOpening: $opening);
+    $request = Request::create('/api/auth/verify-code', 'POST', [], [], [], [
+      'REMOTE_ADDR' => '203.0.113.10',
+    ], '{"email":"user@example.com","code":"123456","jurisdiction_id":5}');
+
+    $this->assertSame(401, $controller->verifyCode($request)->getStatusCode());
+    $this->assertSame(200, $controller->verifyCode($request)->getStatusCode());
+    $this->assertSame(200, $controller->verifyCode($request)->getStatusCode());
   }
 
   /**

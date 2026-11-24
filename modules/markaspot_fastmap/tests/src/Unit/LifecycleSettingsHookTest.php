@@ -308,9 +308,9 @@ class LifecycleSettingsHookTest extends UnitTestCase {
   }
 
   /**
-   * The public settings of a map that is not open are cached briefly.
+   * The public settings of a lifecycle map are cached briefly.
    */
-  public function testMaxAgeCapWhileNotOpen(): void {
+  public function testLifecycleMaxAgeCap(): void {
     $this->selfService();
     $open = json_encode(['opening' => [
       'opened_at' => 1800001000,
@@ -326,8 +326,8 @@ class LifecycleSettingsHookTest extends UnitTestCase {
       ],
     ]] + json_decode(self::RECORD, TRUE));
     $cases = [
-      'not open' => [self::RECORD, FALSE, WorkspaceLifecycleGate::NOT_OPEN_SETTINGS_MAX_AGE],
-      'open' => [$open, TRUE, 3600],
+      'not open' => [self::RECORD, FALSE, WorkspaceLifecycleGate::LIFECYCLE_SETTINGS_MAX_AGE],
+      'open' => [$open, TRUE, WorkspaceLifecycleGate::LIFECYCLE_SETTINGS_MAX_AGE],
       'no record' => [NULL, NULL, 3600],
     ];
     foreach ($cases as $label => [$record, $state, $maxAge]) {

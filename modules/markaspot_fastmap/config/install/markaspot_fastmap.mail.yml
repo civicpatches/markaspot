@@ -73,6 +73,27 @@ workspace_opened_support:
     Contact e-mail: @operator_email
 
     If the operator details are obviously false, block the workspace and write to the account e-mail above.
+workspace_operator_changed_support:
+  subject: 'Map operator details updated: @workspace_name'
+  body: |
+    An open map has new operator details.
+
+    Map: @workspace_name
+    Link: @workspace_url
+    Group ID: @workspace_id
+
+    Name: @operator_name
+    Address: @operator_address
+    Contact e-mail: @operator_email
+workspace_auto_open_limited_support:
+  subject: 'Map needs manual opening: @workspace_name'
+  body: |
+    The platform reached its limit for automatic openings in 24 hours.
+    The owner can use the workspace privately. The map needs to be opened manually before the public can submit reports.
+
+    Map: @workspace_name
+    Link: @workspace_url
+    Group ID: @workspace_id
 workspace_reports_waiting:
   subject: 'Reports are waiting for your approval: @workspace_name'
   body: |

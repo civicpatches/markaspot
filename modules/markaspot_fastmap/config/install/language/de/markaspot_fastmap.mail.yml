@@ -57,3 +57,24 @@ workspace_reports_waiting:
     Meldungen erscheinen erst nach Ihrer Freigabe auf der Karte; das können Sie unter Einstellungen > Funktionen ändern.
 
     Bis neue Meldungen eingehen, erhalten Sie keine weitere E-Mail.
+workspace_operator_changed_support:
+  subject: 'Betreiberangaben aktualisiert: @workspace_name'
+  body: |
+    Für eine offene Karte liegen neue Betreiberangaben vor.
+
+    Karte: @workspace_name
+    Link: @workspace_url
+    Gruppen-ID: @workspace_id
+
+    Name: @operator_name
+    Anschrift: @operator_address
+    Kontakt-E-Mail: @operator_email
+workspace_auto_open_limited_support:
+  subject: 'Karte muss manuell geöffnet werden: @workspace_name'
+  body: |
+    Die Plattform hat die Obergrenze für automatische Öffnungen innerhalb von 24 Stunden erreicht.
+    Der Eigentümer kann den Arbeitsbereich intern nutzen. Für öffentliche Meldungen muss die Karte manuell geöffnet werden.
+
+    Karte: @workspace_name
+    Link: @workspace_url
+    Gruppen-ID: @workspace_id

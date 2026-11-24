@@ -96,25 +96,6 @@ final class OperatorDetails {
   }
 
   /**
-   * Whether a save removes a part that was there before.
-   *
-   * A person name with one half missing counts as a missing name, so
-   * finishing half a name on incomplete data is not a removal.
-   *
-   * @param string[] $before
-   *   The missing parts before the save.
-   * @param string[] $after
-   *   The missing parts after the save.
-   */
-  public static function removesParts(array $before, array $after): bool {
-    $coarse = static fn(array $parts): array => array_values(array_unique(array_map(
-      static fn(string $part): string => in_array($part, ['given_name', 'family_name'], TRUE) ? 'name' : $part,
-      $parts,
-    )));
-    return array_diff($coarse($after), $coarse($before)) !== [];
-  }
-
-  /**
    * The snapshot of complete operator data, as the opening stores it.
    *
    * @return array|null

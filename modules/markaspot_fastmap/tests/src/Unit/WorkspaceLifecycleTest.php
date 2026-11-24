@@ -311,6 +311,18 @@ class WorkspaceLifecycleTest extends UnitTestCase {
     $cases = [
       'not open' => [$notOpen, TRUE, FALSE, TRUE],
       'open' => [$open, TRUE, TRUE, FALSE],
+      'prior opening with hold' => [
+        $this->group(json_encode(['opening' => $this->opening(), 'closed_by_support' => TRUE] + $record)),
+        TRUE,
+        FALSE,
+        TRUE,
+      ],
+      'malformed hold must be cleared explicitly' => [
+        $this->group(json_encode(['opening' => $this->opening(), 'closed_by_support' => NULL] + $record)),
+        TRUE,
+        FALSE,
+        TRUE,
+      ],
       // A malformed opening keeps the map closed.
       'malformed opening' => [
         $this->group(json_encode(['opening' => ['at' => 1800001000]] + $record)),
@@ -488,42 +500,39 @@ class WorkspaceLifecycleTest extends UnitTestCase {
   }
 
   /**
-   * Taking the opening back closes the map and keeps the acceptance.
+   * Support closure holds the map closed and keeps the acceptance.
    *
-   * @covers ::removeOpening
+   * @covers ::setClosedBySupport
    */
-  public function testRemoveOpening(): void {
+  public function testSupportClosure(): void {
     $lifecycle = $this->lifecycle();
     $record = WorkspaceLifecycle::buildRecord($this->acceptance(), 7);
-    foreach (['valid opening' => $this->opening(), 'malformed opening' => ['at' => 1]] as $label => $opening) {
+    foreach (['valid opening' => $this->opening(), 'malformed opening' => ['at' => 1], 'pending' => NULL] as $label => $opening) {
       $written = NULL;
       $group = $this->createMock(FieldableEntityInterface::class);
       $group->method('hasField')->willReturn(TRUE);
       $items = $this->createMock(FieldItemListInterface::class);
       $items->method('isEmpty')->willReturn(FALSE);
-      $items->method('__get')->with('value')->willReturn(json_encode(array_merge($record, ['opening' => $opening])));
+      $items->method('__get')->with('value')->willReturn(json_encode(array_merge($record, [
+        'opening' => $opening,
+        'auto_open_pending' => TRUE,
+      ])));
       $group->method('get')->willReturn($items);
       $group->expects($this->once())->method('set')->willReturnCallback(function (string $field, string $value) use (&$written, $group) {
         $written = $value;
         return $group;
       });
-      $this->assertTrue($lifecycle->removeOpening($group), $label);
-      $this->assertSame($record, WorkspaceLifecycle::parse($written), "$label: acceptance kept, opening null");
+      $lifecycle->setClosedBySupport($group, TRUE);
+      $closed = WorkspaceLifecycle::parse($written);
+      $this->assertSame($record + ['closed_by_support' => TRUE], $closed, $label);
       $this->assertTrue($lifecycle->isNotOpen($this->group($written)), $label);
+      $scrubbed = WorkspaceLifecycle::scrub($closed);
+      $this->assertTrue($scrubbed['closed_by_support']);
+      $this->assertTrue(WorkspaceLifecycle::isScrubbed($scrubbed));
     }
 
-    // A record without an opening: nothing written.
-    $closed = $this->createMock(FieldableEntityInterface::class);
-    $closedItems = $this->createMock(FieldItemListInterface::class);
-    $closedItems->method('__get')->with('value')->willReturn(json_encode($record));
-    $closed->method('hasField')->willReturn(TRUE);
-    $closed->method('get')->willReturn($closedItems);
-    $closed->expects($this->never())->method('set');
-    $this->assertFalse($lifecycle->removeOpening($closed));
-
-    // No valid record: refused.
     $this->expectException(\LogicException::class);
-    $lifecycle->removeOpening($this->group(NULL));
+    $lifecycle->setClosedBySupport($this->group(NULL), TRUE);
   }
 
   /**

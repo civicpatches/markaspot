@@ -126,9 +126,9 @@ class WorkspaceCommands extends DrushCommands {
    * For a workspace with a lifecycle record: clears organisation, person
    * name, street, postal code, city, contact e-mail (the country stays) and
    * the legal notice in every language, takes the opening back and saves one
-   * new revision. The operator can
-   * enter correct data and open the map again. Older revisions keep their
-   * values. Dry run unless --apply is given.
+   * new revision with a support hold. Use workspace-clear-opening-hold
+   * to allow manual reopening. Older revisions keep their values.
+   * Dry run unless --apply is given.
    */
   #[CLI\Command(name: 'markaspot:workspace-reset-operator', aliases: ['mas:workspace-reset-operator'])]
   #[CLI\Argument(name: 'workspace', description: 'Workspace group ID or field_slug.')]
@@ -146,9 +146,25 @@ class WorkspaceCommands extends DrushCommands {
     match ($result['status']) {
       WorkspaceOpening::NOT_APPLICABLE => throw new \RuntimeException("$label has no lifecycle record on the self-service platform; nothing to reset."),
       WorkspaceOpening::BUSY => throw new \RuntimeException("$label is being opened right now. Try again."),
-      WorkspaceOpening::NOTHING_TO_RESET => $this->output()->writeln("$label: no operator data and not open; nothing to reset."),
-      WorkspaceOpening::WOULD_RESET => $this->output()->writeln("Dry run. $label: would clear $parts; $closing. Older revisions keep their values. Run again with --apply to write."),
-      default => $this->output()->writeln("$label: cleared $parts; " . (!empty($result['was_open']) ? 'the map is closed again' : 'the map was not open') . '. A new revision was saved; older revisions keep their values.'),
+      WorkspaceOpening::NOTHING_TO_RESET => $this->output()->writeln("$label: no operator data and already closed by support; nothing to reset."),
+      WorkspaceOpening::WOULD_RESET => $this->output()->writeln("Dry run. $label: would clear $parts; $closing. Opening will be suspended until support clears the hold. Older revisions keep their values. Run again with --apply to write."),
+      default => $this->output()->writeln("$label: cleared $parts; the map is closed and opening is suspended. A new revision was saved; older revisions keep their values."),
+    };
+  }
+
+  /**
+   * Allows manual reopening after a support reset.
+   */
+  #[CLI\Command(name: 'markaspot:workspace-clear-opening-hold', aliases: ['mas:workspace-clear-opening-hold'])]
+  #[CLI\Argument(name: 'workspace', description: 'Workspace group ID or field_slug.')]
+  public function clearOpeningHold(string $workspace): void {
+    $group = $this->loadWorkspace($workspace);
+    $label = sprintf('Workspace %s (%s)', $group->id(), $group->label());
+    match ($this->opening->clearSupportHold($group)) {
+      WorkspaceOpening::NOT_APPLICABLE => throw new \RuntimeException("$label has no lifecycle record on the self-service platform."),
+      WorkspaceOpening::BUSY => throw new \RuntimeException("$label is busy. Try again."),
+      WorkspaceOpening::NO_HOLD => $this->output()->writeln("$label has no opening hold."),
+      WorkspaceOpening::HOLD_CLEARED => $this->output()->writeln("$label: support hold cleared. The map can be opened manually."),
     };
   }
 

@@ -63,6 +63,7 @@ services:
       - '@plugin.manager.mail'
       - '@config.factory'
       - '@logger.channel.markaspot_fastmap'
+      - '@flood'
   # Autowiring alias for the hook class.
   Drupal\markaspot_fastmap\Service\WorkspaceOpening: '@markaspot_fastmap.workspace_opening'
 

@@ -8,6 +8,7 @@ use Drupal\Component\Gettext\PoStreamReader;
 use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\StringTranslation\TranslationInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * Uses shipped interface translations for selected mails without Locale.
@@ -24,6 +25,8 @@ final class MailStringTranslator {
   public function __construct(
     private readonly ModuleHandlerInterface $moduleHandler,
     private readonly TranslationInterface $stringTranslation,
+    private readonly LoggerInterface $logger,
+    private readonly string $appRoot,
   ) {}
 
   /**
@@ -55,38 +58,58 @@ final class MailStringTranslator {
     if ($langcode === 'en' || !preg_match('/^[a-z]{2}(-[a-z]{2})?$/D', $langcode)) {
       return [];
     }
-    $directory = match ($module) {
-      'markaspot_mail' => dirname(__DIR__, 2),
-      'service_request' => dirname(__DIR__, 3) . '/service_request',
-      default => NULL,
-    };
-    if ($directory === NULL) {
+    if (!in_array($module, ['markaspot_mail', 'service_request'], TRUE)) {
       return [];
     }
-    $file = "$directory/translations/$langcode.po";
-    if (!is_readable($file)) {
-      $file = "$directory/translations/" . explode('-', $langcode)[0] . '.po';
-    }
-    if (!is_readable($file)) {
-      return [];
-    }
-    $reader = new PoStreamReader();
-    $reader->setURI($file);
-    $reader->setLangcode($langcode);
-    $translations = [];
     try {
+      $directory = $this->appRoot . '/' . $this->moduleHandler->getModule($module)->getPath() . '/translations';
+      $file = "$directory/$langcode.po";
+      if (!is_file($file)) {
+        $file = "$directory/" . explode('-', $langcode)[0] . '.po';
+      }
+      if (!is_file($file) || !is_readable($file)) {
+        throw new \RuntimeException('The PO file is missing or unreadable.');
+      }
+      // Core's reader collects syntax errors and may return partial data.
+      $reader = new class extends PoStreamReader {
+
+        /**
+         * Whether a header was read and no syntax errors were found.
+         */
+        public function isValid(): bool {
+          return $this->getHeader() !== NULL && empty($this->errors);
+        }
+
+      };
+      $reader->setURI($file);
+      $reader->setLangcode($langcode);
       $reader->open();
-      while ($item = $reader->readItem()) {
-        $translation = $item->getTranslation();
-        if (!$item->isPlural() && !$item->getContext() && is_string($translation) && $translation !== '') {
-          $translations[$item->getSource()] = $translation;
+      $translations = [];
+      try {
+        while ($item = $reader->readItem()) {
+          $translation = $item->getTranslation();
+          if (!$item->isPlural() && !$item->getContext() && is_string($translation) && $translation !== '') {
+            $translations[$item->getSource()] = $translation;
+          }
         }
       }
+      finally {
+        $reader->close();
+      }
+      if (!$reader->isValid()) {
+        throw new \RuntimeException('The PO file has invalid gettext syntax.');
+      }
+      return $translations;
     }
-    finally {
-      $reader->close();
+    catch (\Throwable $e) {
+      // Cache the empty result so a catalogue is logged only once per request.
+      $this->logger->warning('Using source mail strings for @module (@language): @message', [
+        '@module' => $module,
+        '@language' => $langcode,
+        '@message' => $e->getMessage(),
+      ]);
+      return [];
     }
-    return $translations;
   }
 
 }

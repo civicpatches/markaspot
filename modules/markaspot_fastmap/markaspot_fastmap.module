@@ -27,6 +27,7 @@ use Drupal\markaspot_fastmap\Service\OperatorDetails;
 use Drupal\markaspot_fastmap\Service\PublishedLimitReachedException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\markaspot_fastmap\Service\WorkspaceProvisioningService;
 use Drupal\markaspot_group\Service\WorkspaceTier;
 use Drupal\markaspot_validation\Plugin\Validation\Geo\GeoJsonBoundary;
@@ -130,7 +131,9 @@ function markaspot_fastmap_mail(string $key, array &$message, array $params): vo
     'workspace_deletion_confirm',
     'workspace_deletion_scheduled',
     'workspace_deletion_operator',
-    'workspace_opened_support',
+    WorkspaceOpening::MAIL_KEY,
+    WorkspaceOpening::OPERATOR_MAIL_KEY,
+    WorkspaceOpening::LIMIT_MAIL_KEY,
     'workspace_reports_waiting',
   ];
   if (in_array($key, $templated, TRUE)) {
@@ -188,7 +191,7 @@ function markaspot_fastmap_mail(string $key, array &$message, array $params): vo
         '@deletion_date' => $params['deletion_date'] ?? '',
       ],
       // Operator values are user input: one line each, also in the subject.
-      'workspace_opened_support' => array_map(
+      WorkspaceOpening::MAIL_KEY, WorkspaceOpening::OPERATOR_MAIL_KEY, WorkspaceOpening::LIMIT_MAIL_KEY => array_map(
         static fn(mixed $value): string => str_replace(["\r", "\n", "\0"], ' ', (string) $value),
         [
           '@workspace_slug' => $params['workspace_slug'] ?? '',
@@ -406,7 +409,8 @@ function _markaspot_fastmap_build_workspace_url(string $slug, string $baseUrl): 
  *   2. Active markaspot_fastmap.mail config (admin default-language edit).
  *   3. Shipped config/install/markaspot_fastmap.mail.yml (module default).
  *
- * Signup mails try their shipped translation before active config.
+ * Signup and the newer support mails try their shipped translation before
+ * active config.
  * The other mails merge steps 1 and 2 first, with the override winning.
  * They then backfill empty fields from the shipped YAML.
  *
@@ -415,7 +419,12 @@ function _markaspot_fastmap_build_workspace_url(string $slug, string $baseUrl): 
  *   no usable value for that field.
  */
 function _markaspot_fastmap_mail_template(string $key, string $langcode): array {
-  if (in_array($key, ['workspace_verification', 'workspace_welcome'], TRUE)) {
+  if (in_array($key, [
+    'workspace_verification',
+    'workspace_welcome',
+    WorkspaceOpening::OPERATOR_MAIL_KEY,
+    WorkspaceOpening::LIMIT_MAIL_KEY,
+  ], TRUE)) {
     return \Drupal::service('markaspot_fastmap.workspace_mail_templates')->resolve($key, $langcode);
   }
   $override = \Drupal::languageManager()
@@ -530,6 +539,24 @@ function markaspot_fastmap_group_update(GroupInterface $group): void {
   }
   finally {
     unset($regenerating[$gid]);
+  }
+
+  if (!$group->isSyncing()) {
+    // Entity update runs inside the storage transaction. Send only after a
+    // successful commit, including when another caller owns the transaction.
+    \Drupal::database()->transactionManager()->addPostTransactionCallback(static function (bool $committed) use ($group, $original): void {
+      if ($committed) {
+        try {
+          \Drupal::service('markaspot_fastmap.workspace_opening')->notifyOperatorChange($group, $original);
+        }
+        catch (\Throwable $e) {
+          \Drupal::logger('markaspot_fastmap')->error('Could not notify support of operator changes for workspace @id: @message', [
+            '@id' => (string) $group->id(),
+            '@message' => $e->getMessage(),
+          ]);
+        }
+      }
+    });
   }
 }
 
@@ -1186,12 +1213,8 @@ function markaspot_fastmap_markaspot_nuxt_settings_alter(array &$settings, $grou
         $settings['jurisdiction']['open'] = $open;
         // The record may sit on the root of a child jurisdiction.
         $cache_metadata?->addCacheableDependency($workspace);
-        // The opening saves the workspace, which invalidates this response
-        // through its cache tag. The shorter max-age covers Drupal caches that
-        // expire by age only; HTTP and UI caches are not governed by it.
-        if (!$open) {
-          $cache_metadata?->mergeCacheMaxAge(WorkspaceLifecycleGate::NOT_OPEN_SETTINGS_MAX_AGE);
-        }
+        // Limit the lifetime of both the intake status and operator data.
+        $cache_metadata?->mergeCacheMaxAge(WorkspaceLifecycleGate::LIFECYCLE_SETTINGS_MAX_AGE);
         /** @var \Drupal\markaspot_fastmap\Service\LegalNoticeGenerator $generator */
         $generator = \Drupal::service('markaspot_fastmap.legal_notice_generator');
         // Draft details remain private. Use one complete operator record

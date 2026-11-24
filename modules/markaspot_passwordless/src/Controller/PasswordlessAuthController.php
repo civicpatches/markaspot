@@ -3,6 +3,7 @@
 namespace Drupal\markaspot_passwordless\Controller;
 
 use Drupal\markaspot_fastmap\Service\DemoStaffAccount;
+use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
 use Drupal\markaspot_group\Service\WorkspaceVisibilityInterface;
 
 use Symfony\Component\HttpFoundation\Cookie;
@@ -167,6 +168,8 @@ class PasswordlessAuthController extends ControllerBase {
    *   The optional JSON:API resource types.
    * @param \Drupal\jsonapi\Context\FieldResolver|null $jsonApiFieldResolver
    *   The current account's optional JSON:API field resolver.
+   * @param \Drupal\markaspot_fastmap\Service\WorkspaceOpening|null $workspaceOpening
+   *   The optional FastMap automatic opening service.
    */
   public function __construct(
     OtpService $otp_service,
@@ -187,6 +190,7 @@ class PasswordlessAuthController extends ControllerBase {
     protected ?StaffAnalysisAccess $staffAnalysisAccess = NULL,
     protected ?ResourceTypeRepositoryInterface $jsonApiResourceTypes = NULL,
     protected ?FieldResolver $jsonApiFieldResolver = NULL,
+    protected ?WorkspaceOpening $workspaceOpening = NULL,
   ) {
     $this->otpService = $otp_service;
     $this->currentUser = $current_user;
@@ -234,6 +238,8 @@ class PasswordlessAuthController extends ControllerBase {
         ? $container->get('jsonapi.resource_type.repository') : NULL,
       $container->has('jsonapi.field_resolver')
         ? $container->get('jsonapi.field_resolver') : NULL,
+      $container->has('markaspot_fastmap.workspace_opening')
+        ? $container->get('markaspot_fastmap.workspace_opening') : NULL,
     );
   }
 
@@ -533,6 +539,9 @@ class PasswordlessAuthController extends ControllerBase {
       $result = $this->otpService->verifyCode($email, $code, $jurisdiction_id);
 
       if ($result['success']) {
+        if ($this->workspaceOpening !== NULL && (int) $this->currentUser->id() === (int) $result['user']['uid']) {
+          $this->workspaceOpening->openAfterLogin($jurisdiction_id, $this->currentUser);
+        }
         // Clear all failed attempt records on successful verification.
         $this->flood->clear('passwordless.verify.lockout', $identifier);
         $this->flood->clear('passwordless.verify.backoff', $identifier);

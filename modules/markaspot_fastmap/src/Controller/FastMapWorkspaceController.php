@@ -16,7 +16,6 @@ use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
-use Drupal\group\Entity\GroupInterface;
 use Drupal\markaspot_fastmap\Demo\DemoWorkspace;
 use Drupal\markaspot_fastmap\Service\AcceptanceRequiredException;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
@@ -29,7 +28,6 @@ use Drupal\markaspot_fastmap\Validation\WorkspaceClaim;
 use Drupal\markaspot_group\Trait\JurisdictionIdResolverTrait;
 use Drupal\markaspot_nuxt\Plugin\Validation\Constraint\ProjectPromptConstraint;
 use Drupal\markaspot_nuxt\Service\CitizenWordingResolver;
-use Drupal\user\UserInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -850,7 +848,6 @@ class FastMapWorkspaceController extends ControllerBase {
       }
 
       $this->cleanupVerified();
-      $this->notifySupportOfOpening($provisionedGroupId, (int) $result['user_id'], $result['opening'] ?? NULL);
       return $response;
     }
     catch (\Throwable $e) {
@@ -871,28 +868,6 @@ class FastMapWorkspaceController extends ControllerBase {
     }
     finally {
       $this->lock->release($tokenLockName);
-    }
-  }
-
-  /**
-   * Sends support mail after the pending token has been consumed.
-   */
-  private function notifySupportOfOpening(int $groupId, int $uid, ?array $opening): void {
-    if ($this->opening === NULL || $opening === NULL) {
-      return;
-    }
-    try {
-      $group = $this->entityTypeManager()->getStorage('group')->load($groupId);
-      $owner = $this->entityTypeManager()->getStorage('user')->load($uid);
-      if ($group instanceof GroupInterface && $owner instanceof UserInterface) {
-        $this->opening->sendSupportMail($group, $opening, $owner);
-      }
-    }
-    catch (\Throwable $e) {
-      $this->fastmapLogger->error('Could not notify support for workspace @id: @message', [
-        '@id' => (string) $groupId,
-        '@message' => $e->getMessage(),
-      ]);
     }
   }
 
@@ -1262,6 +1237,7 @@ class FastMapWorkspaceController extends ControllerBase {
       // user_login_finalize() handles session migration, login hooks, and
       // the login timestamp in one canonical call.
       user_login_finalize($user);
+      $this->opening?->openAfterLogin((string) ($tokenData['slug'] ?? ''), $this->currentUser());
 
       $this->fastmapLogger->info('Login token claimed for uid @uid (workspace @slug).', [
         '@uid' => $uid,

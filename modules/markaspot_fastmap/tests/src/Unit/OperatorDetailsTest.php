@@ -92,21 +92,6 @@ class OperatorDetailsTest extends UnitTestCase {
   }
 
   /**
-   * A save removes a part only when one that was there goes missing.
-   *
-   * @covers ::removesParts
-   */
-  public function testRemovesParts(): void {
-    $this->assertFalse(OperatorDetails::removesParts([], []));
-    $this->assertTrue(OperatorDetails::removesParts([], ['address_line1']));
-    $this->assertTrue(OperatorDetails::removesParts([], ['family_name']), 'Emptying half the name.');
-    $this->assertFalse(OperatorDetails::removesParts(['email'], ['email']), 'Already missing.');
-    $this->assertFalse(OperatorDetails::removesParts(['email', 'locality'], ['email']), 'Improving.');
-    $this->assertFalse(OperatorDetails::removesParts(['name'], ['family_name']), 'Half a name started on a missing name.');
-    $this->assertTrue(OperatorDetails::removesParts(['name'], ['name', 'postal_code']));
-  }
-
-  /**
    * The snapshot has the shape the opening validator accepts.
    *
    * @covers ::snapshot

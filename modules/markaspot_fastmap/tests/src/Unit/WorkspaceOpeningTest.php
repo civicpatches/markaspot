@@ -11,6 +11,7 @@ use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Field\FieldItemListInterface;
+use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -144,6 +145,7 @@ class WorkspaceOpeningTest extends UnitTestCase {
       $mailManager,
       $factory,
       $logger,
+      $this->createMock(FloodInterface::class),
     );
   }
 

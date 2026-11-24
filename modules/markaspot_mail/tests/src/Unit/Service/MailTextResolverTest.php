@@ -6,6 +6,7 @@ namespace Drupal\Tests\markaspot_mail\Unit\Service;
 
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Config\ImmutableConfig;
+use Drupal\Core\Extension\Extension;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\language\Config\LanguageConfigOverride;
@@ -15,6 +16,7 @@ use Drupal\markaspot_mail\Service\MailTextResolver;
 use Drupal\Tests\UnitTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
+use Psr\Log\NullLogger;
 
 /**
  * Covers the override-then-default-then-empty merge for mail text templates.
@@ -151,7 +153,10 @@ final class MailTextResolverTest extends UnitTestCase {
     foreach ([FALSE, TRUE] as $locale) {
       $modules = $this->createMock(ModuleHandlerInterface::class);
       $modules->method('moduleExists')->with('locale')->willReturn($locale);
-      $translator = new MailStringTranslator($modules, $this->getStringTranslationStub());
+      $root = dirname(__DIR__, 5);
+      $modules->method('getModule')->with('service_request')
+        ->willReturn(new Extension($root, 'module', 'service_request/service_request.info.yml'));
+      $translator = new MailStringTranslator($modules, $this->getStringTranslationStub(), new NullLogger(), $root);
       $resolver = $this->buildResolverWithToken($token, $translator);
       $this->assertSame(
         [$locale ? $stock : 'Die Meldung wurde erstellt.'],

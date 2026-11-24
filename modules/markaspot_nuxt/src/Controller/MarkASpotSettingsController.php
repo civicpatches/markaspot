@@ -897,6 +897,12 @@ class MarkASpotSettingsController extends ControllerBase {
 
     // Return the configuration as a cacheable JSON response.
     $response = new CacheableJsonResponse($settings);
+    if (is_bool($settings['jurisdiction']['open'] ?? NULL)) {
+      $performance = $this->configFactory->get('system.performance');
+      $cache_metadata->addCacheableDependency($performance);
+      $page_max_age = (int) $performance->get('cache.page.max_age');
+      $response->setPublic()->setMaxAge(min($page_max_age, $cache_metadata->getCacheMaxAge()));
+    }
     $response->addCacheableDependency($cache_metadata);
     return $response;
   }

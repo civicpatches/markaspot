@@ -53,14 +53,9 @@ class WorkspaceLifecycleGate {
   public const MESSAGE = self::CODE . ': This map is not open for reports yet.';
 
   /**
-   * Max-age in seconds of the public settings of a map that is not open.
-   *
-   * Lowers the cacheability max-age of the response (Drupal's own caches,
-   * which the opening also clears through the cache tag). The HTTP
-   * Cache-Control header follows system.performance and the UI keeps its own
-   * settings cache; neither is bounded by this value.
+   * Max-age in seconds of public settings for lifecycle workspaces.
    */
-  public const NOT_OPEN_SETTINGS_MAX_AGE = 60;
+  public const LIFECYCLE_SETTINGS_MAX_AGE = 60;
 
   public function __construct(
     private readonly WorkspaceLifecycle $lifecycle,

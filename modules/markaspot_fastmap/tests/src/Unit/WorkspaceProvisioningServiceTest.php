@@ -4172,7 +4172,8 @@ class WorkspaceProvisioningServiceTest extends UnitTestCase {
         'accepted_at' => 1699990000,
         'uid' => 10,
       ],
-      'opening' => ['opened_at' => 1700000000, 'uid' => 10, 'revision_id' => 42, 'operator' => NULL],
+      'opening' => NULL,
+      'auto_open_pending' => TRUE,
     ], json_decode($setGroupFields['field_lifecycle_record'], TRUE));
     $this->assertArrayNotHasKey('field_lifecycle_record', $created, 'Written after the account exists, not in the create payload.');
     $this->assertSame(['field_tos_accepted_at' => 1699990000], $userFields);

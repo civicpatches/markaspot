@@ -77,13 +77,12 @@ final class LegalNoticeGenerator {
    *   exists for the requested langcode.
    *
    * @return string
-   *   Rendered HTML. Always non-empty: when operator data is missing, the
-   *   template renders explicit placeholder markers so operators can spot an
-   *   incomplete Impressum visually.
+   *   Rendered HTML, or an empty string for a lifecycle workspace without
+   *   complete operator data. Legacy notices display placeholders.
    */
   public function generateForGroup(GroupInterface $group, string $langcode): string {
     if ($this->lifecycle?->hasValidRecord($group) && OperatorDetails::snapshot($group) === NULL) {
-      return $this->platformNotice()['html'];
+      return '';
     }
     $resolvedLangcode = $this->resolveTemplateLangcode($langcode);
     $context = $this->buildContext($group, $resolvedLangcode);
@@ -158,18 +157,20 @@ final class LegalNoticeGenerator {
         continue;
       }
 
-      // Ensure a translation exists for this langcode. group entities are
-      // translatable for the legal-notice field; missing translations are
-      // created on the fly.
-      $translation = $this->ensureTranslation($group, $langcode);
-      $html = $this->generateForGroup($translation, $langcode);
+      // Create translations only when there is a notice to store.
+      $existing = $group->hasTranslation($langcode) ? $group->getTranslation($langcode) : NULL;
+      $html = $this->generateForGroup($existing ?? $group, $langcode);
+      if ($html === '' && ($existing === NULL || $existing->get('field_legal_notice')->isEmpty())) {
+        continue;
+      }
+      $translation = $existing ?? $this->ensureTranslation($group, $langcode);
 
       // basic_html is the safest universally-available text format for
       // auto-generated content. full_html re-renders arbitrary HTML at
       // display time, which would defeat the Html::escape + Twig autoescape
       // defenses applied during generation. basic_html whitelists exactly
       // the tags the legal-notice templates use: h2/h3/p/br/a/em.
-      $translation->set('field_legal_notice', [
+      $translation->set('field_legal_notice', $html === '' ? NULL : [
         'value' => $html,
         'format' => 'basic_html',
       ]);

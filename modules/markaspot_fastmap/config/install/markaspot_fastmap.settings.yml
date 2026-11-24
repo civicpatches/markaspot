@@ -22,6 +22,7 @@ demo_workspaces: {  }
 demo_seed_dir: ''
 demo_reset_interval: 0
 lifecycle_enabled: false
+auto_open_daily_limit: 25
 member_limits:
   free: 1
   starter: 5

@@ -18,7 +18,7 @@ services:
 
   markaspot_mail.string_translator:
     class: Drupal\markaspot_mail\Service\MailStringTranslator
-    arguments: ['@module_handler', '@string_translation']
+    arguments: ['@module_handler', '@string_translation', '@logger.channel.markaspot_mail', '%app.root%']
 
   markaspot_mail.renderer:
     class: Drupal\markaspot_mail\Service\MailHtmlRenderer

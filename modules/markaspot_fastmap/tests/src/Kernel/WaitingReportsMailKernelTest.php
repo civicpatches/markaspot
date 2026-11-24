@@ -742,7 +742,7 @@ final class WaitingReportsMailKernelTest extends KernelTestBase {
     $this->setVisibility('open', 'public');
 
     $this->createAs(new AnonymousUserSession(), 'open');
-    $this->container->get('markaspot_fastmap.workspace_lifecycle')->removeOpening($this->workspaces['open']);
+    $this->container->get('markaspot_fastmap.workspace_lifecycle')->setClosedBySupport($this->workspaces['open'], TRUE);
     $this->workspaces['open']->save();
     $this->assertFalse($this->container->get('markaspot_fastmap.workspace_lifecycle')->isOpen(Group::load($open)));
     $this->assertSame([$open => WaitingReportsNotifier::NOT_APPLICABLE], $this->notifier()->sendDue(1900000000));

@@ -7,6 +7,7 @@ namespace Drupal\markaspot_fastmap\Service;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Flood\FloodInterface;
 use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -15,13 +16,13 @@ use Drupal\markaspot_group\Service\WorkspaceTier;
 use Psr\Log\LoggerInterface;
 
 /**
- * Opens a map for public reports, and keeps an open map's operator complete.
+ * Manages the opening and support closure of a public intake.
  *
  * Applies to a workspace that itself carries a valid lifecycle record, on the
  * self-service platform. Opening writes the opening section of the record
- * (time, account, the group revision whose operator data were confirmed, a
- * snapshot of those data), saves the group as a new revision and sends one
- * mail to the platform support address. Visibility is not touched.
+ * (time, account, prior group revision and optional operator snapshot),
+ * saves a new revision and sends one mail to platform support. A support
+ * closure suspends reopening until the hold is explicitly cleared.
  */
 class WorkspaceOpening {
 
@@ -29,6 +30,12 @@ class WorkspaceOpening {
    * The mail key of the support mail.
    */
   public const MAIL_KEY = 'workspace_opened_support';
+  public const OPERATOR_MAIL_KEY = 'workspace_operator_changed_support';
+  public const LIMIT_MAIL_KEY = 'workspace_auto_open_limited_support';
+
+  private const AUTO_OPEN_EVENT = 'markaspot_fastmap.auto_open';
+  private const AUTO_OPEN_IDENTIFIER = 'platform';
+  private const DAY = 86400;
 
   /**
    * The revision log message of the opening. No personal data.
@@ -44,6 +51,7 @@ class WorkspaceOpening {
   public const CONFIRMATION_REQUIRED = 'confirmation_required';
   public const BUSY = 'busy';
   public const BLOCKED = 'workspace_blocked';
+  private const AUTO_OPEN_LIMITED = 'auto_open_limited';
 
   /**
    * Outcomes of resetOperator() besides NOT_APPLICABLE and BUSY.
@@ -51,6 +59,8 @@ class WorkspaceOpening {
   public const NOTHING_TO_RESET = 'nothing_to_reset';
   public const WOULD_RESET = 'would_reset';
   public const RESET = 'reset';
+  public const HOLD_CLEARED = 'hold_cleared';
+  public const NO_HOLD = 'no_hold';
 
   /**
    * The revision log message of a support reset. No personal data.
@@ -98,6 +108,7 @@ class WorkspaceOpening {
     private readonly MailManagerInterface $mailManager,
     private readonly ConfigFactoryInterface $configFactory,
     private readonly LoggerInterface $logger,
+    private readonly FloodInterface $flood,
   ) {}
 
   /**
@@ -137,6 +148,49 @@ class WorkspaceOpening {
     if (!$confirmed) {
       return ['status' => self::CONFIRMATION_REQUIRED];
     }
+    return $this->openWorkspace($group, $account, FALSE);
+  }
+
+  /**
+   * Attempts automatic opening after a workspace-scoped session starts.
+   *
+   * The caller supplies the authenticated session account and the workspace
+   * bound to the claimed signup token or verified login code.
+   */
+  public function openAfterLogin(int|string $workspace, AccountInterface $account): void {
+    if ($account->isAnonymous() || $workspace === 0 || $workspace === '') {
+      return;
+    }
+    try {
+      $storage = $this->entityTypeManager->getStorage('group');
+      if (is_int($workspace)) {
+        $group = $storage->load($workspace);
+      }
+      else {
+        $matches = $storage->loadByProperties(['type' => 'jur', 'field_slug' => $workspace]);
+        $group = count($matches) === 1 ? reset($matches) : NULL;
+      }
+      if ($group instanceof GroupInterface && $this->isRecordWorkspace($group)
+        && ($this->lifecycle->read($group)['auto_open_pending'] ?? FALSE) === TRUE) {
+        $this->openWorkspace($group, $account, TRUE);
+      }
+    }
+    catch (\Throwable $e) {
+      // Opening is a side effect of login. Keep the established session.
+      $this->logger->error('Automatic opening of workspace @workspace failed: @message', [
+        '@workspace' => $workspace,
+        '@message' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
+   * Opens the stored workspace under the same lock for both entry points.
+   *
+   * @return array{status: string, group?: \Drupal\group\Entity\GroupInterface}
+   *   The opening outcome.
+   */
+  private function openWorkspace(GroupInterface $group, AccountInterface $account, bool $automatic): array {
 
     $lockName = self::LOCK_PREFIX . $group->id();
     if (!$this->lock->acquire($lockName, self::LOCK_TIMEOUT)) {
@@ -152,33 +206,86 @@ class WorkspaceOpening {
         return ['status' => self::NOT_APPLICABLE];
       }
       // Support unblocks first; nobody opens a blocked or unpublished map.
-      if (self::isBlocked($stored)) {
+      $record = $this->lifecycle->read($stored);
+      if (self::isBlocked($stored) || WorkspaceLifecycle::hasSupportHold($record ?? [])) {
         return ['status' => self::BLOCKED];
       }
       if ($this->lifecycle->isOpen($stored)) {
         return ['status' => self::ALREADY_OPEN, 'group' => $stored];
       }
       $uid = (int) $account->id();
-      $opening = $this->lifecycle->writeOpening($stored, $uid, OperatorDetails::snapshot($stored), (int) $stored->getRevisionId());
-      self::setOpeningRevision($stored, $opening);
-      $stored->save();
-      $this->logger->notice('Workspace @id opened for public reports by account @uid.', [
-        '@id' => (string) $stored->id(),
-        '@uid' => (string) $uid,
-      ]);
+      if ($automatic) {
+        if (($record['auto_open_pending'] ?? FALSE) !== TRUE || ($record['acceptance']['uid'] ?? NULL) !== $uid) {
+          return ['status' => self::NOT_APPLICABLE];
+        }
+        /** @var \Drupal\group\Entity\Storage\GroupRoleStorageInterface $roles */
+        $roles = $this->entityTypeManager->getStorage('group_role');
+        $roles->resetUserGroupRoleCache($account, $stored);
+        if (!isset($roles->loadByUserAndGroup($account, $stored, FALSE)['jur-tenant_admin'])) {
+          return ['status' => self::NOT_APPLICABLE];
+        }
+        $reserved = $this->reserveAutomaticOpening();
+        if ($reserved === NULL) {
+          return ['status' => self::BUSY];
+        }
+      }
+      if ($automatic && !$reserved) {
+        $this->lifecycle->requireManualOpening($stored);
+        $stored->save();
+        $opening = NULL;
+      }
+      else {
+        $opening = $this->lifecycle->writeOpening($stored, $uid, OperatorDetails::snapshot($stored), (int) $stored->getRevisionId());
+        self::setOpeningRevision($stored, $opening);
+        $stored->save();
+        $this->logger->notice('Workspace @id opened for public reports by account @uid.', [
+          '@id' => (string) $stored->id(),
+          '@uid' => (string) $uid,
+        ]);
+      }
     }
     finally {
       $this->lock->release($lockName);
     }
 
+    if ($opening === NULL) {
+      $this->sendSupport(self::LIMIT_MAIL_KEY, $stored, $this->workspaceMailParams($stored));
+      return ['status' => self::AUTO_OPEN_LIMITED];
+    }
     $this->sendSupportMail($stored, $opening, $account);
     return ['status' => self::OPENED, 'group' => $stored];
   }
 
   /**
+   * Reserves a platform-wide slot before writing an automatic opening.
+   *
+   * The lock makes the flood check and registration atomic across workspaces.
+   * NULL means the lock is busy, FALSE means the quota is exhausted.
+   */
+  private function reserveAutomaticOpening(): ?bool {
+    if (!$this->lock->acquire(self::AUTO_OPEN_EVENT, self::LOCK_TIMEOUT)) {
+      $this->lock->wait(self::AUTO_OPEN_EVENT, 15);
+      if (!$this->lock->acquire(self::AUTO_OPEN_EVENT, self::LOCK_TIMEOUT)) {
+        return NULL;
+      }
+    }
+    try {
+      $limit = (int) ($this->configFactory->get('markaspot_fastmap.settings')->get('auto_open_daily_limit') ?? 25);
+      if ($limit <= 0 || !$this->flood->isAllowed(self::AUTO_OPEN_EVENT, $limit, self::DAY, self::AUTO_OPEN_IDENTIFIER)) {
+        return FALSE;
+      }
+      $this->flood->register(self::AUTO_OPEN_EVENT, self::DAY, self::AUTO_OPEN_IDENTIFIER);
+      return TRUE;
+    }
+    finally {
+      $this->lock->release(self::AUTO_OPEN_EVENT);
+    }
+  }
+
+  /**
    * Records the opening on the group revision about to be saved.
    */
-  public static function setOpeningRevision(GroupInterface $group, array $opening): void {
+  private static function setOpeningRevision(GroupInterface $group, array $opening): void {
     $group->setNewRevision(TRUE);
     $group->setRevisionUserId($opening['uid']);
     $group->setRevisionCreationTime($opening['opened_at']);
@@ -227,8 +334,8 @@ class WorkspaceOpening {
    * takes the opening back and saves one new revision, marked as syncing so
    * enforceOnSave() lets it through. The legal notice is not regenerated in
    * that save; it is generated again when the operator saves new details.
-   * Older revisions keep their values. The operator can enter correct data
-   * and open the map again, which sends a new support mail.
+   * Older revisions keep their values. Reopening requires support to clear
+   * the hold explicitly.
    *
    * @param \Drupal\group\Entity\GroupInterface $group
    *   The workspace.
@@ -276,7 +383,7 @@ class WorkspaceOpening {
       }
       $record = $this->lifecycle->read($stored);
       $wasOpen = ($record['opening'] ?? NULL) !== NULL;
-      if ($parts === [] && !$wasOpen) {
+      if ($parts === [] && !$wasOpen && WorkspaceLifecycle::hasSupportHold($record ?? [])) {
         return ['status' => self::NOTHING_TO_RESET, 'parts' => [], 'was_open' => FALSE];
       }
       if (!$apply) {
@@ -293,7 +400,7 @@ class WorkspaceOpening {
       foreach ($noticeLanguages as $langcode) {
         $stored->getTranslation($langcode)->set(self::LEGAL_NOTICE_FIELD, NULL);
       }
-      $this->lifecycle->removeOpening($stored);
+      $this->lifecycle->setClosedBySupport($stored, TRUE);
       $stored->setSyncing(TRUE);
       $stored->setNewRevision(TRUE);
       $stored->setRevisionUserId(0);
@@ -323,6 +430,37 @@ class WorkspaceOpening {
   }
 
   /**
+   * Clears the hold without reopening the map. Called from Drush.
+   */
+  public function clearSupportHold(GroupInterface $group): string {
+    if (!$this->isRecordWorkspace($group)) {
+      return self::NOT_APPLICABLE;
+    }
+    $lockName = self::LOCK_PREFIX . $group->id();
+    if (!$this->lock->acquire($lockName, self::LOCK_TIMEOUT)) {
+      return self::BUSY;
+    }
+    try {
+      $stored = $this->entityTypeManager->getStorage('group')->loadUnchanged($group->id());
+      if (!$stored instanceof GroupInterface || !$this->isRecordWorkspace($stored)) {
+        return self::NOT_APPLICABLE;
+      }
+      if (!WorkspaceLifecycle::hasSupportHold($this->lifecycle->read($stored) ?? [])) {
+        return self::NO_HOLD;
+      }
+      $this->lifecycle->setClosedBySupport($stored, FALSE);
+      $stored->setNewRevision(TRUE);
+      $stored->setRevisionUserId(0);
+      $stored->setRevisionLogMessage('Support hold on opening lifted.');
+      $stored->save();
+      return self::HOLD_CLEARED;
+    }
+    finally {
+      $this->lock->release($lockName);
+    }
+  }
+
+  /**
    * Whether a workspace is blocked or unpublished.
    */
   public static function isBlocked(GroupInterface $group): bool {
@@ -334,34 +472,68 @@ class WorkspaceOpening {
   }
 
   /**
-   * Sends the support mail of an opening.
+   * Notifies support after complete operator details change on an open map.
+   */
+  public function notifyOperatorChange(GroupInterface $group, GroupInterface $original): void {
+    if (!$this->isRecordWorkspace($group) || !$this->lifecycle->isOpen($group)) {
+      return;
+    }
+    $details = $this->operatorMailParams($group, OperatorDetails::snapshot($group));
+    if ($details === [] || $details === $this->operatorMailParams($original, OperatorDetails::snapshot($original))) {
+      return;
+    }
+    $id = (string) $group->id();
+    $event = 'markaspot_fastmap.operator_changed_support';
+    $lockName = $event . ':' . $id;
+    if (!$this->lock->acquire($lockName, self::LOCK_TIMEOUT)) {
+      return;
+    }
+    try {
+      if (!$this->flood->isAllowed($event, 1, self::DAY, $id)) {
+        return;
+      }
+      $this->flood->register($event, self::DAY, $id);
+    }
+    finally {
+      $this->lock->release($lockName);
+    }
+    $this->sendSupport(self::OPERATOR_MAIL_KEY, $group, $this->workspaceMailParams($group) + $details);
+  }
+
+  /**
+   * Sends the opening notification and reports whether it was accepted.
+   */
+  public function sendSupportMail(GroupInterface $group, array $opening, AccountInterface $account): bool {
+    return $this->sendSupport(self::MAIL_KEY, $group, $this->mailParams($group, $opening, $account));
+  }
+
+  /**
+   * Sends a workspace notification to platform support.
    *
    * Only to markaspot_fastmap.settings:support_email; never to the site
    * mail, mail_from or an account. No report and no citizen data.
-   *
-   * @return bool
-   *   Whether the mail manager accepted the mail.
    */
-  public function sendSupportMail(GroupInterface $group, array $opening, AccountInterface $account): bool {
+  private function sendSupport(string $key, GroupInterface $group, array $params): bool {
     $to = $this->supportRecipient();
     if ($to === NULL) {
-      $this->logger->error('No support mail for the opening of workspace @id: markaspot_fastmap.settings:support_email is empty or not a valid address.', [
+      $this->logger->error('No support mail for workspace @id: markaspot_fastmap.settings:support_email is empty or not a valid address.', [
         '@id' => (string) $group->id(),
       ]);
       return FALSE;
     }
     try {
-      $result = $this->mailManager->mail('markaspot_fastmap', self::MAIL_KEY, $to, 'en', $this->mailParams($group, $opening, $account), $this->mailFrom());
+      $langcode = $key !== self::MAIL_KEY && $group->language()->getId() === 'de' ? 'de' : 'en';
+      $result = $this->mailManager->mail('markaspot_fastmap', $key, $to, $langcode, $params, $this->mailFrom());
     }
     catch (\Throwable $e) {
-      $this->logger->error('The support mail for the opening of workspace @id failed: @message', [
+      $this->logger->error('The support mail for workspace @id failed: @message', [
         '@id' => (string) $group->id(),
         '@message' => $e->getMessage(),
       ]);
       return FALSE;
     }
     if (empty($result['result'])) {
-      $this->logger->error('The support mail for the opening of workspace @id was not sent.', [
+      $this->logger->error('The support mail for workspace @id was not sent.', [
         '@id' => (string) $group->id(),
       ]);
       return FALSE;
@@ -382,14 +554,25 @@ class WorkspaceOpening {
   }
 
   /**
-   * The parameters of the support mail, from the confirmed snapshot.
+   * The opening mail parameters, with operator details when available.
    *
    * @return array<string, string>
    *   Mail parameters.
    */
   public function mailParams(GroupInterface $group, array $opening, AccountInterface $account): array {
-    $operator = $opening['operator'];
-    $name = $operator === NULL ? '(not provided)' : ($operator['organization'] ?? trim($operator['given_name'] . ' ' . $operator['family_name']));
+    return $this->workspaceMailParams($group) + $this->operatorMailParams($group, $opening['operator']) + [
+      'operator_name' => '(not provided)',
+      'operator_address' => '(not provided)',
+      'operator_email' => '(not provided)',
+      'opened_by' => OperatorDetails::singleLine($account->getEmail()),
+      'opened_at' => gmdate('Y-m-d H:i', $opening['opened_at']) . ' UTC',
+    ];
+  }
+
+  /**
+   * Workspace identity and link for support notifications.
+   */
+  private function workspaceMailParams(GroupInterface $group): array {
     $slug = $group->hasField('field_slug') && !$group->get('field_slug')->isEmpty()
       ? trim((string) $group->get('field_slug')->value)
       : '';
@@ -399,12 +582,24 @@ class WorkspaceOpening {
       'workspace_slug' => $slug,
       'workspace_id' => (string) $group->id(),
       'workspace_url' => $this->workspaceUrl($slug),
-      'operator_name' => $name,
-      'operator_address' => $operator === NULL ? '(not provided)' : sprintf('%s, %s %s, %s', $operator['address_line1'], $operator['postal_code'], $operator['locality'], $operator['country_code']),
-      'operator_email' => $operator['email'] ?? '(not provided)',
-      'opened_by' => (string) $account->getEmail(),
-      'opened_at' => gmdate('Y-m-d H:i', $opening['opened_at']) . ' UTC',
     ]);
+  }
+
+  /**
+   * The complete operator details shown in the notice, in plain text.
+   */
+  private function operatorMailParams(GroupInterface $group, ?array $operator): array {
+    if ($operator === NULL) {
+      return [];
+    }
+    $name = $operator['organization'] ?? trim($operator['given_name'] . ' ' . $operator['family_name']);
+    $line2 = OperatorDetails::singleLine($group->get(OperatorDetails::ADDRESS_FIELD)->first()?->getValue()['address_line2'] ?? '');
+    $street = $operator['address_line1'] . ($line2 === '' ? '' : ', ' . $line2);
+    return [
+      'operator_name' => $name,
+      'operator_address' => sprintf('%s, %s %s, %s', $street, $operator['postal_code'], $operator['locality'], $operator['country_code']),
+      'operator_email' => $operator['email'],
+    ];
   }
 
   /**

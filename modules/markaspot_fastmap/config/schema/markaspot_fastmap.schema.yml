@@ -38,6 +38,9 @@ markaspot_fastmap.settings:
     lifecycle_enabled:
       type: boolean
       label: 'Self-service lifecycle: new signups accept the texts and get a lifecycle record'
+    auto_open_daily_limit:
+      type: integer
+      label: 'Platform-wide automatic map openings per 24 hours (0 disables automatic opening)'
     deletion_grace_days:
       type: integer
       label: 'Days between a confirmed workspace deletion and the teardown'
@@ -157,6 +160,26 @@ markaspot_fastmap.mail:
     workspace_reports_waiting:
       type: mapping
       label: 'Operator notification when reports wait for approval'
+      mapping:
+        subject:
+          type: text
+          label: 'Email subject'
+        body:
+          type: text
+          label: 'Email body'
+    workspace_operator_changed_support:
+      type: mapping
+      label: 'Support notification when complete operator details change'
+      mapping:
+        subject:
+          type: text
+          label: 'Email subject'
+        body:
+          type: text
+          label: 'Email body'
+    workspace_auto_open_limited_support:
+      type: mapping
+      label: 'Support notification when a map needs manual opening'
       mapping:
         subject:
           type: text

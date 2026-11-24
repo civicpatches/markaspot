@@ -7,6 +7,7 @@ namespace Drupal\Tests\markaspot_fastmap\Kernel;
 use Drupal\Core\Access\CsrfRequestHeaderAccessCheck;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Entity\EntityStorageInterface;
+use Drupal\Core\Flood\DatabaseBackend;
 use Drupal\Core\Logger\RfcLoggerTrait;
 use Drupal\Core\Logger\RfcLogLevel;
 use Drupal\Core\Session\AccountInterface;
@@ -21,11 +22,13 @@ use Drupal\group\Entity\GroupType;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\language\Entity\ConfigurableLanguage;
 use Drupal\markaspot_fastmap\Commands\WorkspaceCommands;
+use Drupal\markaspot_fastmap\Controller\FastMapWorkspaceController;
 use Drupal\markaspot_fastmap\Service\OperatorDetails;
 use Drupal\markaspot_fastmap\Service\OperatorScrub;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycle;
 use Drupal\markaspot_fastmap\Service\WorkspaceLifecycleGate;
 use Drupal\markaspot_fastmap\Service\WorkspaceOpening;
+use Drupal\markaspot_nuxt\Controller\MarkASpotSettingsController;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\paragraphs\Entity\Paragraph;
@@ -41,6 +44,7 @@ use PHPUnit\Framework\Attributes\Group as TestGroup;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Output\BufferedOutput;
+use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\Session\Session;
@@ -153,6 +157,8 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     parent::register($container);
     // Exposes the response's cacheability max-age as a header.
     $container->setParameter('http.response.debug_cacheability_headers', TRUE);
+    $container->getDefinition('flood')->setClass(DatabaseBackend::class)
+      ->setArguments([new Reference('database'), new Reference('request_stack'), new Reference('datetime.time')]);
   }
 
   /**
@@ -378,6 +384,82 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
   }
 
   /**
+   * Only a valid, bound owner session opens the workspace automatically.
+   */
+  public function testSignupClaimOpensExactlyOnce(): void {
+    $owner = $this->accounts['owner'];
+    $this->markPending('mine', $owner);
+    $this->markPending('incomplete', $owner);
+    $opening = $this->container->get('markaspot_fastmap.workspace_opening');
+    $opening->openAfterLogin((int) $this->workspaces['mine']->id(), $this->accounts['helper']);
+    $opening->openAfterLogin((int) $this->workspaces['mine']->id(), new AnonymousUserSession());
+    $this->assertSame(403, $this->postReport('mine')->getStatusCode());
+    $this->assertSame([], $this->openingMails());
+
+    $token = str_repeat('a', 64);
+    $binding = str_repeat('b', 64);
+    $this->container->get('keyvalue.expirable')->get('markaspot_fastmap_login_tokens')->setWithExpire($token, [
+      'uid' => (int) $owner->id(),
+      'slug' => 'mine',
+      'binding' => hash('sha256', $binding),
+    ], 300);
+    $session = new Session(new MockArraySessionStorage());
+    $this->container->set('session', $session);
+    $controller = FastMapWorkspaceController::create($this->container);
+    $request = Request::create('/api/fastmap/claim-login-token', 'POST', [], [], [], [
+      'HTTP_X_FASTMAP_SIGNUP_BINDING' => str_repeat('c', 64),
+    ], json_encode(['token' => $token]));
+
+    $this->assertSame(401, $controller->claimLoginToken($request)->getStatusCode());
+    $this->assertFalse($this->gate()->openState($this->workspace('mine')));
+    $this->assertSame([], $this->openingMails());
+
+    $request->headers->set('X-Fastmap-Signup-Binding', $binding);
+    $this->assertSame(200, $controller->claimLoginToken($request)->getStatusCode());
+    $this->assertSame($owner->id(), $session->get('uid'));
+    $this->assertTrue($this->gate()->openState($this->workspace('mine')));
+    $this->assertFalse($this->gate()->openState($this->workspace('incomplete')));
+    $this->assertSame(401, $controller->claimLoginToken($request)->getStatusCode());
+    $opening->openAfterLogin((int) $this->workspaces['mine']->id(), $owner);
+    $this->assertCount(1, $this->openingMails());
+
+    $this->assertSame('reset', $opening->resetOperator($this->workspace('incomplete'), TRUE)['status']);
+    $opening->openAfterLogin((int) $this->workspaces['incomplete']->id(), $owner);
+    $this->assertFalse($this->gate()->openState($this->workspace('incomplete')));
+    $this->assertCount(1, $this->openingMails());
+  }
+
+  /**
+   * The automatic limit applies across workspaces and allows a manual open.
+   */
+  public function testAutomaticOpeningLimitIsPlatformWide(): void {
+    $owner = $this->accounts['owner'];
+    $other = $this->accounts['foreign admin'];
+    $this->markPending('mine', $owner);
+    $this->markPending('other', $other);
+    $this->config('markaspot_fastmap.settings')->set('auto_open_daily_limit', 1)->save();
+    $opening = $this->container->get('markaspot_fastmap.workspace_opening');
+    $opening->openAfterLogin((int) $this->workspaces['mine']->id(), $owner);
+    $opening->openAfterLogin((int) $this->workspaces['other']->id(), $other);
+
+    $this->assertTrue($this->gate()->openState($this->workspace('mine')));
+    $this->assertFalse($this->gate()->openState($this->workspace('other')));
+    $this->assertSame(403, $this->postReport('other')->getStatusCode());
+    $this->assertArrayNotHasKey('auto_open_pending', WorkspaceLifecycle::parse($this->workspace('other')->get(WorkspaceLifecycle::FIELD)->value));
+    $this->container->get('flood')->clear('markaspot_fastmap.auto_open', 'platform');
+    $opening->openAfterLogin((int) $this->workspaces['other']->id(), $other);
+    $this->assertFalse($this->gate()->openState($this->workspace('other')), 'The quota decision survives later logins.');
+    $this->assertCount(1, $this->openingMails());
+    $notices = $this->openingMails(WorkspaceOpening::LIMIT_MAIL_KEY);
+    $this->assertCount(1, $notices);
+    $this->assertSame('support@example.org', $notices[0]['to']);
+    $this->assertStringContainsString('https://maps.example.org/other', $notices[0]['body']);
+    $this->assertStringContainsString('manually before the public', $notices[0]['body']);
+    $this->assertSame(200, $this->open('other', $other, ['confirmed' => TRUE])->getStatusCode());
+    $this->assertCount(2, $this->openingMails());
+  }
+
+  /**
    * The route takes the CSRF header token on a cookie session.
    */
   public function testCsrfOnCookieSession(): void {
@@ -458,7 +540,8 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame('platform', $public['legalNotice']['source']);
     $this->assertSame('https://www.civicpatches.de/impressum', $public['legalNotice']['url']);
     $generator = $this->container->get('markaspot_fastmap.legal_notice_generator');
-    $this->assertSame($public['legalNotice']['html'], $generator->generateForGroup($this->workspace('incomplete'), 'en'));
+    $this->assertSame('', $generator->generateForGroup($this->workspace('incomplete'), 'en'));
+    $this->assertTrue($this->workspace('incomplete')->get('field_legal_notice')->isEmpty());
 
     $response = $this->patchGeneral('incomplete', $owner, [
       'field_jurisdiction_address' => self::PERSON,
@@ -473,14 +556,48 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame('operator', $public['legalNotice']['source']);
     $this->assertStringContainsString('Jane Doe', $public['legalNotice']['html']);
     $this->assertCount(1, $this->openingMails());
+    $mails = $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY);
+    $this->assertCount(1, $mails);
+    $this->assertSame('support@example.org', $mails[0]['to']);
+    $text = $mails[0]['body'];
+    foreach ([
+      'Map incomplete',
+      'https://maps.example.org/incomplete',
+      'Jane Doe',
+      'Main street 1, 1011 AB Amsterdam, NL',
+      'operator@example.test',
+    ] as $value) {
+      $this->assertStringContainsString($value, $text);
+    }
+
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
+      'field_jurisdiction_address' => ['address_line2' => 'Second floor'] + self::PERSON,
+    ])->getStatusCode());
+    $this->assertCount(1, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
+    $this->container->get('database')->update('flood')
+      ->fields(['timestamp' => 1, 'expiration' => 1])
+      ->condition('event', 'markaspot_fastmap.operator_changed_support')
+      ->execute();
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, [
+      'field_jurisdiction_address' => ['address_line2' => 'Third floor'] + self::PERSON,
+    ])->getStatusCode());
+    $mails = $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY);
+    $this->assertCount(2, $mails);
+    $this->assertStringContainsString('Third floor', $mails[1]['body']);
+
+    $this->assertSame(200, $this->patchGeneral('incomplete', $owner, ['field_jurisdiction_e_mail' => ''])->getStatusCode());
+    $this->assertTrue($this->workspace('incomplete')->get('field_legal_notice')->isEmpty());
+    $this->assertSame('platform', $this->publicSettings('incomplete')['body']['legalNotice']['source']);
+    $this->assertCount(2, $this->openingMails(WorkspaceOpening::OPERATOR_MAIL_KEY));
   }
 
   /**
-   * Public settings: a short max-age while not open; old workspaces as today.
+   * Public settings: a short max-age for lifecycle workspaces.
    */
   public function testPublicSettings(): void {
+    $this->config('system.performance')->set('cache.page.max_age', 3600)->save();
     $notOpen = $this->publicSettings('mine');
-    $this->assertSame((string) WorkspaceLifecycleGate::NOT_OPEN_SETTINGS_MAX_AGE, $notOpen['max_age']);
+    $this->assertSame((string) WorkspaceLifecycleGate::LIFECYCLE_SETTINGS_MAX_AGE, $notOpen['max_age']);
     $this->assertFalse($notOpen['body']['jurisdiction']['open']);
     $this->assertArrayNotHasKey('operator', $notOpen['body'], 'Complete details, not open: no operator block.');
     // The opening's group save invalidates the response through this tag.
@@ -510,7 +627,12 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
 
     $this->open('mine', $this->accounts['owner'], ['confirmed' => TRUE]);
     $open = $this->publicSettings('mine');
-    $this->assertSame('3600', $open['max_age']);
+    $this->assertSame('60', $open['max_age']);
+    // Core overrides HTTP caching under CLI. Check the response before the
+    // request policy is applied.
+    $request = Request::create('/api/mark-a-spot-settings', 'GET', ['jurisdiction' => $this->workspaces['mine']->id()]);
+    $response = MarkASpotSettingsController::create($this->container)->getMarkASpotSettings($request);
+    $this->assertSame(60, $response->getMaxAge());
     $this->assertTrue($open['body']['jurisdiction']['open']);
     $this->assertSame('Jane Doe', $open['body']['operator']['name']);
     $this->assertSame('mine@example.org', $open['body']['operator']['email']);
@@ -589,12 +711,13 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame($revisionBefore, (int) $this->workspace('mine')->getRevisionId());
 
     $commands->resetOperator('mine', ['apply' => TRUE]);
-    $this->assertStringContainsString('the map is closed again', $output->fetch());
+    $this->assertStringContainsString('the map is closed and opening is suspended', $output->fetch());
 
     $group = $this->workspace('mine');
     $this->assertFalse($this->gate()->openState($group), 'Not open any more.');
     $record = WorkspaceLifecycle::parse($group->get(WorkspaceLifecycle::FIELD)->value);
     $this->assertNull($record['opening']);
+    $this->assertTrue($record['closed_by_support']);
     $this->assertSame(json_decode(self::NOT_OPEN, TRUE)['acceptance'], $record['acceptance']);
     $address = $group->get('field_jurisdiction_address')->first()?->toArray() ?? [];
     $this->assertSame('NL', $address['country_code']);
@@ -614,12 +737,19 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     // A second run finds nothing to do.
     $this->assertSame('nothing_to_reset', $opening->resetOperator($group, TRUE)['status']);
 
-    // The operator enters correct data and opens again: a new support mail.
+    // Correct data alone cannot lift the support hold.
     $response = $this->patchGeneral('mine', $owner, [
       'field_jurisdiction_address' => ['organization' => 'Tree Friends'] + self::PERSON,
       'field_jurisdiction_e_mail' => 'friends@example.org',
     ]);
     $this->assertSame(200, $response->getStatusCode(), (string) $response->getContent());
+    $denied = $this->open('mine', $owner, ['confirmed' => TRUE]);
+    $this->assertSame(409, $denied->getStatusCode());
+    $this->assertSame('workspace_blocked', json_decode((string) $denied->getContent(), TRUE)['code']);
+    $this->assertCount(1, $this->openingMails());
+    $commands->clearOpeningHold('mine');
+    $this->assertStringContainsString('support hold cleared', $output->fetch());
+    $this->assertFalse($this->gate()->openState($this->workspace('mine')));
     $this->assertSame(200, $this->open('mine', $owner, ['confirmed' => TRUE])->getStatusCode());
     $this->assertTrue($this->gate()->openState($this->workspace('mine')));
     $mails = $this->openingMails();
@@ -705,9 +835,7 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
     $this->assertSame('Stale save', $group->get('field_platform_name')->value, 'The rest of the save went through.');
     $this->assertSame(403, $this->postReport('mine')->getStatusCode());
 
-    // The lifecycle service still writes: the operator opens again.
-    $this->assertSame(200, $this->open('mine', $owner, ['confirmed' => TRUE])->getStatusCode());
-    $this->assertTrue($this->gate()->openState($this->workspace('mine')));
+    $this->assertSame(409, $this->open('mine', $owner, ['confirmed' => TRUE])->getStatusCode());
   }
 
   /**
@@ -826,8 +954,22 @@ final class WorkspaceOpeningKernelTest extends KernelTestBase {
   /**
    * Mails of the opening key in the collector.
    */
-  private function openingMails(): array {
-    return array_values(array_filter($this->allMails(), static fn(array $mail): bool => ($mail['key'] ?? '') === WorkspaceOpening::MAIL_KEY));
+  private function openingMails(string $key = WorkspaceOpening::MAIL_KEY): array {
+    return array_values(array_filter($this->allMails(), static fn(array $mail): bool => ($mail['key'] ?? '') === $key));
+  }
+
+  /**
+   * Marks a workspace as freshly provisioned for the given owner.
+   */
+  private function markPending(string $key, AccountInterface $owner): void {
+    $group = $this->workspace($key);
+    $this->container->get('markaspot_fastmap.workspace_lifecycle')->writeAcceptance(
+      $group,
+      WorkspaceLifecycle::parse(self::NOT_OPEN)['acceptance'],
+      (int) $owner->id(),
+      autoOpenPending: TRUE,
+    );
+    $group->save();
   }
 
   /**

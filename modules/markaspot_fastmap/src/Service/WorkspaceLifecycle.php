@@ -22,6 +22,8 @@ use Drupal\markaspot_group\Service\WorkspaceTier;
  * {"v":1,"acceptance":{"terms":"..","dpa":"..","declaration":"..",
  *  "langcode":"..","accepted_at":<unix>,"uid":<account id>},"opening":null}
  * @endcode
+ * Optional flags are "auto_open_pending" until the first owner login and
+ * "closed_by_support" while reopening is suspended.
  *
  * Opening a map sets "opening" to:
  *
@@ -57,6 +59,8 @@ final class WorkspaceLifecycle {
    * The top-level keys of a record.
    */
   private const RECORD_KEYS = ['v', 'acceptance', 'opening'];
+
+  private const RECORD_FLAGS = ['auto_open_pending', 'closed_by_support'];
 
   /**
    * The keys of the acceptance section.
@@ -333,8 +337,7 @@ final class WorkspaceLifecycle {
    * open, so the intake stays closed.
    */
   public function isOpen(FieldableEntityInterface $group): bool {
-    $record = $this->read($group);
-    return $record !== NULL && self::isValidOpening($record['opening'] ?? NULL);
+    return $this->opening($group) !== NULL;
   }
 
   /**
@@ -342,8 +345,22 @@ final class WorkspaceLifecycle {
    */
   public function opening(FieldableEntityInterface $group): ?array {
     $record = $this->read($group);
+    return self::activeOpening($record ?? []);
+  }
+
+  /**
+   * A support hold stays in force until the marker is removed explicitly.
+   */
+  public static function hasSupportHold(array $record): bool {
+    return array_key_exists('closed_by_support', $record);
+  }
+
+  /**
+   * Returns the valid opening of a record without a support hold.
+   */
+  private static function activeOpening(array $record): ?array {
     $opening = $record['opening'] ?? NULL;
-    return self::isValidOpening($opening) ? $opening : NULL;
+    return !self::hasSupportHold($record) && self::isValidOpening($opening) ? $opening : NULL;
   }
 
   /**
@@ -408,7 +425,7 @@ final class WorkspaceLifecycle {
    *   The opening section as written.
    *
    * @throws \LogicException
-   *   When the workspace has no valid record or is open already.
+   *   When the workspace has no valid record, is open or closed by support.
    * @throws \InvalidArgumentException
    *   When the account, revision or snapshot is invalid.
    */
@@ -416,6 +433,9 @@ final class WorkspaceLifecycle {
     $record = $this->read($group);
     if ($record === NULL) {
       throw new \LogicException('The workspace has no valid lifecycle record.');
+    }
+    if (self::hasSupportHold($record)) {
+      throw new \LogicException('The workspace was closed by support.');
     }
     if (self::isValidOpening($record['opening'] ?? NULL)) {
       throw new \LogicException('The workspace is open already.');
@@ -430,8 +450,8 @@ final class WorkspaceLifecycle {
       throw new \InvalidArgumentException('An opening needs an account and a revision. Any operator snapshot must be complete.');
     }
     $record['opening'] = $opening;
-    self::markOwnWrite($group);
-    $group->set(self::FIELD, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+    unset($record['auto_open_pending']);
+    $this->writeRecord($group, $record);
     return $opening;
   }
 
@@ -454,13 +474,32 @@ final class WorkspaceLifecycle {
    * @throws \RuntimeException
    *   When the entity has no record field.
    */
-  public function writeAcceptance(FieldableEntityInterface $group, array $acceptance, int $uid): void {
+  public function writeAcceptance(FieldableEntityInterface $group, array $acceptance, int $uid, bool $autoOpenPending = FALSE): void {
     if (!$group->hasField(self::FIELD)) {
       throw new \RuntimeException('The workspace has no lifecycle record field.');
     }
     $record = self::buildRecord($acceptance, $uid);
+    if ($autoOpenPending) {
+      $record['auto_open_pending'] = TRUE;
+    }
+    $this->writeRecord($group, $record);
+  }
+
+  /**
+   * Writes a trusted record for the next entity save.
+   */
+  private function writeRecord(FieldableEntityInterface $group, array $record): void {
     self::markOwnWrite($group);
     $group->set(self::FIELD, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+  }
+
+  /**
+   * Ends automatic opening when the workspace must be opened manually.
+   */
+  public function requireManualOpening(FieldableEntityInterface $group): void {
+    $record = $this->read($group) ?? throw new \LogicException('The workspace has no valid lifecycle record.');
+    unset($record['auto_open_pending']);
+    $this->writeRecord($group, $record);
   }
 
   /**
@@ -479,8 +518,8 @@ final class WorkspaceLifecycle {
     foreach (self::DOCUMENTS as $document) {
       $versions[$document] = $acceptance[$document];
     }
-    $opening = $record['opening'] ?? NULL;
-    $open = self::isValidOpening($opening);
+    $opening = self::activeOpening($record);
+    $open = $opening !== NULL;
     return [
       'accepted_at' => $acceptance['accepted_at'],
       'versions' => $versions,
@@ -491,30 +530,25 @@ final class WorkspaceLifecycle {
   }
 
   /**
-   * Takes the opening back. The caller saves the entity.
+   * Sets or clears the support hold. The caller saves the entity.
    *
-   * Only for the support reset of false operator data
-   * (WorkspaceOpening::resetOperator()): the map is closed again and the
-   * operator can open it anew. The acceptance stays.
-   *
-   * @return bool
-   *   Whether the record held an opening section (valid or not).
+   * Closing takes the opening back and cancels any pending automatic opening.
+   * Clearing the hold allows an explicit manual opening.
    *
    * @throws \LogicException
    *   When the workspace has no valid record.
    */
-  public function removeOpening(FieldableEntityInterface $group): bool {
-    $record = $this->read($group);
-    if ($record === NULL) {
-      throw new \LogicException('The workspace has no valid lifecycle record.');
-    }
-    if (($record['opening'] ?? NULL) === NULL) {
-      return FALSE;
-    }
+  public function setClosedBySupport(FieldableEntityInterface $group, bool $closed): void {
+    $record = $this->read($group) ?? throw new \LogicException('The workspace has no valid lifecycle record.');
     $record['opening'] = NULL;
-    self::markOwnWrite($group);
-    $group->set(self::FIELD, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
-    return TRUE;
+    if ($closed) {
+      $record['closed_by_support'] = TRUE;
+      unset($record['auto_open_pending']);
+    }
+    else {
+      unset($record['closed_by_support']);
+    }
+    $this->writeRecord($group, $record);
   }
 
   /**
@@ -553,7 +587,9 @@ final class WorkspaceLifecycle {
    *   must be looked at by hand.
    */
   public static function scrub(array $record): ?array {
-    if (!self::hasExactKeys($record, self::RECORD_KEYS)
+    $flags = array_intersect_key($record, array_flip(self::RECORD_FLAGS));
+    if (array_filter($flags, static fn(mixed $value): bool => $value !== TRUE) !== []
+      || !self::hasExactKeys(array_diff_key($record, $flags), self::RECORD_KEYS)
       || $record['v'] !== self::RECORD_VERSION) {
       return NULL;
     }
@@ -592,7 +628,7 @@ final class WorkspaceLifecycle {
       'v' => self::RECORD_VERSION,
       'acceptance' => $section,
       'opening' => $opening,
-    ];
+    ] + $flags;
   }
 
   /**

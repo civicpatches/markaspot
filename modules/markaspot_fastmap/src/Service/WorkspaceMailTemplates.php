@@ -14,6 +14,8 @@ use Drupal\language\ConfigurableLanguageManagerInterface;
  */
 final class WorkspaceMailTemplates {
 
+  private const LANGCODE_PATTERN = '/^[a-z]{2}(-[a-z]{2})?$/D';
+
   /**
    * Shipped configuration, cached per language.
    *
@@ -33,13 +35,14 @@ final class WorkspaceMailTemplates {
    *   The resolved template, with empty strings for missing fields.
    */
   public function resolve(string $key, string $langcode): array {
-    $override = $this->languageManager instanceof ConfigurableLanguageManagerInterface
+    $valid = preg_match(self::LANGCODE_PATTERN, $langcode) === 1;
+    $override = $valid && $this->languageManager instanceof ConfigurableLanguageManagerInterface
       ? $this->languageManager->getLanguageConfigOverride($langcode, 'markaspot_fastmap.mail')->get($key)
       : NULL;
     $base = $this->configFactory->get('markaspot_fastmap.mail')->getOriginal($key, FALSE);
     $sources = [
       $override,
-      $langcode !== 'en' ? $this->shipped($langcode)[$key] ?? NULL : NULL,
+      $valid && $langcode !== 'en' ? $this->shipped($langcode)[$key] ?? NULL : NULL,
       $base,
       $this->shipped('en')[$key] ?? NULL,
     ];
@@ -58,7 +61,7 @@ final class WorkspaceMailTemplates {
    * Reads the shipped config for a language.
    */
   public function shipped(string $langcode): array {
-    if (!preg_match('/^[a-z]{2}(-[a-z]{2})?$/D', $langcode)) {
+    if (!preg_match(self::LANGCODE_PATTERN, $langcode)) {
       return [];
     }
     if (!isset($this->shipped[$langcode])) {
