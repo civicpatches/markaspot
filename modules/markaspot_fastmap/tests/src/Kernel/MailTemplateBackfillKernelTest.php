@@ -11,13 +11,7 @@ use PHPUnit\Framework\Attributes\Group as TestGroup;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
- * Tests markaspot_fastmap_update_11932(): the lifecycle mail backfill.
- *
- * A site installed before the support mail and the waiting-reports mail has
- * neither key in its active markaspot_fastmap.mail. The update adds both
- * from the shipped file, adds the shipped translations of the waiting-reports
- * mail as overrides of installed languages, and never touches a key that is
- * already there.
+ * Tests FastMap mail backfills and shipped template fallbacks.
  */
 #[TestGroup('markaspot_fastmap')]
 #[RunTestsInSeparateProcesses]
@@ -119,6 +113,58 @@ final class MailTemplateBackfillKernelTest extends KernelTestBase {
     $again = markaspot_fastmap_update_11932();
     $this->assertStringContainsString('nothing to backfill', $again);
     $this->assertStringContainsString('No lifecycle mail translations to backfill.', $again);
+  }
+
+  /**
+   * Repairs active fields and adds missing keys to existing overrides only.
+   */
+  public function testBackfillAllShippedMailTemplates(): void {
+    $name = 'markaspot_fastmap.mail';
+    $operator = 'workspace_operator_changed_support';
+    $limited = 'workspace_auto_open_limited_support';
+    $paid = 'workspace_deletion_scheduled_paid';
+    $active = $this->config($name);
+    $active->clear($operator)
+      ->set($limited, ['subject' => " \n", 'body' => 'Custom support body'])
+      ->set('workspace_verification.body', '')
+      ->clear($paid)
+      ->save();
+
+    $language_manager = $this->container->get('language_manager');
+    $german = $language_manager->getLanguageConfigOverride('de', $name);
+    $german->clear($operator)
+      ->set($limited, ['subject' => 'Eigener Betreff'])
+      ->save();
+    $french = $language_manager->getLanguageConfigOverride('fr', $name);
+    $french->delete();
+    ConfigurableLanguage::createFromLangcode('nl')->save();
+    $dutch = $language_manager->getLanguageConfigOverrideStorage('nl');
+    $dutch->write($name, []);
+
+    markaspot_fastmap_update_11933();
+
+    $storage = $this->container->get('config.storage');
+    $expected = $this->shipped($name . '.yml');
+    $expected['workspace_welcome']['subject'] = 'Edited welcome';
+    $expected[$limited]['body'] = 'Custom support body';
+    $this->assertEquals($expected, $storage->read($name));
+    $german = $language_manager->getLanguageConfigOverride('de', $name);
+    $this->assertSame($this->shipped('language/de/' . $name . '.yml')[$operator], $german->get($operator));
+    $this->assertSame(['subject' => 'Eigener Betreff'], $german->get($limited));
+    $this->assertSame(['subject' => 'Bearbeitet', 'body' => 'Hallo'], $german->get('workspace_welcome'));
+    $this->assertNull($german->get('workspace_opened_support'));
+    $french_storage = $language_manager->getLanguageConfigOverrideStorage('fr');
+    $this->assertFalse($french_storage->exists($name));
+    $expected_dutch = $this->shipped('language/nl/' . $name . '.yml');
+    unset($expected_dutch['langcode']);
+    $this->assertSame($expected_dutch, $dutch->read($name));
+
+    $translations = $german->getRawData();
+    $this->assertSame('No FastMap mail templates to backfill.', markaspot_fastmap_update_11933());
+    $this->assertEquals($expected, $storage->read($name));
+    $this->assertSame($translations, $language_manager->getLanguageConfigOverrideStorage('de')->read($name));
+    $this->assertFalse($french_storage->exists($name));
+    $this->assertSame($expected_dutch, $dutch->read($name));
   }
 
   /**

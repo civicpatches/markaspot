@@ -8,9 +8,12 @@
 declare(strict_types=1);
 
 use Drupal\Component\Serialization\Yaml;
+use Drupal\Core\Config\FileStorage;
+use Drupal\Core\Extension\Requirement\RequirementSeverity;
+use Drupal\Core\Utility\UpdateException;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
-use Drupal\Core\Extension\Requirement\RequirementSeverity;
+use Drupal\language\ConfigurableLanguageManagerInterface;
 use Drupal\markaspot_fastmap\Service\LifecycleRecordSchema;
 use Drupal\user\Entity\Role;
 
@@ -1662,6 +1665,77 @@ function markaspot_fastmap_update_11932(): string {
     : 'Backfilled lifecycle mail translations: ' . implode(', ', $translated) . '.';
 
   return implode(' ', $messages);
+}
+
+/**
+ * Backfills shipped mail templates in active config and existing overrides.
+ */
+function markaspot_fastmap_update_11933(): string {
+  $name = 'markaspot_fastmap.mail';
+  $directory = __DIR__ . '/config/install';
+  $shipped = (new FileStorage($directory))->read($name);
+  if ($shipped === FALSE) {
+    throw new UpdateException('Could not read the shipped FastMap mail templates.');
+  }
+
+  $config = \Drupal::configFactory()->getEditable($name);
+  $backfilled = [];
+  foreach ($shipped as $key => $template) {
+    if (!is_array($template)) {
+      continue;
+    }
+    $current = $config->get($key);
+    $filled = is_array($current) ? $current : [];
+    foreach (['subject', 'body'] as $field) {
+      $value = $filled[$field] ?? '';
+      $default = $template[$field] ?? '';
+      if (trim($default) !== '' && (!is_string($value) || trim($value) === '')) {
+        $filled[$field] = $default;
+      }
+    }
+    if ($filled !== $current) {
+      $config->set($key, $filled);
+      $backfilled[] = $key;
+    }
+  }
+  if ($backfilled !== []) {
+    $config->save();
+  }
+
+  $translated = [];
+  $language_manager = \Drupal::languageManager();
+  if ($language_manager instanceof ConfigurableLanguageManagerInterface) {
+    foreach (array_keys($language_manager->getLanguages()) as $langcode) {
+      if (!$language_manager->getLanguageConfigOverrideStorage($langcode)->exists($name)) {
+        continue;
+      }
+      $translation = (new FileStorage($directory . '/language/' . $langcode))->read($name);
+      if ($translation === FALSE) {
+        continue;
+      }
+      $override = $language_manager->getLanguageConfigOverride($langcode, $name);
+      $changed = FALSE;
+      foreach ($translation as $key => $template) {
+        if (is_array($template) && $override->get($key) === NULL) {
+          $override->set($key, $template);
+          $changed = TRUE;
+        }
+      }
+      if ($changed) {
+        $override->save();
+        $translated[] = $langcode;
+      }
+    }
+  }
+
+  $messages = [];
+  if ($backfilled !== []) {
+    $messages[] = 'Backfilled FastMap mail keys: ' . implode(', ', $backfilled) . '.';
+  }
+  if ($translated !== []) {
+    $messages[] = 'Backfilled FastMap mail translations: ' . implode(', ', $translated) . '.';
+  }
+  return $messages === [] ? 'No FastMap mail templates to backfill.' : implode(' ', $messages);
 }
 
 /**
