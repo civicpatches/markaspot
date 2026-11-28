@@ -43,8 +43,8 @@ class PasswordlessSettingsForm extends ConfigFormBase {
     $form['code_lifetime'] = [
       '#type' => 'number',
       '#title' => $this->t('OTP code lifetime (seconds)'),
-      '#description' => $this->t('How long an OTP code remains valid before expiring. Default is 600 seconds (10 minutes).'),
-      '#default_value' => $config->get('code_lifetime') ?? 600,
+      '#description' => $this->t('How long an OTP code remains valid before expiring. Default is 1800 seconds (30 minutes), long enough for mail servers that delay first deliveries.'),
+      '#default_value' => $config->get('code_lifetime') ?? 1800,
       '#min' => 60,
       '#max' => 3600,
       '#required' => TRUE,

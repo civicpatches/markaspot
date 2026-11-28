@@ -200,7 +200,7 @@ class OtpService {
 
     // Get configuration values.
     $config = $this->configFactory->get('markaspot_passwordless.settings');
-    $code_lifetime = $config->get('code_lifetime') ?? 600;
+    $code_lifetime = $config->get('code_lifetime') ?? 1800;
 
     // Block-state guard runs BEFORE any DB mutation so a blocked user
     // cannot cause in-flight legitimate codes for active accounts on
