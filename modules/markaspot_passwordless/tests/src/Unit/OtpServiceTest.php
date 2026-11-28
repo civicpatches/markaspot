@@ -515,6 +515,7 @@ class OtpServiceTest extends UnitTestCase {
     $select = $this->createMock(Select::class);
     $select->method('fields')->willReturnSelf();
     $select->method('orderBy')->willReturnSelf();
+    $select->method('forUpdate')->willReturnSelf();
     $select->method('condition')->willReturnCallback(
       function ($field, $value = NULL) use ($select, &$recordedConditions) {
         $recordedConditions[$field] = $value;

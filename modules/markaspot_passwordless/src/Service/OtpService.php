@@ -185,9 +185,11 @@ class OtpService {
    * @param string $email
    *   The email address.
    * @param int $jurisdiction_id
-   *   The jurisdiction group ID this code belongs to. 0 means
-   *   single-tenant / unscoped; callers MUST pass the real jurisdiction
-   *   ID in multi-tenant deployments to prevent cross-tenant reuse.
+   *   The jurisdiction group ID this code belongs to. 0 means unscoped:
+   *   a single-tenant install, or a platform sign-in on a multi-tenant
+   *   install that is not made through a jurisdiction (the session is
+   *   install-wide either way). Callers signing in through a jurisdiction
+   *   MUST pass its ID so the code cannot be reused through another one.
    * @param string $langcode
    *   The language code for the email.
    *
@@ -245,7 +247,7 @@ class OtpService {
     // Store hashed code in database, bound to the issuing jurisdiction
     // so that verifyCode() cannot consume it on a different tenant.
     try {
-      $this->database->insert('markaspot_passwordless_codes')
+      $code_id = $this->database->insert('markaspot_passwordless_codes')
         ->fields([
           'email' => $email,
           'code' => $code_hash,
@@ -256,6 +258,20 @@ class OtpService {
           'jurisdiction_id' => $jurisdiction_id,
         ])
         ->execute();
+
+      // Two requests for the same address can interleave between the
+      // invalidation above and this insert and leave several pending codes.
+      // Only the newest stays valid, so attempts always count against the
+      // code that can still be used.
+      if ($code_id) {
+        $this->database->update('markaspot_passwordless_codes')
+          ->fields(['verified' => 2])
+          ->condition('email', $email)
+          ->condition('jurisdiction_id', $jurisdiction_id)
+          ->condition('verified', 0)
+          ->condition('id', (int) $code_id, '<')
+          ->execute();
+      }
     }
     catch (\Exception $e) {
       $this->logger->error('Failed to store OTP code: @message', [
@@ -298,10 +314,11 @@ class OtpService {
    * @param int $jurisdiction_id
    *   The jurisdiction group ID the verification attempt is scoped to.
    *   Codes issued for a different jurisdiction will not match, closing
-   *   the cross-tenant OTP reuse vector. 0 means single-tenant / unscoped;
-   *   callers MUST pass the real jurisdiction ID in multi-tenant
-   *   deployments. No default is intentionally provided to force the
-   *   decision at every call site.
+   *   the cross-tenant OTP reuse vector. 0 means unscoped (single-tenant
+   *   install, or a platform sign-in not made through a jurisdiction);
+   *   callers signing in through a jurisdiction MUST pass its ID. No
+   *   default is intentionally provided to force the decision at every
+   *   call site.
    *
    * @return array
    *   Result array with status, message, and optional user data.
@@ -328,6 +345,9 @@ class OtpService {
         ->condition('jurisdiction_id', $jurisdiction_id)
         ->condition('verified', 0)
         ->orderBy('created', 'DESC')
+        // Parallel verifications of the same address wait for each other,
+        // so each one reads the attempt count the previous one wrote.
+        ->forUpdate()
         ->execute()
         ->fetchAll();
 
@@ -351,13 +371,15 @@ class OtpService {
       }
 
       if ($matched_record === NULL) {
-        // No matching hash found. Use atomic SQL increment to prevent
-        // race conditions where parallel requests all read the same
-        // attempt count and only increment by 1 instead of N.
-        $latest = reset($records);
+        // No matching hash found. Count the miss against every pending code
+        // of this address and scope, not only the newest: a guess may aim at
+        // any of them, and the attempt cap must hold for each. Atomic SQL
+        // increment, so parallel requests cannot lose a count.
         $this->database->update('markaspot_passwordless_codes')
           ->expression('attempts', 'attempts + 1')
-          ->condition('id', $latest->id)
+          ->condition('email', $email)
+          ->condition('jurisdiction_id', $jurisdiction_id)
+          ->condition('verified', 0)
           ->execute();
 
         return [
