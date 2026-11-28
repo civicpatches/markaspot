@@ -372,13 +372,14 @@ class OtpService {
 
       if ($matched_record === NULL) {
         // No matching hash found. Count the miss against every pending code
-        // of this address and scope, not only the newest: a guess may aim at
-        // any of them, and the attempt cap must hold for each. Atomic SQL
-        // increment, so parallel requests cannot lose a count.
+        // the guess was compared with, not only the newest: a guess may aim
+        // at any of them, and the attempt cap must hold for each. Only the
+        // rows read and locked above, so a code issued meanwhile starts at
+        // zero. Atomic SQL increment, so parallel requests cannot lose a
+        // count.
         $this->database->update('markaspot_passwordless_codes')
           ->expression('attempts', 'attempts + 1')
-          ->condition('email', $email)
-          ->condition('jurisdiction_id', $jurisdiction_id)
+          ->condition('id', array_map(static fn ($record): int => (int) $record->id, $records), 'IN')
           ->condition('verified', 0)
           ->execute();
 

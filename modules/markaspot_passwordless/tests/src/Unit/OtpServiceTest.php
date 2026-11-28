@@ -515,7 +515,9 @@ class OtpServiceTest extends UnitTestCase {
     $select = $this->createMock(Select::class);
     $select->method('fields')->willReturnSelf();
     $select->method('orderBy')->willReturnSelf();
-    $select->method('forUpdate')->willReturnSelf();
+    // Verification locks the pending rows it reads, so parallel guesses see
+    // each other's attempt counts. Real concurrency is not proven here.
+    $select->expects($this->once())->method('forUpdate')->willReturnSelf();
     $select->method('condition')->willReturnCallback(
       function ($field, $value = NULL) use ($select, &$recordedConditions) {
         $recordedConditions[$field] = $value;

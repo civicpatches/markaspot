@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\markaspot_passwordless\Kernel;
 
+use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\KernelTests\KernelTestBase;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -27,8 +28,18 @@ final class PendingCodesAttemptCapKernelTest extends KernelTestBase {
   /**
    * {@inheritdoc}
    */
+  public function register(ContainerBuilder $container): void {
+    parent::register($container);
+    $container->getDefinition('markaspot_passwordless.otp')
+      ->setClass(CompetingCodeOtpService::class);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   protected function setUp(): void {
     parent::setUp();
+    $this->installEntitySchema('user');
     $this->installSchema('markaspot_passwordless', ['markaspot_passwordless_codes']);
     $this->installConfig(['markaspot_passwordless']);
   }
@@ -36,7 +47,7 @@ final class PendingCodesAttemptCapKernelTest extends KernelTestBase {
   /**
    * Inserts a pending code row and returns its id.
    */
-  private function pendingCode(string $code, int $created): int {
+  private function pendingCode(string $code, int $created, int $jurisdiction_id = 0): int {
     return (int) $this->container->get('database')
       ->insert('markaspot_passwordless_codes')
       ->fields([
@@ -46,9 +57,21 @@ final class PendingCodesAttemptCapKernelTest extends KernelTestBase {
         'created' => $created,
         'expires' => time() + 1800,
         'verified' => 0,
-        'jurisdiction_id' => 0,
+        'jurisdiction_id' => $jurisdiction_id,
       ])
       ->execute();
+  }
+
+  /**
+   * Returns verified state keyed by id, in id order.
+   */
+  private function verifiedById(): array {
+    return array_map('intval', $this->container->get('database')
+      ->select('markaspot_passwordless_codes', 'c')
+      ->fields('c', ['id', 'verified'])
+      ->orderBy('id')
+      ->execute()
+      ->fetchAllKeyed());
   }
 
   /**
@@ -78,21 +101,46 @@ final class PendingCodesAttemptCapKernelTest extends KernelTestBase {
   }
 
   /**
-   * A miss in one scope does not touch codes of another scope.
+   * A miss in one scope counts there and does not touch another scope.
    */
   public function testMissesStayInTheirScope(): void {
-    $code = $this->pendingCode('111111', time());
+    $platform = $this->pendingCode('111111', time());
+    $workspace = $this->pendingCode('222222', time(), 42);
     $service = $this->container->get('markaspot_passwordless.otp');
 
     $service->verifyCode('person@example.test', '999999', 42);
 
     $attempts = $this->container->get('database')
       ->select('markaspot_passwordless_codes', 'c')
-      ->fields('c', ['attempts'])
-      ->condition('id', $code)
+      ->fields('c', ['id', 'attempts'])
       ->execute()
-      ->fetchField();
-    $this->assertSame(0, (int) $attempts);
+      ->fetchAllKeyed();
+    $this->assertSame(1, (int) $attempts[$workspace]);
+    $this->assertSame(0, (int) $attempts[$platform]);
+  }
+
+  /**
+   * A code that appears while a new one is issued is superseded by it.
+   *
+   * Two requests for one address can interleave between the invalidation
+   * and the insert. Only the newest code may stay pending.
+   */
+  public function testRequestCodeSupersedesCodeIssuedMeanwhile(): void {
+    CompetingCodeOtpService::$issueCompetingCode = TRUE;
+    try {
+      $result = $this->container->get('markaspot_passwordless.otp')
+        ->requestCode('person@example.test', 0);
+    }
+    finally {
+      CompetingCodeOtpService::$issueCompetingCode = FALSE;
+    }
+    $this->assertTrue($result['success']);
+
+    $verified = $this->verifiedById();
+    $this->assertCount(2, $verified);
+    $ids = array_keys($verified);
+    $this->assertSame(2, $verified[$ids[0]], 'The code issued meanwhile is superseded.');
+    $this->assertSame(0, $verified[$ids[1]], 'The newest code stays pending.');
   }
 
 }
