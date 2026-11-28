@@ -10,6 +10,7 @@ use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Routing\TrustedRedirectResponse;
 use Drupal\markaspot_sso\Controller\SsoAuthController;
 use Drupal\markaspot_sso\Service\OidcClient;
@@ -115,7 +116,7 @@ final class SsoAuthControllerTest extends UnitTestCase {
       $this->createMock(Connection::class),
       $this->createMock(EntityTypeManagerInterface::class),
       $group_membership,
-      $this->configFactory(),
+      $this->createMock(LockBackendInterface::class),
       $this->createMock(LoggerInterface::class),
     );
     $login_service = new SsoLoginService(

@@ -78,6 +78,9 @@ markaspot_sso.settings:
           link_by_email:
             type: boolean
             label: 'Link by email'
+          link_privileged_by_email:
+            type: boolean
+            label: 'Link eligible staff accounts by verified OIDC email'
           sp_entity_id:
             type: string
             label: 'SP entity ID'

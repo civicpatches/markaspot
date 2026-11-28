@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Drupal\markaspot_sso\Service;
 
-use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Site\Settings;
+use Drupal\group\Entity\GroupInterface;
+use Drupal\group\Entity\GroupMembership;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
 use Psr\Log\LoggerInterface;
@@ -18,12 +20,21 @@ use Psr\Log\LoggerInterface;
  * Not final, so login tests can replace it with a mock.
  */
 class SsoIdentityLinker {
+  private const PRIVILEGED_LINK_REFUSAL = 'Privileged users must be pre-linked before SSO email linking.';
+
   private const PRIVILEGED_ROLES = [
     'administrator',
     'tenant_admin',
     'editorial_board',
     'moderator',
     'api_editor',
+  ];
+  private const ALLOWED_PRIVILEGED_EMAIL_LINK_ROLES = [
+    'authenticated',
+    'member',
+    'moderator',
+    'editorial_board',
+    'tenant_admin',
   ];
   private const ASSURANCE_RANKS = [
     'low' => 1,
@@ -40,7 +51,7 @@ class SsoIdentityLinker {
     private readonly Connection $database,
     private readonly EntityTypeManagerInterface $entityTypeManager,
     private readonly SsoGroupMembershipService $groupMembership,
-    private readonly ConfigFactoryInterface $configFactory,
+    private readonly LockBackendInterface $lock,
     private readonly LoggerInterface $logger,
   ) {
   }
@@ -58,6 +69,8 @@ class SsoIdentityLinker {
    *   SSO attributes keyed by name.
    * @param array<string, array<int, mixed>> $friendly_attributes
    *   SSO attributes keyed by FriendlyName.
+   * @param string|null $verified_oidc_email
+   *   The verified email claim from the OIDC callback, if available.
    *
    * @return array<string, mixed>
    *   Authenticated user response.
@@ -68,6 +81,7 @@ class SsoIdentityLinker {
     string $name_id,
     array $attributes,
     array $friendly_attributes,
+    ?string $verified_oidc_email = NULL,
   ): array {
     $subject_hash = $this->subjectHash($provider_id, $name_id);
     $mapped = $this->mapAttributes($provider, $attributes, $friendly_attributes);
@@ -76,26 +90,47 @@ class SsoIdentityLinker {
 
     $user = $this->loadUserForSubject($provider_id, $subject_hash);
     $existing_identity = $user instanceof UserInterface;
+    $privileged_email_link = FALSE;
     if (!$user instanceof UserInterface) {
-      $user = $this->resolveOrCreateUser($provider_id, $subject_hash, $provider, $mapped);
+      [$user, $privileged_email_link] = $this->resolveOrCreateUser($provider_id, $subject_hash, $provider, $mapped, $verified_oidc_email);
+    }
+
+    // Serialize first-time privileged links for this provider and account.
+    $lock_name = $privileged_email_link ? 'markaspot_sso.email_link:' . $provider_id . ':' . $user->id() : NULL;
+    if ($lock_name !== NULL && !$this->lock->acquire($lock_name)) {
+      throw new \RuntimeException(self::PRIVILEGED_LINK_REFUSAL);
     }
 
     try {
-      user_login_finalize($user);
-      $groups = $this->groupMembership->apply($user, $provider, $existing_identity);
-      if ($existing_identity) {
-        $this->updateIdentity($provider_id, $subject_hash, $assurance_level);
+      if ($privileged_email_link && $this->hasProviderIdentity($provider_id, (int) $user->id())) {
+        throw new \RuntimeException(self::PRIVILEGED_LINK_REFUSAL);
       }
-      else {
-        $this->storeIdentity($provider_id, $subject_hash, (int) $user->id(), $assurance_level);
+
+      try {
+        user_login_finalize($user);
+        $groups = $this->groupMembership->apply($user, $provider, $existing_identity);
+        if ($existing_identity) {
+          $this->updateIdentity($provider_id, $subject_hash, $assurance_level);
+        }
+        else {
+          $this->storeIdentity($provider_id, $subject_hash, (int) $user->id(), $assurance_level);
+        }
+      }
+      catch (\Throwable $exception) {
+        user_logout();
+        throw $exception;
       }
     }
-    catch (\Throwable $exception) {
-      user_logout();
-      throw $exception;
+    finally {
+      if ($lock_name !== NULL) {
+        $this->lock->release($lock_name);
+      }
     }
 
-    $this->logger->info('SSO login for provider @provider linked to uid @uid.', [
+    $message = $privileged_email_link
+      ? 'SSO linked privileged uid @uid by email for provider @provider.'
+      : 'SSO login for provider @provider linked to uid @uid.';
+    $this->logger->info($message, [
       '@provider' => $provider_id,
       '@uid' => $user->id(),
     ]);
@@ -181,20 +216,25 @@ class SsoIdentityLinker {
    *   Provider configuration.
    * @param array<string, string> $mapped
    *   Mapped attributes.
+   * @param string|null $verified_oidc_email
+   *   The verified email claim from the OIDC callback, if available.
+   *
+   * @return array{\Drupal\user\UserInterface, bool}
+   *   The resolved user and whether a privileged email link was used.
    */
   private function resolveOrCreateUser(
     string $provider_id,
     string $subject_hash,
     array $provider,
     array $mapped,
-  ): UserInterface {
+    ?string $verified_oidc_email,
+  ): array {
     $email = $mapped['email'] ?? NULL;
     $link_by_email = (bool) ($provider['link_by_email'] ?? FALSE);
     if ($link_by_email && $email !== NULL) {
       $existing = $this->loadUserByMail($email);
       if ($existing instanceof UserInterface && $existing->isActive()) {
-        $this->assertEmailLinkAllowed($existing);
-        return $existing;
+        return [$existing, $this->assertEmailLinkAllowed($existing, $provider, $email, $verified_oidc_email)];
       }
     }
 
@@ -206,7 +246,7 @@ class SsoIdentityLinker {
     $mail = $this->usableMail($provider_id, $subject_hash, $email, $link_by_email);
     $existing = $this->loadUserByName($username);
     if ($existing instanceof UserInterface && $existing->isActive()) {
-      return $existing;
+      return [$existing, FALSE];
     }
 
     $user = User::create([
@@ -217,7 +257,7 @@ class SsoIdentityLinker {
     ]);
     $user->save();
 
-    return $user;
+    return [$user, FALSE];
   }
 
   /**
@@ -235,12 +275,78 @@ class SsoIdentityLinker {
   }
 
   /**
-   * Prevents first-login email linking into privileged accounts.
+   * Checks first-login email linking and identifies privileged links.
+   *
+   * @param \Drupal\user\UserInterface $user
+   *   The active account found by email.
+   * @param array<string, mixed> $provider
+   *   Provider configuration.
+   * @param string $email
+   *   The mapped email used to look up the account.
+   * @param string|null $verified_oidc_email
+   *   The verified email claim from the OIDC callback, if available.
+   *
+   * @return bool
+   *   TRUE when the account qualifies for a privileged email link.
    */
-  private function assertEmailLinkAllowed(UserInterface $user): void {
-    if ((int) $user->id() === 1 || array_intersect($user->getRoles(), self::PRIVILEGED_ROLES) !== []) {
-      throw new \RuntimeException('Privileged users must be pre-linked before SSO email linking.');
+  private function assertEmailLinkAllowed(UserInterface $user, array $provider, string $email, ?string $verified_oidc_email): bool {
+    if ((int) $user->id() !== 1) {
+      $roles = $user->getRoles();
+      $opt_in = ($provider['link_privileged_by_email'] ?? FALSE) === TRUE;
+      // Preserve legacy handling of api_user when the opt-in is disabled.
+      if (array_intersect($roles, self::PRIVILEGED_ROLES) === [] && !($opt_in && in_array('api_user', $roles, TRUE))) {
+        return FALSE;
+      }
+      if ($opt_in
+        && ($provider['link_by_email'] ?? FALSE) === TRUE
+        && ($provider['protocol'] ?? NULL) === 'oidc'
+        && ($provider['oidc_idp_hint'] ?? '') === ''
+        && $verified_oidc_email !== NULL
+        && strcasecmp($email, $verified_oidc_email) === 0
+        && array_diff($roles, self::ALLOWED_PRIVILEGED_EMAIL_LINK_ROLES) === []
+        && $this->hasExclusiveJurisdictionMembership($user, $provider['jurisdiction_id'] ?? NULL)
+      ) {
+        return TRUE;
+      }
     }
+
+    throw new \RuntimeException(self::PRIVILEGED_LINK_REFUSAL);
+  }
+
+  /**
+   * Checks that the provider's jurisdiction is the user's only jurisdiction.
+   */
+  private function hasExclusiveJurisdictionMembership(UserInterface $user, mixed $jurisdiction_id): bool {
+    if ((!is_int($jurisdiction_id) && !is_string($jurisdiction_id)) ||
+      ($group_id = filter_var($jurisdiction_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])) === FALSE) {
+      return FALSE;
+    }
+
+    $group_type = $this->groupMembership->jurisdictionGroupType();
+    $member = FALSE;
+    foreach (GroupMembership::loadByUser($user) as $membership) {
+      $group = $membership->getGroup();
+      if ($group instanceof GroupInterface && $group->bundle() === $group_type) {
+        if ((int) $group->id() !== $group_id) {
+          return FALSE;
+        }
+        $member = TRUE;
+      }
+    }
+
+    return $member;
+  }
+
+  /**
+   * Checks whether the provider already has any identity for this account.
+   */
+  private function hasProviderIdentity(string $provider_id, int $uid): bool {
+    $query = $this->database->select('markaspot_sso_identities', 'i')
+      ->condition('provider', $provider_id)
+      ->condition('uid', $uid)
+      ->range(0, 1);
+    $query->addExpression('1');
+    return $query->execute()->fetchField() !== FALSE;
   }
 
   /**

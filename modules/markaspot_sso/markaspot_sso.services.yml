@@ -32,7 +32,7 @@ services:
       - '@database'
       - '@entity_type.manager'
       - '@markaspot_sso.group_membership'
-      - '@config.factory'
+      - '@lock'
       - '@logger.channel.markaspot_sso'
 
   markaspot_sso.group_membership:

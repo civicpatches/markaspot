@@ -32,6 +32,7 @@ namespace Drupal\Tests\markaspot_sso\Unit\Service {
   use Drupal\Core\Database\StatementInterface;
   use Drupal\Core\Entity\EntityStorageInterface;
   use Drupal\Core\Entity\EntityTypeManagerInterface;
+  use Drupal\Core\Lock\LockBackendInterface;
   use Drupal\Core\Site\Settings;
   use Drupal\group\Entity\GroupInterface;
   use Drupal\group\Entity\GroupRoleInterface;
@@ -71,7 +72,7 @@ namespace Drupal\Tests\markaspot_sso\Unit\Service {
                 $this->configFactory(),
                 $this->createMock(LoggerInterface::class),
             ),
-            $this->configFactory(),
+            $this->createMock(LockBackendInterface::class),
             $this->createMock(LoggerInterface::class),
         );
 

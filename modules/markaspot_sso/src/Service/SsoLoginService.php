@@ -181,12 +181,17 @@ final class SsoLoginService {
       throw new AccessDeniedHttpException('This provider requires a second factor and the login did not prove one.');
     }
     $linking_provider = ['attribute_map' => OidcClaims::attributeMap($provider)] + $provider;
+    $email_claim = $claims['email'] ?? NULL;
+    $verified_email = ($claims['email_verified'] ?? FALSE) === TRUE && is_string($email_claim) && $email_claim !== ''
+      ? $email_claim
+      : NULL;
     $user = $this->identityLinker->authenticate(
       $provider_id,
       $linking_provider,
       (string) $claims['sub'],
       OidcClaims::withoutUnverifiedEmail($attributes, $linking_provider['attribute_map']),
       [],
+      $verified_email,
     );
     $this->storeLastLogin($session, $provider_id, $user, [
       'protocol' => 'oidc',

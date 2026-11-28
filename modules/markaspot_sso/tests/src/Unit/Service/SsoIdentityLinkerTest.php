@@ -7,6 +7,7 @@ namespace Drupal\Tests\markaspot_sso\Unit\Service;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\Core\Site\Settings;
 use Drupal\markaspot_sso\Service\SsoGroupMembershipService;
 use Drupal\markaspot_sso\Service\SsoIdentityLinker;
@@ -134,7 +135,7 @@ final class SsoIdentityLinkerTest extends UnitTestCase {
   private function invokeEmailLinkGuard(UserInterface $user): void {
     $method = new \ReflectionMethod(SsoIdentityLinker::class, 'assertEmailLinkAllowed');
     $method->setAccessible(TRUE);
-    $method->invoke($this->linker(), $user);
+    $method->invoke($this->linker(), $user, [], 'staff@example.test', NULL);
   }
 
   /**
@@ -160,7 +161,7 @@ final class SsoIdentityLinkerTest extends UnitTestCase {
           $this->createMock(Connection::class),
           $this->createMock(EntityTypeManagerInterface::class),
           $groupMembership,
-          $this->createMock(ConfigFactoryInterface::class),
+          $this->createMock(LockBackendInterface::class),
           $this->createMock(LoggerInterface::class),
       );
   }

@@ -9,6 +9,7 @@ use Drupal\Core\Config\Config;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Lock\LockBackendInterface;
 use Drupal\markaspot_sso\Service\OidcClaims;
 use Drupal\markaspot_sso\Service\OidcClient;
 use Drupal\markaspot_sso\Service\SsoClientFactory;
@@ -243,12 +244,13 @@ final class SsoLoginServiceTest extends UnitTestCase {
    * A valid callback links the identity and records the MFA decision.
    */
   public function testOidcCallbackLogsInAndRecordsMfa(): void {
-    $idToken = $this->signToken($this->idTokenClaims([
+    $claims = $this->idTokenClaims([
       'amr' => [],
       'email_verified' => TRUE,
       'identity_provider' => 'bonn-adfs',
       'upstream_amr' => ['http://schemas.microsoft.com/claims/multipleauthn'],
-    ]));
+    ]);
+    $idToken = $this->signToken($claims);
     $replay = $this->createMock(SsoReplayCache::class);
     $replay->expects($this->once())
       ->method('checkAndStore')
@@ -263,6 +265,7 @@ final class SsoLoginServiceTest extends UnitTestCase {
         'subject-1',
         $this->callback(static fn (array $attributes): bool => $attributes['email'] === ['staff@civicspot.example']),
         [],
+        $claims['email'],
       )
       ->willReturn(['uid' => 7, 'assurance_level' => NULL]);
     $session = $this->sessionWithPendingLogin(self::NOW);
@@ -305,6 +308,7 @@ final class SsoLoginServiceTest extends UnitTestCase {
         'subject-1',
         $this->callback(static fn (array $attributes): bool => !array_key_exists('email', $attributes)),
         [],
+        NULL,
       )
       ->willReturn(['uid' => 8]);
     $session = $this->sessionWithPendingLogin(self::NOW);
@@ -409,6 +413,7 @@ final class SsoLoginServiceTest extends UnitTestCase {
         'subject-1',
         $this->callback(static fn (array $attributes): bool => !array_key_exists('upn', $attributes) && !array_key_exists('email', $attributes)),
         [],
+        NULL,
       )
       ->willReturn(['uid' => 8]);
 
@@ -494,7 +499,7 @@ final class SsoLoginServiceTest extends UnitTestCase {
           $this->createMock(Connection::class),
           $this->createMock(EntityTypeManagerInterface::class),
           $groupMembership,
-          $this->configFactory(),
+          $this->createMock(LockBackendInterface::class),
           $this->createMock(LoggerInterface::class),
       );
 

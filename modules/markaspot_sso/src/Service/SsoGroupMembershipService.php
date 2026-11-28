@@ -338,7 +338,7 @@ final class SsoGroupMembershipService {
   /**
    * Gets the configured jurisdiction group type.
    */
-  private function jurisdictionGroupType(): string {
+  public function jurisdictionGroupType(): string {
     $configured = $this->configFactory
       ->get('markaspot_open311.settings')
       ->get('jurisdiction_group_type');
