@@ -1,5 +1,14 @@
 # Changelog
 
+## [11.9.261](https://github.com/civicpatches/markaspot/compare/11.9.260...11.9.261) (2026-11-28)
+
+### Bug Fixes
+
+* allow verified OIDC email links for eligible staff ([8ef2586](https://github.com/civicpatches/markaspot/commit/8ef25863d9d01339efb5e85aaaef3853b1496761))
+* cap sign-in code attempts across every pending code ([9d1641f](https://github.com/civicpatches/markaspot/commit/9d1641ff1e775dd1fc208e8a888d8a705531af0a))
+* count a missed sign-in guess only against the codes it was compared with ([7060745](https://github.com/civicpatches/markaspot/commit/7060745dada8e01e8514c498b34c882a0370e962))
+* extend sign-in code lifetime to 30 minutes ([4a98e74](https://github.com/civicpatches/markaspot/commit/4a98e74d6ee2c7a0571107e6f0edfbd54775aafd))
+
 ## [11.9.260](https://github.com/civicpatches/markaspot/compare/11.9.259...11.9.260) (2026-11-24)
 
 ### Bug Fixes
